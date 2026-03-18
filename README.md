@@ -38,7 +38,7 @@ Agents running on Engram don't just remember. They form opinions, refine them wi
 │  │               <agentId>.engram (SQLite)                   │     │
 │  │  chunks | entities | relations | chunk_entities           │     │
 │  │  opinions | observations | reflect_log | extraction_queue │     │
-│  │  bank_config | chunks_fts (FTS5)                          │     │
+│  │  bank_config | chunks_fts (FTS5) | working_memory         │     │
 │  └──────────────────────────────────────────────────────────┘     │
 └───────────────────────────────────────────────────────────────────┘
 ```
@@ -295,6 +295,82 @@ const count = await mira.forgetBySource('conversation:session-123');
 // count = number of chunks deactivated
 ```
 
+### Working Memory
+
+Short-term session state for agents that handle multiple concurrent topics. Sessions are automatically matched to incoming messages via embedding similarity — the agent doesn't need to track which session it's in.
+
+**`inferWorkingSession(message, options?)`** — Main entry point. Embeds the message, cosine-matches against active sessions, resumes the best match or creates a new one, then loads related long-term context via `recall()`. Call once per incoming message before the LLM call.
+
+```typescript
+const { session, relatedContext, confidence, diagnostics } =
+  await mira.inferWorkingSession(userInput, {
+    maxActive?: number,       // max active sessions before oldest is snapshotted (default: 5)
+    threshold?: number,       // cosine similarity threshold for matching (default: 0.72)
+    expireAfterHours?: number // hours before untouched session expires (default: 48)
+  });
+
+// session.id        — session ID (wm-xxxx)
+// session.goal      — the session's driving objective
+// session.progress  — agent-written summary of work done (set via updateWorkingSession)
+// relatedContext    — formatted long-term memory relevant to this session (inject into prompt)
+// confidence        — match score (1.0 = new session, <1.0 = resumed)
+// diagnostics       — { sessionId, reason: 'match'|'new', candidatesEvaluated }
+```
+
+**`updateWorkingSession(sessionId, updates)`** — Merge new state into the session. Use `progress` to track what's been done — it's captured in the snapshot when the session expires.
+
+```typescript
+await mira.updateWorkingSession(session.id, {
+  goal: 'updated goal if it evolved',
+  progress: 'Queried prod — v2.3.1. Found 3 pending migrations. Drafted rollback plan.',
+  status: 'in_progress', // agent-defined fields are preserved
+});
+```
+
+**`getWorkingSession(sessionId)`** — Returns session state or `null` if expired.
+
+**`listWorkingSessions()`** — Returns all active (non-expired) sessions, newest first.
+
+**`snapshotWorkingSession(sessionId)`** — Snapshots session goal + progress to long-term episodic memory, then expires the session.
+
+**`clearWorkingSession(sessionId)`** — Expires a session without snapshotting. Returns `false` if already expired.
+
+**`expireStaleWorkingSessions(maxAgeHours?)`** — Batch-expires sessions untouched for longer than `maxAgeHours` (default: 48). Returns count of sessions expired. Call from a background tick.
+
+**Usage pattern:**
+
+```typescript
+async function handleMessage(userInput: string) {
+  // 1. Infer session + load related long-term context
+  const { session, relatedContext } = await memory.inferWorkingSession(userInput);
+
+  // 2. Build prompt with session state + memory
+  const systemPrompt = `${basePrompt}
+
+## Current Task
+Goal: ${session.goal}
+${session.progress ? `Progress so far: ${session.progress}` : ''}
+
+## Memory Context
+${relatedContext}`.trim();
+
+  // 3. Call LLM
+  const response = await callLLM(userInput, systemPrompt);
+
+  // 4. Update session progress
+  await memory.updateWorkingSession(session.id, {
+    progress: extractProgress(response), // your logic
+  });
+
+  return response;
+}
+
+// Background maintenance
+setInterval(() => memory.expireStaleWorkingSessions(48), 60 * 60 * 1000);
+```
+
+**Note on session recall seeding:** `inferWorkingSession` uses `session.goal` to seed the `recall()` call for related context. Other fields in the session state are preserved for agent use but don't affect memory retrieval.
+
 ### `reflect()`
 
 Run a reflection cycle. Reads unreflected chunks, calls Ollama to synthesize observations and update opinion confidence scores. Returns a summary of what was produced.
@@ -385,6 +461,7 @@ Tools exposed:
 | `engram_process_extractions` | Process the entity extraction queue |
 | `engram_forget` | Soft-delete a memory chunk by ID |
 | `engram_supersede` | Replace an outdated fact with corrected text |
+| `engram_session` | Infer or resume a working memory session; returns session state + related context |
 
 ## Scheduled Reflection
 
@@ -603,7 +680,7 @@ memory.close();
 ```bash
 npm install
 npm run build        # compile TypeScript → dist/
-npm test             # run test suite (87 tests)
+npm test             # run test suite (105 tests)
 npm run typecheck    # TypeScript check without emit
 npm run example      # run examples/basic-usage.ts (requires Ollama)
 ```

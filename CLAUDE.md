@@ -53,7 +53,7 @@ Engram synthesizes ideas from four prior efforts:
 │  │               <agentId>.engram (SQLite)                   │     │
 │  │  chunks | entities | relations | chunk_entities           │     │
 │  │  opinions | observations | reflect_log | extraction_queue │     │
-│  │  bank_config | chunks_fts (FTS5)                          │     │
+│  │  bank_config | chunks_fts (FTS5) | working_memory         │     │
 │  └──────────────────────────────────────────────────────────┘     │
 └───────────────────────────────────────────────────────────────────┘
 ```
@@ -128,20 +128,22 @@ engram/
 ├── tsconfig.json
 ├── vitest.config.ts
 ├── src/
-│   ├── schema.sql           ← full database schema
-│   ├── retain.ts            ← fast write + dedup + batch import + extraction queue
-│   ├── recall.ts            ← four-way retrieval + RRF + trust/decay weighting + formatForPrompt
-│   ├── reflect.ts           ← scheduled learning engine + prompt templates
-│   ├── local-embedder.ts    ← in-process embeddings via @xenova/transformers
-│   ├── engram.ts            ← unified Engram class + public API exports
-│   └── mcp-tools.ts         ← MCP tool definitions (retain/recall/reflect/forget/supersede)
+│   ├── schema.sql               ← full database schema
+│   ├── retain.ts                ← fast write + dedup + batch import + extraction queue
+│   ├── recall.ts                ← four-way retrieval + RRF + trust/decay weighting + formatForPrompt
+│   ├── reflect.ts               ← scheduled learning engine + prompt templates
+│   ├── local-embedder.ts        ← in-process embeddings via @xenova/transformers
+│   ├── working-memory-types.ts  ← types for working memory session management
+│   ├── engram.ts                ← unified Engram class + public API exports
+│   └── mcp-tools.ts             ← MCP tool definitions (retain/recall/reflect/forget/supersede/session)
 ├── tests/
 │   ├── helpers.ts
 │   ├── retain.test.ts
 │   ├── retain-gate.test.ts
 │   ├── recall.test.ts
 │   ├── reflect.test.ts
-│   └── engram.test.ts
+│   ├── engram.test.ts
+│   └── working-memory.test.ts
 └── examples/
     └── basic-usage.ts
 ```
