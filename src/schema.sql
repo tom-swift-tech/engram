@@ -364,3 +364,25 @@ FROM extraction_queue eq
 JOIN chunks c ON eq.chunk_id = c.id
 WHERE eq.status = 'pending'
 ORDER BY eq.queued_at ASC;
+
+-- =============================================================================
+-- WORKING MEMORY
+-- Short-term session state for auto-switching multi-topic conversations.
+-- One row per active session. Expired sessions snapshot to chunks (experience).
+-- Scope: one .engram file = one agent (or shared group resource in orchestration).
+-- No user_id: agent-scoped or orchestration-managed externally.
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS working_memory (
+    id TEXT PRIMARY KEY,
+    task_id TEXT,                        -- optional external task/thread ID
+    scope TEXT DEFAULT 'task',           -- 'task' | 'conversation' | 'project'
+    data_json TEXT NOT NULL,             -- flexible JSON: { goal, progress, ...agent-defined fields }
+    seed_query TEXT,                     -- auto-derived query for recall seeding
+    topic_embedding BLOB,               -- embedding of seed_query for similarity matching
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP                -- NULL = active; set when session is snapshotted
+);
+
+CREATE INDEX IF NOT EXISTS idx_wm_expires
+    ON working_memory(expires_at);

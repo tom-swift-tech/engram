@@ -22,6 +22,7 @@
 // =============================================================================
 
 import Database from 'better-sqlite3';
+import { randomUUID } from 'crypto';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -47,6 +48,12 @@ import {
   type ReflectResult,
 } from './reflect.js';
 
+import type {
+  WorkingMemoryState,
+  WorkingMemoryOptions,
+  WorkingSessionResult,
+} from './working-memory-types.js';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -65,6 +72,9 @@ export type {
   ReflectConfig,
   ReflectResult,
   FormatForPromptOptions,
+  WorkingMemoryState,
+  WorkingMemoryOptions,
+  WorkingSessionResult,
 };
 export { OllamaEmbeddings, LocalEmbedder, ReflectScheduler, shouldRetain, formatForPrompt };
 
@@ -341,5 +351,273 @@ export class Engram {
     })();
 
     return result.changes;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Working Memory — short-term session management
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Infer which working memory session an incoming message belongs to.
+   * Embeds the message, cosine-matches against active sessions, and either
+   * resumes the best match or creates a new session. Then loads related
+   * long-term context via recall().
+   */
+  async inferWorkingSession(
+    message: string,
+    options: WorkingMemoryOptions = {}
+  ): Promise<WorkingSessionResult> {
+    const maxActive = Math.max(1, options.maxActive ?? 5);
+    const threshold = Math.max(0, Math.min(options.threshold ?? 0.72, 1));
+
+    // 1. Embed the incoming message
+    const msgEmbedding = await this.embedder.embed(message);
+    const embeddingBuffer = Buffer.from(msgEmbedding.buffer);
+
+    // 2. Find active sessions and score by similarity
+    let candidates: Array<{ id: string; data_json: string; similarity: number }>;
+    try {
+      const rows = this.db.prepare(`
+        SELECT id, data_json,
+               vec_distance_cosine(topic_embedding, ?) AS distance
+        FROM working_memory
+        WHERE (expires_at IS NULL OR expires_at > datetime('now'))
+          AND topic_embedding IS NOT NULL
+        ORDER BY distance ASC
+        LIMIT 3
+      `).all(embeddingBuffer) as Array<{ id: string; data_json: string; distance: number }>;
+
+      // Convert distance to similarity (cosine distance → similarity = 1 - distance)
+      candidates = rows.map((c) => ({
+        id: c.id,
+        data_json: c.data_json,
+        similarity: 1 - (c.distance ?? 1),
+      }));
+    } catch {
+      // sqlite-vec not loaded — no vector matching available
+      candidates = [];
+    }
+
+    // 3. Pick best match or create new session
+    let session: WorkingMemoryState;
+    let confidence: number;
+    let reason: 'match' | 'new';
+
+    const best = candidates[0];
+    if (best && best.similarity >= threshold) {
+      // Resume existing session
+      session = JSON.parse(best.data_json) as WorkingMemoryState;
+      confidence = best.similarity;
+      reason = 'match';
+
+      // Touch the session timestamp
+      this.db.prepare(
+        `UPDATE working_memory SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+      ).run(best.id);
+    } else {
+      // Create new session
+      session = await this.createWorkingSession(message, embeddingBuffer);
+      confidence = 1.0;
+      reason = 'new';
+
+      // Enforce maxActive — snapshot oldest if over the cap
+      await this.enforceSessionCap(maxActive);
+    }
+
+    // 4. Load related long-term context using session goal as seed
+    const recallResponse = await this.recall(session.goal, {
+      topK: 8,
+      snippetChars: 800,
+    });
+    const relatedContext = formatForPrompt(recallResponse, { maxChars: 1200 });
+
+    return {
+      session,
+      relatedContext,
+      confidence,
+      diagnostics: {
+        sessionId: session.id,
+        reason,
+        candidatesEvaluated: candidates.length,
+      },
+    };
+  }
+
+  /**
+   * Create a new working memory session from a message.
+   * Internal — called by inferWorkingSession when no match is found.
+   */
+  private async createWorkingSession(
+    message: string,
+    embeddingBuffer: Buffer
+  ): Promise<WorkingMemoryState> {
+    const id = `wm-${randomUUID().substring(0, 12)}`;
+    const now = new Date().toISOString();
+
+    const state: WorkingMemoryState = {
+      id,
+      goal: message.slice(0, 200),
+      updated_at: now,
+    };
+
+    this.db.prepare(`
+      INSERT INTO working_memory (id, data_json, seed_query, topic_embedding)
+      VALUES (?, ?, ?, ?)
+    `).run(id, JSON.stringify(state), message.slice(0, 200), embeddingBuffer);
+
+    return state;
+  }
+
+  /**
+   * Update an existing working memory session with new state.
+   * Merges partial updates into the existing data_json and re-embeds
+   * the seed query for future similarity matching.
+   */
+  async updateWorkingSession(
+    sessionId: string,
+    updates: Partial<WorkingMemoryState>
+  ): Promise<void> {
+    const row = this.db.prepare(
+      `SELECT data_json FROM working_memory WHERE id = ? AND (expires_at IS NULL OR expires_at > datetime('now'))`
+    ).get(sessionId) as { data_json: string } | undefined;
+
+    if (!row) throw new Error(`Working memory session ${sessionId} not found or expired`);
+
+    const existing = JSON.parse(row.data_json) as WorkingMemoryState;
+    const merged: WorkingMemoryState = {
+      ...existing,
+      ...updates,
+      id: sessionId, // never overwrite ID
+      updated_at: new Date().toISOString(),
+    };
+
+    const seedQuery = `${merged.goal}`.trim();
+    const embedding = await this.embedder.embed(seedQuery);
+    const embeddingBuffer = Buffer.from(embedding.buffer);
+
+    this.db.prepare(`
+      UPDATE working_memory
+      SET data_json = ?, seed_query = ?, topic_embedding = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(JSON.stringify(merged), seedQuery, embeddingBuffer, sessionId);
+  }
+
+  /**
+   * Get the current state of a working memory session.
+   * Returns null if the session doesn't exist or has expired.
+   */
+  getWorkingSession(sessionId: string): WorkingMemoryState | null {
+    const row = this.db.prepare(
+      `SELECT data_json FROM working_memory WHERE id = ? AND (expires_at IS NULL OR expires_at > datetime('now'))`
+    ).get(sessionId) as { data_json: string } | undefined;
+
+    return row ? JSON.parse(row.data_json) as WorkingMemoryState : null;
+  }
+
+  /**
+   * List all active (non-expired) working memory sessions.
+   */
+  listWorkingSessions(): WorkingMemoryState[] {
+    const rows = this.db.prepare(`
+      SELECT data_json FROM working_memory
+      WHERE expires_at IS NULL OR expires_at > datetime('now')
+      ORDER BY updated_at DESC
+    `).all() as Array<{ data_json: string }>;
+
+    return rows.map(r => JSON.parse(r.data_json) as WorkingMemoryState);
+  }
+
+  /**
+   * Snapshot a working memory session to long-term episodic memory,
+   * then mark it as expired.
+   */
+  async snapshotWorkingSession(sessionId: string): Promise<RetainResult> {
+    const row = this.db.prepare(
+      `SELECT data_json, seed_query FROM working_memory WHERE id = ?`
+    ).get(sessionId) as { data_json: string; seed_query: string | null } | undefined;
+
+    if (!row) throw new Error(`Working memory session ${sessionId} not found`);
+
+    const state = JSON.parse(row.data_json) as WorkingMemoryState;
+    const progressNotes = (state.progress as string | undefined) ?? '';
+    const summary = [
+      `Session goal: ${state.goal}`,
+      progressNotes ? `Progress: ${progressNotes}` : '',
+    ].filter(Boolean).join(' ');
+
+    const result = await this.retain(summary, {
+      memoryType: 'experience',
+      source: `working_memory:${sessionId}`,
+      sourceType: 'agent_generated',
+      trustScore: 0.6,
+      skipExtraction: false,
+    });
+
+    // Mark as expired
+    this.db.prepare(
+      `UPDATE working_memory SET expires_at = datetime('now') WHERE id = ?`
+    ).run(sessionId);
+
+    return result;
+  }
+
+  /**
+   * Expire and snapshot all sessions that haven't been updated within
+   * the given threshold. Call this from a background maintenance tick.
+   */
+  async expireStaleWorkingSessions(maxAgeHours: number = 48): Promise<number> {
+    const stale = this.db.prepare(`
+      SELECT id FROM working_memory
+      WHERE updated_at <= datetime('now', '-' || ? || ' hours')
+        AND (expires_at IS NULL OR expires_at > datetime('now'))
+    `).all(String(maxAgeHours)) as Array<{ id: string }>;
+
+    for (const { id } of stale) {
+      try {
+        await this.snapshotWorkingSession(id);
+      } catch {
+        // If snapshot fails, still expire it
+        this.db.prepare(
+          `UPDATE working_memory SET expires_at = datetime('now') WHERE id = ?`
+        ).run(id);
+      }
+    }
+
+    return stale.length;
+  }
+
+  /**
+   * Clear a specific working memory session without snapshotting.
+   */
+  clearWorkingSession(sessionId: string): boolean {
+    const result = this.db.prepare(
+      `UPDATE working_memory SET expires_at = datetime('now') WHERE id = ? AND (expires_at IS NULL OR expires_at > datetime('now'))`
+    ).run(sessionId);
+    return result.changes > 0;
+  }
+
+  /**
+   * Enforce the maximum active session cap.
+   * Snapshots the oldest sessions that exceed the cap.
+   */
+  private async enforceSessionCap(maxActive: number): Promise<void> {
+    const active = this.db.prepare(`
+      SELECT id FROM working_memory
+      WHERE expires_at IS NULL OR expires_at > datetime('now')
+      ORDER BY updated_at ASC
+    `).all() as Array<{ id: string }>;
+
+    const excess = active.length - maxActive;
+    if (excess <= 0) return;
+
+    for (let i = 0; i < excess; i++) {
+      try {
+        await this.snapshotWorkingSession(active[i].id);
+      } catch {
+        this.db.prepare(
+          `UPDATE working_memory SET expires_at = datetime('now') WHERE id = ?`
+        ).run(active[i].id);
+      }
+    }
   }
 }

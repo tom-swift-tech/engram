@@ -187,6 +187,28 @@ export const ENGRAM_TOOLS = [
       required: ['oldChunkId', 'newText'],
     },
   },
+  {
+    name: 'engram_session' as const,
+    description: 'Infer or resume a working memory session for the given message. Returns session state and related long-term context. Call once per incoming user message before the LLM call.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        message: {
+          type: 'string',
+          description: 'The incoming user message to match against active sessions',
+        },
+        maxActive: {
+          type: 'number',
+          description: 'Max active sessions to keep (default: 5)',
+        },
+        threshold: {
+          type: 'number',
+          description: 'Cosine similarity threshold for session matching (default: 0.72)',
+        },
+      },
+      required: ['message'],
+    },
+  },
 ] as const;
 
 export type EngramToolName = typeof ENGRAM_TOOLS[number]['name'];
@@ -253,6 +275,16 @@ export function createEngramToolHandler(engram: Engram) {
           const { oldChunkId, newText, ...opts } = input as unknown as { oldChunkId: string; newText: string } & RetainOptions;
           const result = await engram.supersede(oldChunkId, newText, opts);
           return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+        }
+
+        case 'engram_session': {
+          const msg = input.message as string;
+          const opts = {
+            maxActive: typeof input.maxActive === 'number' ? input.maxActive : undefined,
+            threshold: typeof input.threshold === 'number' ? input.threshold : undefined,
+          };
+          const result = await engram.inferWorkingSession(msg, opts);
+          return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         }
       }
     } catch (error: unknown) {
