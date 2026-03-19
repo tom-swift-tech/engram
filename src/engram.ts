@@ -48,6 +48,14 @@ import {
   type ReflectResult,
 } from './reflect.js';
 
+import {
+  OllamaGeneration,
+  OpenAICompatibleGeneration,
+  AnthropicGeneration,
+  type GenerationProvider,
+  type GenerationOptions,
+} from './generation.js';
+
 import type {
   WorkingMemoryState,
   WorkingMemoryOptions,
@@ -77,8 +85,11 @@ export type {
   WorkingMemoryOptions,
   WorkingSessionResult,
   SessionCandidate,
+  GenerationProvider,
+  GenerationOptions,
 };
-export { OllamaEmbeddings, LocalEmbedder, ReflectScheduler, shouldRetain, formatForPrompt };
+export { OllamaEmbeddings, LocalEmbedder, ReflectScheduler, shouldRetain, formatForPrompt,
+  OllamaGeneration, OpenAICompatibleGeneration, AnthropicGeneration };
 
 export interface EngramOptions {
   /** Mission for the reflection engine: what to focus on during synthesis */
@@ -103,6 +114,19 @@ export interface EngramOptions {
   embedder?: EmbeddingProvider;
   /** Use Ollama for embeddings instead of local Transformers.js (default: false) */
   useOllamaEmbeddings?: boolean;
+  /** Override the generation provider for extraction + reflection */
+  generator?: GenerationProvider;
+  /** Shorthand: use OpenAI-compatible endpoint for generation */
+  generationEndpoint?: {
+    baseUrl: string;
+    model: string;
+    apiKey?: string;
+  };
+  /** Shorthand: use Anthropic API for generation */
+  anthropicGeneration?: {
+    apiKey: string;
+    model?: string;
+  };
 }
 
 // =============================================================================
@@ -113,21 +137,18 @@ export class Engram {
   private readonly db: Database.Database;
   private readonly dbPath: string;
   private readonly embedder: EmbeddingProvider;
-  private readonly ollamaUrl: string;
-  private readonly reflectModel: string;
+  private readonly generator: GenerationProvider;
 
   private constructor(
     db: Database.Database,
     dbPath: string,
     embedder: EmbeddingProvider,
-    ollamaUrl: string,
-    reflectModel: string
+    generator: GenerationProvider,
   ) {
     this.db = db;
     this.dbPath = dbPath;
     this.embedder = embedder;
-    this.ollamaUrl = ollamaUrl;
-    this.reflectModel = reflectModel;
+    this.generator = generator;
   }
 
   // ---------------------------------------------------------------------------
@@ -142,6 +163,7 @@ export class Engram {
       reflectModel = 'llama3.1:8b',
       embedder: injectedEmbedder,
       useOllamaEmbeddings = false,
+      generator: injectedGenerator,
     } = options;
 
     const db = new Database(path);
@@ -180,7 +202,30 @@ export class Engram {
       embedder = local;
     }
 
-    return new Engram(db, path, embedder, ollamaUrl, reflectModel);
+    // Generation provider selection (priority order):
+    // 1. Injected generator — caller controls everything (tests, custom providers)
+    // 2. Anthropic generation — direct API
+    // 3. OpenAI-compatible endpoint — OpenRouter, Herd, vLLM, etc.
+    // 4. Ollama generation — default, uses ollamaUrl + reflectModel
+    let generator: GenerationProvider;
+    if (injectedGenerator) {
+      generator = injectedGenerator;
+    } else if (options.anthropicGeneration) {
+      generator = new AnthropicGeneration(
+        options.anthropicGeneration.apiKey,
+        options.anthropicGeneration.model,
+      );
+    } else if (options.generationEndpoint) {
+      generator = new OpenAICompatibleGeneration(
+        options.generationEndpoint.baseUrl,
+        options.generationEndpoint.model,
+        options.generationEndpoint.apiKey,
+      );
+    } else {
+      generator = new OllamaGeneration({ url: ollamaUrl, model: reflectModel });
+    }
+
+    return new Engram(db, path, embedder, generator);
   }
 
   private upsertBankConfig(options: EngramOptions): void {
@@ -261,8 +306,7 @@ export class Engram {
   async reflect(): Promise<ReflectResult> {
     return reflect({
       dbPath: this.dbPath,
-      ollamaUrl: this.ollamaUrl,
-      reflectModel: this.reflectModel,
+      generator: this.generator,
     });
   }
 
@@ -271,7 +315,7 @@ export class Engram {
    * relations from retained chunks, building out the knowledge graph.
    */
   async processExtractions(batchSize: number = 10): Promise<{ processed: number; failed: number }> {
-    return processExtractionQueue(this.db, this.ollamaUrl, this.reflectModel, batchSize);
+    return processExtractionQueue(this.db, this.generator, batchSize);
   }
 
   /** Close the database connection. Call when the agent shuts down. */

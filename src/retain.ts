@@ -14,6 +14,8 @@
 
 import Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
+import { extractEntitiesCpu } from './extract-cpu.js';
+import type { GenerationProvider } from './generation.js';
 
 // =============================================================================
 // Types
@@ -48,6 +50,11 @@ export interface RetainResult {
   chunkId: string;
   queued: boolean;
   deduplicated?: boolean;
+  /** Tier 1 CPU extraction results (inline, no LLM) */
+  tier1?: {
+    entitiesLinked: number;
+    relationsCreated: number;
+  };
 }
 
 export interface EmbeddingProvider {
@@ -163,7 +170,10 @@ export async function retain(
   const embedding = await embedder.embed(text);
   const embeddingBuffer = Buffer.from(embedding.buffer);
 
-  // Write chunk + queue extraction in a single transaction
+  // Write chunk + Tier 1 extraction + queue Tier 2 in a single transaction
+  let tier1: { entitiesLinked: number; relationsCreated: number } | undefined;
+  const shouldExtract = !skipExtraction && (memoryType === 'world' || memoryType === 'experience');
+
   const insertTransaction = db.transaction(() => {
     // Insert chunk
     db.prepare(`
@@ -180,8 +190,13 @@ export async function retain(
       eventTime, eventTimeEnd, temporalLabel
     );
 
-    // Queue for entity extraction (unless skipped)
-    if (!skipExtraction && (memoryType === 'world' || memoryType === 'experience')) {
+    // Tier 1: CPU extraction (instant, inline, no LLM)
+    if (shouldExtract) {
+      tier1 = extractEntitiesCpu(db, chunkId, text);
+    }
+
+    // Queue for Tier 2 LLM extraction (unchanged)
+    if (shouldExtract) {
       db.prepare(`
         INSERT OR IGNORE INTO extraction_queue (chunk_id)
         VALUES (?)
@@ -193,7 +208,8 @@ export async function retain(
 
   return {
     chunkId,
-    queued: !skipExtraction && (memoryType === 'world' || memoryType === 'experience'),
+    queued: shouldExtract,
+    ...(tier1 ? { tier1 } : {}),
   };
 }
 
@@ -305,28 +321,17 @@ interface ExtractionOutput {
 
 async function extractEntities(
   text: string,
-  ollamaUrl: string,
-  model: string
+  generator: GenerationProvider
 ): Promise<ExtractionOutput> {
   const prompt = ENTITY_EXTRACTION_PROMPT.replace('{TEXT}', text);
 
-  const response = await fetch(`${ollamaUrl}/api/generate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model,
-      prompt,
-      stream: false,
-      options: { temperature: 0.1, num_predict: 2048 },
-    }),
+  const raw = await generator.generate(prompt, {
+    temperature: 0.1,
+    maxTokens: 2048,
+    jsonMode: true,
   });
 
-  if (!response.ok) {
-    throw new Error(`Ollama extraction error: ${response.status}`);
-  }
-
-  const data = await response.json();
-  const cleaned = data.response
+  const cleaned = raw
     .replace(/```json\s*/g, '')
     .replace(/```\s*/g, '')
     .trim();
@@ -347,8 +352,7 @@ async function extractEntities(
  */
 export async function processExtractionQueue(
   db: Database.Database,
-  ollamaUrl: string = 'http://starbase:40114',
-  model: string = 'llama3.1:8b',
+  generator: GenerationProvider,
   batchSize: number = 10
 ): Promise<{ processed: number; failed: number }> {
   let processed = 0;
@@ -373,7 +377,7 @@ export async function processExtractionQueue(
     `).run(item.chunk_id);
 
     try {
-      const extracted = await extractEntities(item.text, ollamaUrl, model);
+      const extracted = await extractEntities(item.text, generator);
 
       const applyExtraction = db.transaction(() => {
         const now = new Date().toISOString();

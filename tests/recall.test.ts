@@ -139,13 +139,13 @@ describe('recall() — graph search', () => {
       trustScore: 0.9,
     });
 
-    db.prepare(`INSERT INTO entities (id, name, canonical_name, entity_type)
+    db.prepare(`INSERT OR REPLACE INTO entities (id, name, canonical_name, entity_type)
       VALUES ('ent-alice', 'Alice', 'alice', 'person')`).run();
-    db.prepare(`INSERT INTO entities (id, name, canonical_name, entity_type)
+    db.prepare(`INSERT OR REPLACE INTO entities (id, name, canonical_name, entity_type)
       VALUES ('ent-rust', 'Rust', 'rust', 'technology')`).run();
-    db.prepare(`INSERT INTO chunk_entities (chunk_id, entity_id) VALUES (?, 'ent-alice')`).run(chunkId);
-    db.prepare(`INSERT INTO chunk_entities (chunk_id, entity_id) VALUES (?, 'ent-rust')`).run(chunkId);
-    db.prepare(`INSERT INTO relations (id, source_entity_id, target_entity_id, relation_type)
+    db.prepare(`INSERT OR IGNORE INTO chunk_entities (chunk_id, entity_id) VALUES (?, 'ent-alice')`).run(chunkId);
+    db.prepare(`INSERT OR IGNORE INTO chunk_entities (chunk_id, entity_id) VALUES (?, 'ent-rust')`).run(chunkId);
+    db.prepare(`INSERT OR REPLACE INTO relations (id, source_entity_id, target_entity_id, relation_type)
       VALUES ('rel-1', 'ent-alice', 'ent-rust', 'prefers')`).run();
   });
 

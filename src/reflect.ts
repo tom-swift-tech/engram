@@ -16,6 +16,8 @@
 import Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
 import { pathToFileURL } from 'url';
+import type { GenerationProvider } from './generation.js';
+import { OllamaGeneration } from './generation.js';
 
 // =============================================================================
 // Types
@@ -24,9 +26,11 @@ import { pathToFileURL } from 'url';
 export interface ReflectConfig {
   /** Path to the agent's SQLite memory file */
   dbPath: string;
-  /** Ollama endpoint (default: http://starbase:40114) */
+  /** Generation provider for reflection. If not set, falls back to Ollama. */
+  generator?: GenerationProvider;
+  /** Ollama endpoint — used only if generator is not set (backward compat) */
   ollamaUrl?: string;
-  /** Model for reflection (default: llama3.1:8b — fast, good enough for synthesis) */
+  /** Ollama model — used only if generator is not set (backward compat) */
   reflectModel?: string;
   /** Max unreflected facts to process per cycle (default: 50) */
   batchSize?: number;
@@ -379,6 +383,8 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
     minFactsThreshold = 5,
   } = config;
 
+  const generator = config.generator ?? new OllamaGeneration({ url: ollamaUrl, model: reflectModel });
+
   const db = new Database(dbPath);
   const startTime = Date.now();
   const logId = randomUUID();
@@ -387,7 +393,7 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
   db.prepare(`
     INSERT INTO reflect_log (id, status, model_used)
     VALUES (?, 'running', ?)
-  `).run(logId, reflectModel);
+  `).run(logId, generator.name);
 
   const result: ReflectResult = {
     logId,
@@ -425,7 +431,7 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
 
     // 3. Build prompt and call LLM
     const prompt = buildReflectPrompt(unreflected, existingObs, existingOps, bankConfig);
-    const rawResponse = await ollamaGenerate(ollamaUrl, reflectModel, prompt);
+    const rawResponse = await generator.generate(prompt, { temperature: 0.3, maxTokens: 4096, jsonMode: true });
     const output = parseReflectOutput(rawResponse);
 
     // 4. Apply results in a transaction

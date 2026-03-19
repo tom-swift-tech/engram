@@ -30,9 +30,14 @@ if (!dbPath) {
   console.error('Usage: engram-mcp <path-to-engram-file> [options]');
   console.error('');
   console.error('Options:');
-  console.error('  --ollama-url <url>        Ollama endpoint (default: http://localhost:11434)');
-  console.error('  --use-ollama-embeddings   Use Ollama for embeddings instead of local Transformers.js');
-  console.error('  --reflect-model <model>   LLM for extraction + reflection (default: llama3.1:8b)');
+  console.error('  --ollama-url <url>          Ollama endpoint (default: http://localhost:11434)');
+  console.error('  --use-ollama-embeddings     Use Ollama for embeddings instead of local Transformers.js');
+  console.error('  --reflect-model <model>     LLM for extraction + reflection (default: llama3.1:8b)');
+  console.error('  --generation-endpoint <url> OpenAI-compatible endpoint for generation');
+  console.error('  --generation-model <model>  Model for OpenAI-compatible generation');
+  console.error('  --generation-api-key <key>  API key for generation endpoint');
+  console.error('  --anthropic-api-key <key>   Anthropic API key (uses Claude for generation)');
+  console.error('  --anthropic-model <model>   Anthropic model (default: claude-haiku-4-5-20251001)');
   process.exit(1);
 }
 
@@ -44,15 +49,35 @@ function getArg(flag: string): string | undefined {
 const ollamaUrl = getArg('--ollama-url') ?? 'http://localhost:11434';
 const useOllamaEmbeddings = args.includes('--use-ollama-embeddings');
 const reflectModel = getArg('--reflect-model') ?? 'llama3.1:8b';
+const generationEndpointUrl = getArg('--generation-endpoint');
+const generationModel = getArg('--generation-model');
+const generationApiKey = getArg('--generation-api-key');
+const anthropicApiKey = getArg('--anthropic-api-key');
+const anthropicModel = getArg('--anthropic-model');
 
 // ─── Server Setup ───────────────────────────────────────────────────────────
 
 async function main() {
-  const engram = await Engram.open(dbPath!, {
+  const engramOptions: Parameters<typeof Engram.open>[1] = {
     ollamaUrl,
     useOllamaEmbeddings,
     reflectModel,
-  });
+  };
+
+  if (anthropicApiKey) {
+    engramOptions.anthropicGeneration = {
+      apiKey: anthropicApiKey,
+      model: anthropicModel,
+    };
+  } else if (generationEndpointUrl && generationModel) {
+    engramOptions.generationEndpoint = {
+      baseUrl: generationEndpointUrl,
+      model: generationModel,
+      apiKey: generationApiKey,
+    };
+  }
+
+  const engram = await Engram.open(dbPath!, engramOptions);
 
   const handleTool = createEngramToolHandler(engram);
 

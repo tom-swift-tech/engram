@@ -14,6 +14,7 @@ import { createRequire } from 'module';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import type { EmbeddingProvider } from '../src/retain.js';
+import type { GenerationProvider } from '../src/generation.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -84,6 +85,24 @@ export class MockEmbedder implements EmbeddingProvider {
     }
     const mag = Math.sqrt(vec.reduce((s, v) => s + v * v, 0));
     return mag > 0 ? new Float32Array(vec.map(v => v / mag)) : vec;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// MockGenerator
+// ---------------------------------------------------------------------------
+
+/**
+ * Deterministic mock generation provider.
+ * Returns a canned response for every generate() call.
+ */
+export class MockGenerator implements GenerationProvider {
+  readonly name = 'mock/test';
+
+  constructor(private response: string = '{"entities":[],"relations":[]}') {}
+
+  async generate(): Promise<string> {
+    return this.response;
   }
 }
 
