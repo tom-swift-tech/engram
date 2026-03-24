@@ -128,22 +128,39 @@ engram/
 ├── tsconfig.json
 ├── vitest.config.ts
 ├── src/
-│   ├── schema.sql               ← full database schema
+│   ├── schema.sql               ← full database schema (10 tables, FTS5, triggers)
+│   ├── engram.ts                ← unified Engram class + public API exports
 │   ├── retain.ts                ← fast write + dedup + batch import + extraction queue
 │   ├── recall.ts                ← four-way retrieval + RRF + trust/decay weighting + formatForPrompt
 │   ├── reflect.ts               ← scheduled learning engine + prompt templates
+│   ├── extract-cpu.ts           ← zero-LLM inline entity extraction (Tier 1)
+│   ├── generation.ts            ← pluggable generation providers (Ollama, OpenAI-compat, Anthropic)
 │   ├── local-embedder.ts        ← in-process embeddings via @xenova/transformers
 │   ├── working-memory-types.ts  ← types for working memory session management
-│   ├── engram.ts                ← unified Engram class + public API exports
-│   └── mcp-tools.ts             ← MCP tool definitions (retain/recall/reflect/forget/supersede/session)
-├── tests/
+│   ├── mcp-tools.ts             ← MCP tool definitions (7 tools: retain/recall/reflect/extract/forget/supersede/session)
+│   └── mcp-server.ts            ← standalone MCP stdio server (engram-mcp CLI)
+├── tests/                        ← 154 tests across 10 files
 │   ├── helpers.ts
 │   ├── retain.test.ts
 │   ├── retain-gate.test.ts
 │   ├── recall.test.ts
 │   ├── reflect.test.ts
+│   ├── extract-cpu.test.ts
+│   ├── generation.test.ts
 │   ├── engram.test.ts
-│   └── working-memory.test.ts
+│   ├── working-memory.test.ts
+│   ├── agent-integration.test.ts
+│   └── mcp-server.test.ts
+├── docs/
+│   ├── CPU-EXTRACTION-TIER1-SPEC.md
+│   ├── FIX-MCP-TOOL-DISCOVERABILITY.md
+│   ├── GENERATION-PROVIDER-SPEC.md
+│   ├── MCP-SERVER-SPEC.md
+│   ├── REFACTOR-WORKING-MEMORY-PRIMITIVES.md
+│   └── OPENCLAW-INTEGRATION.md   ← OpenClaw memory plugin setup guide
+├── skills/
+│   ├── engram.md                  ← portable agent skill (all 7 MCP tools)
+│   └── engram-session.md          ← working memory session skill
 └── examples/
     └── basic-usage.ts
 ```
@@ -195,6 +212,16 @@ const result = await mira.reflect();
 await mira.processExtractions();
 // Runs Ollama against queued chunks, builds out entity graph
 ```
+
+## Integration with OpenClaw (Production)
+
+OpenClaw's `memory-engram` plugin replaces its built-in flat-file FTS with Engram's semantic retrieval via mcporter subprocess. Production-verified by the Tracer agent (2026-03-24, 16/17 stress tests passed). See `docs/OPENCLAW-INTEGRATION.md` for full setup.
+
+Key integration points:
+- Plugin bridges `memory_search` / `memory_get` → `engram_recall` via mcporter
+- Markdown sync ingests `workspace/memory/*.md` into Engram automatically
+- Known: ~10s latency from mcporter cold-start (fix: daemon mode or direct import)
+- Known: SQLite locks under parallel writes (fix: serialize retains)
 
 ## Integration with valor-engine
 

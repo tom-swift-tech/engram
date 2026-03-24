@@ -463,6 +463,77 @@ Tools exposed:
 | `engram_supersede` | Replace an outdated fact with corrected text |
 | `engram_session` | Infer or resume a working memory session; returns session state + related context |
 
+## MCP Stdio Server
+
+Engram ships a standalone MCP server that exposes all 7 tools over stdio. Use it with any MCP-compatible client (Claude Code, Claude Desktop, Cursor, mcporter, etc.).
+
+```bash
+# Basic usage
+npx engram-mcp ./agent.engram
+
+# With Ollama embeddings instead of local
+npx engram-mcp ./agent.engram --use-ollama-embeddings --ollama-url http://localhost:11434
+
+# With custom reflect model
+npx engram-mcp ./agent.engram --reflect-model llama3.2:3b
+
+# With OpenAI-compatible generation endpoint
+npx engram-mcp ./agent.engram --generation-endpoint http://localhost:8080 --generation-model gpt-4
+
+# With Anthropic generation
+npx engram-mcp ./agent.engram --anthropic-api-key sk-ant-... --anthropic-model claude-haiku-4-5-20251001
+```
+
+### Claude Code / Claude Desktop config
+
+```json
+{
+  "mcpServers": {
+    "engram": {
+      "command": "node",
+      "args": ["/path/to/engram/dist/mcp-server.js", "./agent.engram"],
+      "transport": "stdio"
+    }
+  }
+}
+```
+
+### mcporter config
+
+```json
+{
+  "mcpServers": {
+    "engram": {
+      "command": "node",
+      "args": [
+        "/path/to/engram/dist/mcp-server.js",
+        "/path/to/agent.engram",
+        "--use-ollama-embeddings",
+        "--ollama-url", "http://localhost:11434"
+      ],
+      "transport": "stdio"
+    }
+  }
+}
+```
+
+## OpenClaw Integration
+
+Engram can replace OpenClaw's built-in flat-file FTS memory system with semantic four-strategy retrieval. A `memory-engram` plugin bridges OpenClaw's `memory_search` / `memory_get` tool interface to Engram via mcporter subprocess calls.
+
+This is production-verified — the Tracer agent runs this integration on a homelab with Ollama embeddings and Telegram as the channel.
+
+See **[docs/OPENCLAW-INTEGRATION.md](docs/OPENCLAW-INTEGRATION.md)** for the full setup guide, architecture diagram, plugin code, and troubleshooting.
+
+## Agent Skills
+
+Portable skill files for agents that use Engram via mcporter:
+
+- **[skills/engram.md](skills/engram.md)** — Complete tool reference with all 7 MCP tools, mcporter syntax, usage patterns, and common mistakes.
+- **[skills/engram-session.md](skills/engram-session.md)** — Working memory session lifecycle: when to use `engram_session` vs `engram_recall`, threshold tuning, cleanup patterns.
+
+Copy these into your agent's skill directory for in-context tool guidance.
+
 ## Scheduled Reflection
 
 Run reflection on a timer rather than triggering it manually.
@@ -680,7 +751,7 @@ memory.close();
 ```bash
 npm install
 npm run build        # compile TypeScript → dist/
-npm test             # run test suite (105 tests)
+npm test             # run test suite (154 tests)
 npm run typecheck    # TypeScript check without emit
 npm run example      # run examples/basic-usage.ts (requires Ollama)
 ```
