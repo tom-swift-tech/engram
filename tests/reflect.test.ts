@@ -163,6 +163,54 @@ describe('reflect()', () => {
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
   });
 
+  it('reinforces only the opinion in the matching domain, not a same-belief in a different domain', async () => {
+    dbPath = tmpDbPath();
+    await setupDb(dbPath, 5);
+
+    const db = new Database(dbPath);
+    // Same belief text, different domains
+    db.prepare(`
+      INSERT INTO opinions (id, belief, confidence, domain, supporting_chunks, related_entities)
+      VALUES ('op-infra', 'Kubernetes is the preferred orchestration platform', 0.7, 'infrastructure', '[]', '[]')
+    `).run();
+    db.prepare(`
+      INSERT INTO opinions (id, belief, confidence, domain, supporting_chunks, related_entities)
+      VALUES ('op-dev', 'Kubernetes is the preferred orchestration platform', 0.7, 'development', '[]', '[]')
+    `).run();
+    db.close();
+
+    // Reinforce only the 'infrastructure' domain opinion
+    vi.stubGlobal('fetch', mockOllamaFetch(JSON.stringify({
+      observations: [],
+      opinion_updates: [
+        {
+          belief: 'Kubernetes is the preferred orchestration platform',
+          direction: 'reinforce',
+          confidence_delta: 0.1,
+          domain: 'infrastructure',
+          evidence_chunk_ids: ['chk-x'],
+          entity_names: [],
+        },
+      ],
+      observation_refreshes: [],
+    })));
+
+    const result = await reflect({ dbPath });
+    expect(result.opinionsReinforced).toBe(1);
+
+    const verify = new Database(dbPath);
+    const opinions = verify.prepare(`
+      SELECT id, confidence FROM opinions WHERE id IN ('op-infra', 'op-dev')
+    `).all() as Array<{ id: string; confidence: number }>;
+    verify.close();
+
+    const infra = opinions.find(op => op.id === 'op-infra')!;
+    const dev = opinions.find(op => op.id === 'op-dev')!;
+    // Only the infrastructure opinion should have increased confidence
+    expect(infra.confidence).toBeGreaterThan(0.7);
+    expect(dev.confidence).toBe(0.7);
+  });
+
   it('reinforces the exact matching opinion instead of a same-prefix sibling', async () => {
     dbPath = tmpDbPath();
     await setupDb(dbPath, 5);

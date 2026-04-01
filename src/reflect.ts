@@ -346,6 +346,16 @@ function beliefSimilarity(a: string, b: string): number {
   return intersection / Math.max(aTokens.size, bTokens.size, 1);
 }
 
+function resolveEntityIds(db: Database.Database, names: string[]): string[] {
+  const stmt = db.prepare(
+    `SELECT id FROM entities WHERE canonical_name = ? AND is_active = TRUE`
+  );
+  return names.map(name => {
+    const row = stmt.get(name.toLowerCase()) as { id: string } | undefined;
+    return row?.id ?? name; // fallback to name if not yet extracted
+  });
+}
+
 function findMatchingOpinion(
   existingOpinions: ExistingOpinion[],
   belief: string,
@@ -444,11 +454,12 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
       `);
       for (const obs of output.observations) {
         const obsId = `obs-${randomUUID().substring(0, 8)}`;
+        const entityIds = resolveEntityIds(db, obs.entity_names);
         insertObs.run(
           obsId,
           obs.summary,
           JSON.stringify(obs.source_chunk_ids),
-          JSON.stringify(obs.entity_names),
+          JSON.stringify(entityIds),
           obs.domain,
           obs.topic,
           now
@@ -494,7 +505,7 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
             evidence_count = evidence_count + 1,
             last_reinforced = ?,
             updated_at = ?
-        WHERE belief = ? AND is_active = TRUE
+        WHERE belief = ? AND domain = ? AND is_active = TRUE
       `);
       const challengeOpinion = db.prepare(`
         UPDATE opinions
@@ -503,21 +514,22 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
             evidence_count = evidence_count + 1,
             last_challenged = ?,
             updated_at = ?
-        WHERE belief = ? AND is_active = TRUE
+        WHERE belief = ? AND domain = ? AND is_active = TRUE
       `);
 
       for (const opUpdate of output.opinion_updates) {
         if (opUpdate.direction === 'new') {
-          const initialConfidence = Math.min(0.7, Math.max(0.3, 
+          const initialConfidence = Math.min(0.7, Math.max(0.3,
             0.5 + opUpdate.confidence_delta
           ));
+          const opEntityIds = resolveEntityIds(db, opUpdate.entity_names);
           insertOpinion.run(
             `op-${randomUUID().substring(0, 8)}`,
             opUpdate.belief,
             initialConfidence,
             JSON.stringify(opUpdate.evidence_chunk_ids),
             opUpdate.domain,
-            JSON.stringify(opUpdate.entity_names),
+            JSON.stringify(opEntityIds),
             now,
             opUpdate.evidence_chunk_ids.length
           );
@@ -535,7 +547,8 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
               clampedDelta,
               JSON.stringify(mergedSupporting),
               now, now,
-              existing.belief
+              existing.belief,
+              existing.domain
             );
             result.opinionsReinforced++;
           }
@@ -552,7 +565,8 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
               clampedDelta,
               JSON.stringify(mergedContradicting),
               now, now,
-              existing.belief
+              existing.belief,
+              existing.domain
             );
             result.opinionsChallenged++;
           }
