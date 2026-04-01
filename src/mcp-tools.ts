@@ -209,6 +209,14 @@ export const ENGRAM_TOOLS = [
       required: ['message'],
     },
   },
+  {
+    name: 'engram_queue_stats' as const,
+    description: 'Get extraction queue health stats: pending, processing, completed, and failed counts plus the oldest pending item age. Use to diagnose why the knowledge graph is not growing or to decide when to call engram_process_extractions.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {},
+    },
+  },
 ] as const;
 
 export type EngramToolName = typeof ENGRAM_TOOLS[number]['name'];
@@ -348,6 +356,11 @@ export function createEngramToolHandler(engram: Engram) {
           };
           const result = await engram.inferWorkingSession(msgCheck.value, opts);
           return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+        }
+
+        case 'engram_queue_stats': {
+          const stats = engram.getQueueStats();
+          return { content: [{ type: 'text', text: JSON.stringify(stats, null, 2) }] };
         }
       }
     } catch (error: unknown) {

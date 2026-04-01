@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Database from 'better-sqlite3';
-import { retain, retainBatch, processExtractionQueue } from '../src/retain.js';
+import { retain, retainBatch, processExtractionQueue, getQueueStats } from '../src/retain.js';
 import { createTestDb, MockEmbedder, MockGenerator, mockOllamaFetch, EXTRACTION_RESPONSE } from './helpers.js';
 
 // ---------------------------------------------------------------------------
@@ -282,15 +282,41 @@ describe('processExtractionQueue()', () => {
 
     await retain(db, 'retry exhaustion text', embedder, { memoryType: 'world' });
 
-    // Run 3 times — each should pick it up and fail, incrementing attempts
+    // Run 3 times — clear backoff window between each to simulate time passing
     await processExtractionQueue(db, failGen);
+    db.prepare(`UPDATE extraction_queue SET next_retry_after = NULL`).run();
     await processExtractionQueue(db, failGen);
+    db.prepare(`UPDATE extraction_queue SET next_retry_after = NULL`).run();
     const thirdResult = await processExtractionQueue(db, failGen);
 
     expect(thirdResult.failed).toBe(1);
     const queued = db.prepare("SELECT status, attempts FROM extraction_queue LIMIT 1").get() as any;
     expect(queued.attempts).toBe(3);
     expect(queued.status).toBe('failed');
+    db.close();
+  });
+
+  it('respects backoff window — does not retry immediately after failure', async () => {
+    const db = createTestDb();
+    const embedder = new MockEmbedder();
+    const failGen: import('../src/generation.js').GenerationProvider = {
+      name: 'mock/fail',
+      generate: async () => { throw new Error('generation error'); },
+    };
+
+    await retain(db, 'backoff test text', embedder, { memoryType: 'world' });
+
+    // First call fails and sets a backoff window
+    await processExtractionQueue(db, failGen);
+    const queued = db.prepare("SELECT status, next_retry_after FROM extraction_queue LIMIT 1").get() as any;
+    expect(queued.status).toBe('pending');
+    expect(queued.next_retry_after).toBeTruthy();
+
+    // Second call immediately after — item should be skipped due to backoff
+    const secondResult = await processExtractionQueue(db, failGen);
+    expect(secondResult.processed).toBe(0);
+    expect(secondResult.failed).toBe(0);
+
     db.close();
   });
 
@@ -317,6 +343,27 @@ describe('processExtractionQueue()', () => {
 
     // Tier 1 CPU extraction created entities during retain(), so count > 0
     // But Tier 2 should NOT have processed the inactive chunk
+    db.close();
+  });
+
+  it('getQueueStats returns correct counts per status', async () => {
+    const db = createTestDb();
+    const embedder = new MockEmbedder();
+    const generator = new MockGenerator(EXTRACTION_RESPONSE);
+
+    // One completed
+    await retain(db, 'fact one', embedder, { memoryType: 'world' });
+    await processExtractionQueue(db, generator);
+
+    // One pending
+    await retain(db, 'fact two', embedder, { memoryType: 'world' });
+
+    const stats = getQueueStats(db);
+    expect(stats.completed).toBe(1);
+    expect(stats.pending).toBe(1);
+    expect(stats.failed).toBe(0);
+    expect(stats.oldest_pending).toBeTruthy();
+
     db.close();
   });
 });

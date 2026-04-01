@@ -300,6 +300,7 @@ CREATE TABLE IF NOT EXISTS extraction_queue (
     queued_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     attempts INTEGER DEFAULT 0,
     last_attempt TIMESTAMP,
+    next_retry_after TIMESTAMP,         -- backoff: NULL = immediately eligible
     status TEXT DEFAULT 'pending'
         CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
     error TEXT

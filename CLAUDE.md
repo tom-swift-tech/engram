@@ -138,7 +138,7 @@ engram/
 │   ├── generation.ts            ← pluggable generation providers (Ollama, OpenAI-compat, Anthropic)
 │   ├── local-embedder.ts        ← in-process embeddings via @xenova/transformers
 │   ├── working-memory-types.ts  ← types for working memory session management
-│   ├── mcp-tools.ts             ← MCP tool definitions (7 tools: retain/recall/reflect/extract/forget/supersede/session)
+│   ├── mcp-tools.ts             ← MCP tool definitions (8 tools: retain/recall/reflect/extract/forget/supersede/session/queue_stats)
 │   └── mcp-server.ts            ← standalone MCP stdio server (engram-mcp CLI)
 ├── tests/                        ← 184 tests across 11 files
 │   ├── helpers.ts

@@ -364,12 +364,15 @@ export async function processExtractionQueue(
   let processed = 0;
   let failed = 0;
 
-  // Grab pending items
+  // Grab pending items (respecting exponential backoff windows)
   const pending = db.prepare(`
     SELECT eq.chunk_id, c.text
     FROM extraction_queue eq
     JOIN chunks c ON eq.chunk_id = c.id
-    WHERE eq.status = 'pending' AND eq.attempts < 3 AND c.is_active = TRUE
+    WHERE eq.status = 'pending'
+      AND eq.attempts < 3
+      AND c.is_active = TRUE
+      AND (eq.next_retry_after IS NULL OR eq.next_retry_after <= CURRENT_TIMESTAMP)
     ORDER BY eq.queued_at ASC
     LIMIT ?
   `).all(batchSize) as Array<{ chunk_id: string; text: string }>;
@@ -452,15 +455,47 @@ export async function processExtractionQueue(
       const row = db.prepare(
         `SELECT attempts FROM extraction_queue WHERE chunk_id = ?`
       ).get(item.chunk_id) as { attempts: number } | undefined;
-      const status = (row?.attempts ?? 3) >= 3 ? 'failed' : 'pending';
+      const attempts = row?.attempts ?? 3;
+      const status = attempts >= 3 ? 'failed' : 'pending';
+      // Exponential backoff: 30s after 1st failure, 60s after 2nd
+      const backoffSeconds = status === 'pending' ? Math.pow(2, attempts - 1) * 30 : null;
       db.prepare(
-        `UPDATE extraction_queue SET status = ?, error = ? WHERE chunk_id = ?`
-      ).run(status, error.message, item.chunk_id);
+        `UPDATE extraction_queue SET status = ?, error = ?, next_retry_after = ? WHERE chunk_id = ?`
+      ).run(
+        status,
+        error.message,
+        backoffSeconds != null ? new Date(Date.now() + backoffSeconds * 1000).toISOString() : null,
+        item.chunk_id,
+      );
       failed++;
     }
   }
 
   return { processed, failed };
+}
+
+// =============================================================================
+// Queue Observability
+// =============================================================================
+
+export interface QueueStats {
+  pending: number;
+  processing: number;
+  completed: number;
+  failed: number;
+  oldest_pending: string | null;
+}
+
+export function getQueueStats(db: Database.Database): QueueStats {
+  return db.prepare(`
+    SELECT
+      SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
+      SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) as processing,
+      SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+      SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
+      MIN(CASE WHEN status = 'pending' THEN queued_at END) as oldest_pending
+    FROM extraction_queue
+  `).get() as QueueStats;
 }
 
 // =============================================================================

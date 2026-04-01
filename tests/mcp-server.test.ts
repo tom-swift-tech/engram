@@ -62,9 +62,9 @@ describe('MCP Server', () => {
     cleanupDb(dbPath);
   });
 
-  it('ListTools returns all 7 tool schemas', async () => {
+  it('ListTools returns all 8 tool schemas', async () => {
     const result = await client.listTools();
-    expect(result.tools.length).toBe(7);
+    expect(result.tools.length).toBe(8);
     const names = result.tools.map(t => t.name);
     expect(names).toContain('engram_retain');
     expect(names).toContain('engram_recall');
@@ -73,6 +73,7 @@ describe('MCP Server', () => {
     expect(names).toContain('engram_forget');
     expect(names).toContain('engram_supersede');
     expect(names).toContain('engram_session');
+    expect(names).toContain('engram_queue_stats');
   });
 
   it('engram_retain stores a chunk and returns a chunkId', async () => {
@@ -212,6 +213,21 @@ describe('MCP Server', () => {
     expect(result.isError).toBe(true);
     const content = result.content as Array<{ type: string; text: string }>;
     expect(content[0].text).toContain('text');
+  });
+
+  it('engram_queue_stats returns queue health counts', async () => {
+    const result = await client.callTool({
+      name: 'engram_queue_stats',
+      arguments: {},
+    });
+
+    expect(result.isError).toBeFalsy();
+    const content = result.content as Array<{ type: string; text: string }>;
+    const stats = JSON.parse(content[0].text);
+    expect(stats).toHaveProperty('pending');
+    expect(stats).toHaveProperty('completed');
+    expect(stats).toHaveProperty('failed');
+    expect(typeof stats.pending).toBe('number');
   });
 
   it('engram_recall returns isError when query is missing', async () => {

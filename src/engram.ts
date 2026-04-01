@@ -31,6 +31,7 @@ import {
   retain,
   retainBatch,
   processExtractionQueue,
+  getQueueStats,
   OllamaEmbeddings,
   LocalEmbedder,
   shouldRetain,
@@ -38,6 +39,7 @@ import {
   type RetainOptions,
   type RetainResult,
   type EmbeddingProvider,
+  type QueueStats,
 } from './retain.js';
 
 import { recall, formatForPrompt, type RecallOptions, type RecallResponse, type RecallResult, type FormatForPromptOptions } from './recall.js';
@@ -212,6 +214,12 @@ export class Engram {
       backfill();
     }
 
+    // Migration: add next_retry_after column to existing .engram files
+    const eqColumns = db.pragma('table_info(extraction_queue)') as Array<{ name: string }>;
+    if (!eqColumns.some(c => c.name === 'next_retry_after')) {
+      db.exec('ALTER TABLE extraction_queue ADD COLUMN next_retry_after TIMESTAMP');
+    }
+
     // Embedding provider selection (priority order):
     // 1. Injected embedder — caller controls everything (used in tests)
     // 2. Ollama embeddings — opt-in via useOllamaEmbeddings flag
@@ -346,6 +354,11 @@ export class Engram {
    */
   async processExtractions(batchSize: number = 10): Promise<{ processed: number; failed: number }> {
     return processExtractionQueue(this.db, this.generator, batchSize);
+  }
+
+  /** Get extraction queue health stats (pending, completed, failed counts). */
+  getQueueStats(): QueueStats {
+    return getQueueStats(this.db);
   }
 
   /** Close the database connection. Call when the agent shuts down. */
