@@ -282,4 +282,34 @@ describe('Engram', () => {
     expect(response.results.some((r) => r.source?.includes('bbb'))).toBe(true);
     expect(response.results.some((r) => r.source?.includes('aaa'))).toBe(false);
   });
+
+  // ---- Failure cleanup ----
+
+  it('closes the database when embedder initialization fails', async () => {
+    dbPath = tmpDbPath();
+
+    // Mock LocalEmbedder.init() to throw — simulates model download failure.
+    // This triggers the default embedder path (no injected embedder).
+    const localEmbedderModule = await import('../src/local-embedder.js');
+    const origInit = localEmbedderModule.LocalEmbedder.prototype.init;
+    localEmbedderModule.LocalEmbedder.prototype.init = async function () {
+      throw new Error('model download failed');
+    };
+
+    try {
+      await expect(Engram.create(dbPath, {})).rejects.toThrow(
+        'model download failed',
+      );
+
+      // The db should NOT be locked — we can open it immediately
+      const db2 = new Database(dbPath);
+      const tables = db2
+        .prepare(`SELECT COUNT(*) as c FROM sqlite_master WHERE type = 'table'`)
+        .get() as any;
+      expect(tables.c).toBeGreaterThan(0); // schema was applied before failure
+      db2.close();
+    } finally {
+      localEmbedderModule.LocalEmbedder.prototype.init = origInit;
+    }
+  });
 });

@@ -17,6 +17,12 @@ export default defineConfig({
         branches: 70,
         functions: 75,
         lines: 75,
+        'src/local-embedder.ts': {
+          statements: 80,
+          branches: 60,
+          functions: 80,
+          lines: 80,
+        },
       },
     },
   },

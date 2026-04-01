@@ -311,19 +311,24 @@ export class Engram {
     // 2. Ollama embeddings — opt-in via useOllamaEmbeddings flag
     // 3. Local Transformers.js — default, zero network dependency
     let embedder: EmbeddingProvider;
-    if (injectedEmbedder) {
-      embedder = injectedEmbedder;
-    } else if (useOllamaEmbeddings) {
-      embedder = new OllamaEmbeddings(
-        ollamaUrl,
-        embedModel ?? 'nomic-embed-text',
-        embedDimensions ?? 768,
-      );
-    } else {
-      const localModel = embedModel ?? 'Xenova/nomic-embed-text-v1.5';
-      const local = new LocalEmbedder(localModel);
-      await local.init();
-      embedder = local;
+    try {
+      if (injectedEmbedder) {
+        embedder = injectedEmbedder;
+      } else if (useOllamaEmbeddings) {
+        embedder = new OllamaEmbeddings(
+          ollamaUrl,
+          embedModel ?? 'nomic-embed-text',
+          embedDimensions ?? 768,
+        );
+      } else {
+        const localModel = embedModel ?? 'Xenova/nomic-embed-text-v1.5';
+        const local = new LocalEmbedder(localModel);
+        await local.init();
+        embedder = local;
+      }
+    } catch (err) {
+      db.close();
+      throw err;
     }
 
     // Generation provider selection (priority order):

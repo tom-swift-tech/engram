@@ -25,12 +25,25 @@ async function getPipeline(
   const cacheKey = `${modelName}:${quantized}`;
   if (!pipelineCache.has(cacheKey)) {
     const { pipeline } = await import('@xenova/transformers');
-    pipelineCache.set(
-      cacheKey,
-      pipeline('feature-extraction', modelName, { quantized }),
+    const p = pipeline('feature-extraction', modelName, { quantized }).catch(
+      (err: unknown) => {
+        // Self-healing: evict failed initialization so the next call can retry
+        // instead of permanently caching a rejected promise.
+        pipelineCache.delete(cacheKey);
+        throw err;
+      },
     );
+    pipelineCache.set(cacheKey, p);
   }
   return pipelineCache.get(cacheKey)!;
+}
+
+/**
+ * Clear cached pipelines. Exposed for testing retry-after-failure scenarios.
+ * @internal
+ */
+export function clearPipelineCache(): void {
+  pipelineCache.clear();
 }
 
 // =============================================================================
