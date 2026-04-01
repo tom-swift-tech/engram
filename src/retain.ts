@@ -15,7 +15,7 @@
 import Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
 import { extractEntitiesCpu } from './extract-cpu.js';
-import type { GenerationProvider } from './generation.js';
+import { DEFAULT_OLLAMA_URL, type GenerationProvider } from './generation.js';
 
 // =============================================================================
 // Types
@@ -74,7 +74,7 @@ export class OllamaEmbeddings implements EmbeddingProvider {
   public readonly dimensions: number;
 
   constructor(
-    url: string = 'http://starbase:40114',
+    url: string = DEFAULT_OLLAMA_URL,
     model: string = 'nomic-embed-text',
     dimensions: number = 768
   ) {

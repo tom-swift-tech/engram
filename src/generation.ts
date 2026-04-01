@@ -8,6 +8,9 @@
 // All implementations use Node.js built-in fetch() — no external HTTP deps.
 // =============================================================================
 
+/** Canonical default Ollama endpoint. Override per-instance via the url option. */
+export const DEFAULT_OLLAMA_URL = 'http://localhost:11434';
+
 // =============================================================================
 // Types
 // =============================================================================
@@ -43,7 +46,7 @@ export class OllamaGeneration implements GenerationProvider {
   private model: string;
 
   constructor(options?: { url?: string; model?: string }) {
-    this.url = options?.url ?? 'http://localhost:11434';
+    this.url = options?.url ?? DEFAULT_OLLAMA_URL; // exported above
     this.model = options?.model ?? 'llama3.1:8b';
     this.name = `ollama/${this.model}`;
   }

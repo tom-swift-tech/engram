@@ -40,6 +40,7 @@ import {
 } from './retain.js';
 
 import { recall, formatForPrompt, type RecallOptions, type RecallResponse, type RecallResult, type FormatForPromptOptions } from './recall.js';
+import { parseTemporalQuery, type TemporalRange } from './temporal-parser.js';
 
 import {
   reflect,
@@ -52,6 +53,7 @@ import {
   OllamaGeneration,
   OpenAICompatibleGeneration,
   AnthropicGeneration,
+  DEFAULT_OLLAMA_URL,
   type GenerationProvider,
   type GenerationOptions,
 } from './generation.js';
@@ -65,6 +67,7 @@ import type {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
 
 // =============================================================================
 // Public API Types
@@ -89,7 +92,9 @@ export type {
   GenerationOptions,
 };
 export { OllamaEmbeddings, LocalEmbedder, ReflectScheduler, shouldRetain, formatForPrompt,
-  OllamaGeneration, OpenAICompatibleGeneration, AnthropicGeneration };
+  OllamaGeneration, OpenAICompatibleGeneration, AnthropicGeneration, parseTemporalQuery,
+  DEFAULT_OLLAMA_URL };
+export type { TemporalRange };
 
 export interface EngramOptions {
   /** Mission for the reflection engine: what to focus on during synthesis */
@@ -157,7 +162,7 @@ export class Engram {
 
   private static async init(path: string, options: EngramOptions): Promise<Engram> {
     const {
-      ollamaUrl = 'http://starbase:40114',
+      ollamaUrl = DEFAULT_OLLAMA_URL,
       embedModel,
       embedDimensions,
       reflectModel = 'llama3.1:8b',

@@ -16,8 +16,7 @@
 import Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
 import { pathToFileURL } from 'url';
-import type { GenerationProvider } from './generation.js';
-import { OllamaGeneration } from './generation.js';
+import { OllamaGeneration, DEFAULT_OLLAMA_URL, type GenerationProvider } from './generation.js';
 
 // =============================================================================
 // Types
@@ -377,7 +376,7 @@ function findMatchingOpinion(
 export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
   const {
     dbPath,
-    ollamaUrl = 'http://starbase:40114',
+    ollamaUrl = DEFAULT_OLLAMA_URL,
     reflectModel = 'llama3.1:8b',
     batchSize = 50,
     minFactsThreshold = 5,

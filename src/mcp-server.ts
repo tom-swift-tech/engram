@@ -17,7 +17,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
-import { Engram } from './engram.js';
+import { Engram, DEFAULT_OLLAMA_URL } from './engram.js';
 import { ENGRAM_TOOLS, createEngramToolHandler } from './mcp-tools.js';
 import type { EngramToolName } from './mcp-tools.js';
 
@@ -46,7 +46,7 @@ function getArg(flag: string): string | undefined {
   return idx >= 0 && idx + 1 < args.length ? args[idx + 1] : undefined;
 }
 
-const ollamaUrl = getArg('--ollama-url') ?? 'http://localhost:11434';
+const ollamaUrl = getArg('--ollama-url') ?? DEFAULT_OLLAMA_URL;
 const useOllamaEmbeddings = args.includes('--use-ollama-embeddings');
 const reflectModel = getArg('--reflect-model') ?? 'llama3.1:8b';
 const generationEndpointUrl = getArg('--generation-endpoint');
@@ -85,7 +85,7 @@ async function main() {
     {
       name: 'engram',
       version: '0.1.0',
-      description: 'Memory system for AI agents. All parameters use camelCase (memoryType, trustScore, sourceType). Store facts with engram_retain, search with engram_recall, manage sessions with engram_session.',
+      description: 'Memory system for AI agents. All parameters use camelCase (memoryType, trustScore, sourceType). Store facts with engram_retain, search with engram_recall (temporal queries like "last week" auto-activate date filtering), manage sessions with engram_session.',
     },
     {
       capabilities: {

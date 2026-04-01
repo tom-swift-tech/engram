@@ -16,6 +16,7 @@
 
 import Database from 'better-sqlite3';
 import type { EmbeddingProvider } from './retain.js';
+import { parseTemporalQuery } from './temporal-parser.js';
 
 // =============================================================================
 // Types
@@ -329,11 +330,11 @@ function temporalSearch(
   const params: any[] = [];
 
   if (filters.after) {
-    conditions.push('(c.event_time >= ? OR (c.event_time IS NULL AND c.created_at >= ?))');
+    conditions.push('(datetime(c.event_time) >= datetime(?) OR (c.event_time IS NULL AND datetime(c.created_at) >= datetime(?)))');
     params.push(filters.after, filters.after);
   }
   if (filters.before) {
-    conditions.push('(c.event_time <= ? OR (c.event_time IS NULL AND c.created_at <= ?))');
+    conditions.push('(datetime(c.event_time) <= datetime(?) OR (c.event_time IS NULL AND datetime(c.created_at) <= datetime(?)))');
     params.push(filters.before, filters.before);
   }
   if (filters.memoryTypes) {
@@ -465,6 +466,11 @@ export async function recall(
     decayHalfLifeDays = 180,
   } = options;
 
+  // Auto-derive temporal bounds from natural language when not explicitly provided
+  const parsed = (!after && !before) ? parseTemporalQuery(query) : null;
+  const effectiveAfter = after ?? parsed?.after;
+  const effectiveBefore = before ?? parsed?.before;
+
   const perStrategyLimit = topK * 3; // Oversample per strategy, then fuse
   const filters: QueryFilters = { memoryTypes, minTrust, sourceFilter, contextFilter };
   const strategyResults: ScoredChunk[][] = [];
@@ -498,8 +504,8 @@ export async function recall(
     }
   }
 
-  if (strategies.includes('temporal') && (after || before)) {
-    const results = temporalSearch(db, perStrategyLimit, { after, before, ...filters });
+  if (strategies.includes('temporal') && (effectiveAfter || effectiveBefore)) {
+    const results = temporalSearch(db, perStrategyLimit, { after: effectiveAfter, before: effectiveBefore, ...filters });
     if (results.length > 0) {
       strategyResults.push(results);
       strategiesUsed.push('temporal');

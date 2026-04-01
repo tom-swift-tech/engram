@@ -34,15 +34,26 @@ npx mcporter call engram.engram_recall query="Your search query" topK=5
 
 | Parameter | Required | Values |
 |-----------|----------|--------|
-| `query` | yes | Natural language query |
+| `query` | yes | Natural language query. Temporal expressions are auto-parsed — "last week", "yesterday", "March 15th", "past 30 days", "Q1 2026" all activate the temporal strategy automatically. |
 | `topK` | no | Max results (default: 10) |
 | `strategies` | no | Array: `semantic`, `keyword`, `graph`, `temporal` |
 | `memoryTypes` | no | Filter: `world`, `experience`, `observation`, `opinion` |
 | `minTrust` | no | Minimum trust score 0.0–1.0 |
-| `after` | no | ISO date — only facts after this date |
-| `before` | no | ISO date — only facts before this date |
+| `after` | no | ISO date — only facts after this date. Overrides auto-parsed dates. |
+| `before` | no | ISO date — only facts before this date. Overrides auto-parsed dates. |
 
 Returns: `results[]` (ranked chunks), `opinions[]` (beliefs with confidence), `observations[]` (synthesized knowledge).
+
+**Temporal query examples:**
+
+```bash
+npx mcporter call engram.engram_recall query="what happened last week"
+npx mcporter call engram.engram_recall query="decisions yesterday"
+npx mcporter call engram.engram_recall query="March 2026 deployments"
+npx mcporter call engram.engram_recall query="progress past 30 days"
+```
+
+No need to pass `after`/`before` manually — the temporal strategy activates from the query text.
 
 ### Working memory session — `engram_session`
 

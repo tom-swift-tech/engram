@@ -134,18 +134,20 @@ engram/
 │   ├── recall.ts                ← four-way retrieval + RRF + trust/decay weighting + formatForPrompt
 │   ├── reflect.ts               ← scheduled learning engine + prompt templates
 │   ├── extract-cpu.ts           ← zero-LLM inline entity extraction (Tier 1)
+│   ├── temporal-parser.ts       ← natural language date parsing for temporal recall
 │   ├── generation.ts            ← pluggable generation providers (Ollama, OpenAI-compat, Anthropic)
 │   ├── local-embedder.ts        ← in-process embeddings via @xenova/transformers
 │   ├── working-memory-types.ts  ← types for working memory session management
 │   ├── mcp-tools.ts             ← MCP tool definitions (7 tools: retain/recall/reflect/extract/forget/supersede/session)
 │   └── mcp-server.ts            ← standalone MCP stdio server (engram-mcp CLI)
-├── tests/                        ← 154 tests across 10 files
+├── tests/                        ← 184 tests across 11 files
 │   ├── helpers.ts
 │   ├── retain.test.ts
 │   ├── retain-gate.test.ts
 │   ├── recall.test.ts
 │   ├── reflect.test.ts
 │   ├── extract-cpu.test.ts
+│   ├── temporal-parser.test.ts
 │   ├── generation.test.ts
 │   ├── engram.test.ts
 │   ├── working-memory.test.ts

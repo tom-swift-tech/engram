@@ -77,7 +77,7 @@ Herd exposes the same Ollama HTTP API (`/api/embed`, `/api/generate`), so no oth
 
 ### Verifying Your Setup
 
-Before integrating Engram into an agent, verify the embedding model is reachable. A common failure mode is Engram opening successfully (`Engram.open()` only touches SQLite) while the embedding pipeline silently fails on every `retain()` call because the Ollama model isn't available.
+Before integrating Engram into an agent, verify the embedding model is reachable. A common failure mode is `Engram.open()` completing successfully while the embedding pipeline silently fails on every `retain()` call. **Note:** `open()` does more than open the database — it also initializes the embedding provider (downloading the local Transformers.js model on first run, or connecting to Ollama if `useOllamaEmbeddings: true`). The operation completes without error even when the embedding model is unavailable, because the model is loaded lazily on the first actual embed call.
 
 **Quick verification (default local embeddings path):**
 
@@ -219,7 +219,14 @@ const results = await mira.retainBatch([
 
 Retrieve memories using four parallel strategies: semantic (vector similarity via sqlite-vec), keyword (FTS5 BM25), graph (entity walk), and temporal (date filter). Results are fused using Reciprocal Rank Fusion and weighted by trust score.
 
+Temporal expressions in the query are auto-parsed — "last week", "yesterday", "March 15th", "past 30 days", "Q1 2026" all activate the temporal strategy without needing explicit `after`/`before` parameters. Explicit `after`/`before` take precedence when provided.
+
 ```typescript
+// Temporal queries work naturally:
+const recent = await mira.recall('what happened last week');
+const specific = await mira.recall('decisions on March 15th');
+const range = await mira.recall('deployments past 30 days');
+
 const response = await mira.recall('What IaC tools does Tom use?', {
   topK?: number,          // max results (default: 10)
   memoryTypes?: string[], // filter by memory type: ['world', 'experience', ...]
@@ -456,7 +463,7 @@ Tools exposed:
 | Tool | Description |
 |------|-------------|
 | `engram_retain` | Store a memory with source and trust metadata |
-| `engram_recall` | Retrieve relevant memories via four-way retrieval |
+| `engram_recall` | Retrieve relevant memories via four-way retrieval. Auto-parses temporal expressions ("last week", "yesterday", "Q1 2026"). |
 | `engram_reflect` | Trigger a reflection cycle to synthesize observations and opinions |
 | `engram_process_extractions` | Process the entity extraction queue |
 | `engram_forget` | Soft-delete a memory chunk by ID |
@@ -751,7 +758,7 @@ memory.close();
 ```bash
 npm install
 npm run build        # compile TypeScript → dist/
-npm test             # run test suite (154 tests)
+npm test             # run test suite (184 tests)
 npm run typecheck    # TypeScript check without emit
 npm run example      # run examples/basic-usage.ts (requires Ollama)
 ```

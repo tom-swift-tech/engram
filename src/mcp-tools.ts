@@ -71,7 +71,7 @@ export const ENGRAM_TOOLS = [
 
   {
     name: 'engram_recall' as const,
-    description: 'Retrieve relevant memories via four-strategy search (semantic, keyword, graph, temporal) fused with Reciprocal Rank Fusion. Example: {query: "What tools does Tom use?", topK: 5}. Returns results[], opinions[], observations[].',
+    description: 'Retrieve relevant memories via four-strategy search (semantic, keyword, graph, temporal) fused with Reciprocal Rank Fusion. Temporal expressions in queries are auto-parsed — "last week", "yesterday", "March 15th", "past 30 days", "Q1 2026" all work without explicit after/before. Example: {query: "What happened last week?", topK: 5}. Returns results[], opinions[], observations[].',
     inputSchema: {
       type: 'object' as const,
       properties: {
