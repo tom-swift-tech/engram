@@ -145,7 +145,7 @@ export class OpenAICompatibleGeneration implements GenerationProvider {
 
 This covers:
 - **OpenRouter** — `baseUrl: 'https://openrouter.ai/api'`, `apiKey: OPENROUTER_API_KEY`, `model: 'anthropic/claude-haiku-4.5'`
-- **Herd Pro** — `baseUrl: 'http://starbase:40114'`, `model: 'llama3.1:8b'` (Herd exposes OpenAI-compat API)
+- **Herd Pro** — `baseUrl: 'http://localhost:11434'`, `model: 'llama3.1:8b'` (Herd exposes OpenAI-compat API)
 - **OpenAI direct** — `baseUrl: 'https://api.openai.com'`, `apiKey: OPENAI_API_KEY`, `model: 'gpt-4o-mini'`
 - **vLLM / LiteLLM / any OpenAI-compatible** — just set baseUrl + model
 
@@ -258,7 +258,7 @@ Change signature:
 // OLD:
 export async function processExtractionQueue(
   db: Database.Database,
-  ollamaUrl: string = 'http://starbase:40114',
+  ollamaUrl: string = 'http://localhost:11434',
   model: string = 'llama3.1:8b',
   batchSize: number = 10
 ): Promise<{ processed: number; failed: number }>
@@ -393,7 +393,7 @@ const engram = await Engram.create('./agent.engram', {
 // Herd Pro (your unified gateway — speaks OpenAI-compat)
 const engram = await Engram.create('./agent.engram', {
   generationEndpoint: {
-    baseUrl: 'http://starbase:40114',
+    baseUrl: 'http://localhost:11434',
     model: 'llama3.1:8b',
   },
 });

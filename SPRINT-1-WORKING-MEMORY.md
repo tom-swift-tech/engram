@@ -817,7 +817,7 @@ No other tables, indexes, or code paths reference it outside the new methods.
 import { Engram, shouldRetain, formatForPrompt } from 'engram';
 
 const memory = await Engram.open('./agent.engram', {
-  ollamaUrl: 'http://starbase:40114',
+  ollamaUrl: 'http://localhost:11434',
 });
 
 async function handleMessage(userInput: string) {

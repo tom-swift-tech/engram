@@ -758,7 +758,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
     process.exit(1);
   }
 
-  const ollamaUrl = process.env.OLLAMA_URL || 'http://starbase:40114';
+  const ollamaUrl = process.env.OLLAMA_URL || 'http://localhost:11434';
   const model = process.env.REFLECT_MODEL || 'llama3.1:8b';
 
   console.log(`[Reflect] Manual run: ${dbPath} via ${model} @ ${ollamaUrl}`);

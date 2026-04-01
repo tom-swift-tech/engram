@@ -68,7 +68,7 @@ The embedding model (`Xenova/nomic-embed-text-v1.5`) downloads automatically on 
 If you run models via **Herd** (swift-innovate/herd), use port `40114` instead of Ollama's default:
 
 ```typescript
-const mira = await Engram.create('./mira.engram', {
+const myAgent = await Engram.create('./myAgent.engram', {
   ollamaUrl: 'http://localhost:40114',  // Herd
 });
 ```
@@ -94,16 +94,16 @@ console.log(v.length); // 768
 
 ```bash
 # Check if nomic-embed-text is available
-curl http://starbase:40114/api/tags | grep nomic-embed-text
+curl http://localhost:11434/api/tags | grep nomic-embed-text
 
 # Test an embedding directly
-curl http://starbase:40114/api/embed -d '{"model":"nomic-embed-text","input":"test"}'
+curl http://localhost:11434/api/embed -d '{"model":"nomic-embed-text","input":"test"}'
 ```
 
 **Programmatic health check:**
 
 ```typescript
-const engram = await Engram.open('./agent.engram', { ollamaUrl: 'http://starbase:40114' });
+const engram = await Engram.open('./agent.engram', { ollamaUrl: 'http://localhost:11434' });
 
 // Verify the embedding pipeline works end-to-end
 try {
@@ -132,22 +132,22 @@ npm install engram
 ```typescript
 import { Engram } from 'engram';
 
-const mira = await Engram.create('./mira.engram', {
-  ollamaUrl: 'http://starbase:40114',
+const myAgent = await Engram.create('./myAgent.engram', {
+  ollamaUrl: 'http://localhost:11434',
   reflectMission: 'Focus on architecture preferences and infrastructure decisions.',
   retainMission: 'Prioritize technical decisions and project context. Ignore greetings.',
 });
 
-await mira.retain('Tom prefers Terraform with the bpg provider for Proxmox IaC', {
+await myAgent.retain('Tom prefers Terraform with the bpg provider for Proxmox IaC', {
   memoryType: 'world',
   sourceType: 'user_stated',
   trustScore: 0.9,
 });
 
-const response = await mira.recall('What IaC tools does Tom use?', { topK: 5 });
+const response = await myAgent.recall('What IaC tools does Tom use?', { topK: 5 });
 console.log(response.results);
 
-mira.close();
+myAgent.close();
 ```
 
 ## API
@@ -157,8 +157,8 @@ mira.close();
 Create a new engram file at the given path. Initializes the schema and applies configuration.
 
 ```typescript
-const mira = await Engram.create('./mira.engram', {
-  ollamaUrl?: string,           // Ollama base URL (default: 'http://starbase:40114')
+const myAgent = await Engram.create('./myAgent.engram', {
+  ollamaUrl?: string,           // Ollama base URL (default: 'http://localhost:11434')
   reflectMission?: string,      // guides what to synthesize during reflection
   retainMission?: string,       // guides what to prioritize during retention
   embedModel?: string,          // default: 'Xenova/nomic-embed-text-v1.5' (local) or 'nomic-embed-text' (Ollama)
@@ -178,7 +178,7 @@ const mira = await Engram.create('./mira.engram', {
 Open an existing engram file. Use this when resuming a session with an agent that already has memory.
 
 ```typescript
-const mira = await Engram.open('./mira.engram');
+const myAgent = await Engram.open('./myAgent.engram');
 ```
 
 ### `retain(text, options?)`
@@ -186,7 +186,7 @@ const mira = await Engram.open('./mira.engram');
 Store a memory. Embeds the text and writes to SQLite in ~5ms. Entity extraction is queued for background processing — no LLM call on this path.
 
 ```typescript
-await mira.retain('Tom prefers Terraform with the bpg provider for Proxmox IaC', {
+await myAgent.retain('Tom prefers Terraform with the bpg provider for Proxmox IaC', {
   memoryType?: string,    // 'world' | 'experience' | 'observation' | 'opinion' (default: 'world')
   source?: string,        // e.g. 'conversation:session-123'
   sourceType?: string,    // 'user_stated' | 'inferred' | 'external_doc' | 'tool_result' | 'agent_generated'
@@ -209,7 +209,7 @@ await mira.retain('Tom prefers Terraform with the bpg provider for Proxmox IaC',
 Bulk store. More efficient than calling `retain()` in a loop — all entity extractions are queued at the end rather than one-by-one.
 
 ```typescript
-const results = await mira.retainBatch([
+const results = await myAgent.retainBatch([
   { text: 'Tom prefers Terraform', options: { memoryType: 'world', trustScore: 0.9 } },
   { text: 'Vault stores PKI certs', options: { memoryType: 'world' } },
 ], (current, total) => console.log(`${current}/${total}`));
@@ -223,11 +223,11 @@ Temporal expressions in the query are auto-parsed — "last week", "yesterday", 
 
 ```typescript
 // Temporal queries work naturally:
-const recent = await mira.recall('what happened last week');
-const specific = await mira.recall('decisions on March 15th');
-const range = await mira.recall('deployments past 30 days');
+const recent = await myAgent.recall('what happened last week');
+const specific = await myAgent.recall('decisions on March 15th');
+const range = await myAgent.recall('deployments past 30 days');
 
-const response = await mira.recall('What IaC tools does Tom use?', {
+const response = await myAgent.recall('What IaC tools does Tom use?', {
   topK?: number,          // max results (default: 10)
   memoryTypes?: string[], // filter by memory type: ['world', 'experience', ...]
   minTrust?: number,      // minimum trust score (default: 0.0)
@@ -270,7 +270,7 @@ const response = await mira.recall('What IaC tools does Tom use?', {
 Run the background entity extraction queue. Calls Ollama against queued chunks to extract entities and relationships, building out the knowledge graph. Run this periodically or after bulk ingestion.
 
 ```typescript
-const { processed, failed } = await mira.processExtractions(10); // batchSize default: 10
+const { processed, failed } = await myAgent.processExtractions(10); // batchSize default: 10
 ```
 
 ### `forget(chunkId)`
@@ -278,7 +278,7 @@ const { processed, failed } = await mira.processExtractions(10); // batchSize de
 Soft-delete a memory chunk by ID. Sets `is_active = FALSE` so the chunk is excluded from all recall queries while remaining in the database for audit purposes.
 
 ```typescript
-const wasFound = await mira.forget('chunk-uuid-here'); // returns false if ID not found
+const wasFound = await myAgent.forget('chunk-uuid-here'); // returns false if ID not found
 ```
 
 ### `supersede(oldChunkId, newText, options?)`
@@ -286,7 +286,7 @@ const wasFound = await mira.forget('chunk-uuid-here'); // returns false if ID no
 Replace an outdated fact with corrected information. The old chunk is soft-deleted and linked to the new one via `superseded_by`. Use when a fact has changed:
 
 ```typescript
-const newResult = await mira.supersede(
+const newResult = await myAgent.supersede(
   oldChunkId,
   'Tom switched from Terraform to Pulumi for all new projects',
   { memoryType: 'world', trustScore: 0.9 }
@@ -298,7 +298,7 @@ const newResult = await mira.supersede(
 Soft-delete all chunks whose `source` field contains the given substring. Returns the count of deactivated chunks. Useful for clearing an entire conversation or document import:
 
 ```typescript
-const count = await mira.forgetBySource('conversation:session-123');
+const count = await myAgent.forgetBySource('conversation:session-123');
 // count = number of chunks deactivated
 ```
 
@@ -310,7 +310,7 @@ Short-term session state for agents that handle multiple concurrent topics. Sess
 
 ```typescript
 const { session, relatedContext, confidence, diagnostics } =
-  await mira.inferWorkingSession(userInput, {
+  await myAgent.inferWorkingSession(userInput, {
     maxActive?: number,       // max active sessions before oldest is snapshotted (default: 5)
     threshold?: number,       // cosine similarity threshold for matching (default: 0.72)
     expireAfterHours?: number // hours before untouched session expires (default: 48)
@@ -327,7 +327,7 @@ const { session, relatedContext, confidence, diagnostics } =
 **`updateWorkingSession(sessionId, updates)`** — Merge new state into the session. Use `progress` to track what's been done — it's captured in the snapshot when the session expires.
 
 ```typescript
-await mira.updateWorkingSession(session.id, {
+await myAgent.updateWorkingSession(session.id, {
   goal: 'updated goal if it evolved',
   progress: 'Queried prod — v2.3.1. Found 3 pending migrations. Drafted rollback plan.',
   status: 'in_progress', // agent-defined fields are preserved
@@ -383,7 +383,7 @@ setInterval(() => memory.expireStaleWorkingSessions(48), 60 * 60 * 1000);
 Run a reflection cycle. Reads unreflected chunks, calls Ollama to synthesize observations and update opinion confidence scores. Returns a summary of what was produced.
 
 ```typescript
-const result = await mira.reflect();
+const result = await myAgent.reflect();
 // {
 //   observationsCreated: number,
 //   opinionsFormed: number,
@@ -397,7 +397,7 @@ const result = await mira.reflect();
 Close the database connection. Call this when the agent session ends.
 
 ```typescript
-mira.close();
+myAgent.close();
 ```
 
 ## Utility Functions
@@ -418,7 +418,7 @@ const { score } = shouldRetain('ok cool');
 // score: ~0.1   — phatic expression, skip storing
 
 if (score >= 0.5) {
-  await mira.retain(text, { ... });
+  await myAgent.retain(text, { ... });
 }
 ```
 
@@ -431,7 +431,7 @@ Format a `RecallResponse` into a string suitable for injecting into a system pro
 ```typescript
 import { formatForPrompt } from 'engram';
 
-const memory = await mira.recall(userMessage, { topK: 10 });
+const memory = await myAgent.recall(userMessage, { topK: 10 });
 const memoryBlock = formatForPrompt(memory, {
   maxChars?: number,       // default: 2000
   showTrust?: boolean,     // include trust percentages inline (default: false)
@@ -451,7 +451,7 @@ Expose Engram operations as MCP tools for agent frameworks that support the Mode
 ```typescript
 import { ENGRAM_TOOLS, createEngramToolHandler } from 'engram/mcp-tools';
 
-const handle = createEngramToolHandler(mira);
+const handle = createEngramToolHandler(myAgent);
 
 // Register with your MCP server
 server.registerTools(ENGRAM_TOOLS);
@@ -549,8 +549,8 @@ Run reflection on a timer rather than triggering it manually.
 import { ReflectScheduler } from 'engram';
 
 const scheduler = new ReflectScheduler({
-  dbPath: './mira.engram',
-  ollamaUrl: 'http://starbase:40114',
+  dbPath: './myAgent.engram',
+  ollamaUrl: 'http://localhost:11434',
   reflectModel: 'llama3.1:8b',
 });
 
@@ -564,10 +564,10 @@ Trigger a reflection cycle directly from the command line:
 
 ```bash
 # Manual reflection
-npx tsx src/reflect.ts ./mira.engram
+npx tsx src/reflect.ts ./myAgent.engram
 
 # Custom Ollama endpoint and model
-OLLAMA_URL=http://my-server:11434 REFLECT_MODEL=llama3.2:3b npx tsx src/reflect.ts ./mira.engram
+OLLAMA_URL=http://my-server:11434 REFLECT_MODEL=llama3.2:3b npx tsx src/reflect.ts ./myAgent.engram
 ```
 
 ## Design Decisions
@@ -585,7 +585,7 @@ OLLAMA_URL=http://my-server:11434 REFLECT_MODEL=llama3.2:3b npx tsx src/reflect.
 Agent memory files use the `.engram` extension. They are standard SQLite databases and can be inspected with any SQLite tooling.
 
 ```
-~/.valor/memory/mira.engram
+~/.valor/memory/myAgent.engram
 ~/.valor/memory/sit-agent.engram
 ~/.valor/memory/shared.engram
 ```
@@ -607,11 +607,11 @@ Agent memory files use the `.engram` extension. They are standard SQLite databas
 // valor-engine/engine/memory/index.ts
 import { Engram } from 'engram';
 
-const miraMemory = await Engram.open('./mira.engram');
+const myAgentMemory = await Engram.open('./myAgent.engram');
 
 // Auto-retain conversation turns
 gateway.on('message', async (msg) => {
-  await miraMemory.retain(msg.text, {
+  await myAgentMemory.retain(msg.text, {
     memoryType: 'experience',
     source: `conversation:${msg.conversationId}`,
     sourceType: 'user_stated',
@@ -620,7 +620,7 @@ gateway.on('message', async (msg) => {
 });
 
 // Inject context before LLM calls
-const context = await miraMemory.recall(userMessage, { topK: 10 });
+const context = await myAgentMemory.recall(userMessage, { topK: 10 });
 const systemPrompt = buildPromptWithMemory(basePrompt, context);
 ```
 

@@ -4,11 +4,11 @@
 // Public API surface for the Engram library. Wraps retain/recall/reflect into
 // a single class with a clean lifecycle:
 //
-//   const mira = await Engram.create('./mira.engram', { ... });
-//   await mira.retain('Tom prefers Terraform', { memoryType: 'world', ... });
-//   const context = await mira.recall('IaC tools?', { topK: 5 });
-//   await mira.reflect();
-//   mira.close();
+//   const myAgent = await Engram.create('./myAgent.engram', { ... });
+//   await myAgent.retain('Tom prefers Terraform', { memoryType: 'world', ... });
+//   const context = await myAgent.recall('IaC tools?', { topK: 5 });
+//   await myAgent.reflect();
+//   myAgent.close();
 //
 // Schema bootstrap:
 //   Reads schema.sql from the same directory as this compiled file (dist/).
@@ -125,7 +125,7 @@ export interface EngramOptions {
     literalism?: number;
     empathy?: number;
   };
-  /** Ollama endpoint (default: http://starbase:40114) */
+  /** Ollama endpoint (default: http://localhost:11434) */
   ollamaUrl?: string;
   /** Embedding model (default: nomic-embed-text) */
   embedModel?: string;

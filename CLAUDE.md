@@ -100,7 +100,7 @@ Inspired by Hindsight's four networks, mapped to biological memory:
 
 Agent memory files use the `.engram` extension (they're SQLite files):
 ```
-~/.valor/memory/mira.engram
+~/.valor/memory/myAgent.engram
 ~/.valor/memory/sit-agent.engram
 ~/.valor/memory/shared.engram
 ```
@@ -173,16 +173,16 @@ engram/
 ```typescript
 import { Engram } from 'engram';
 
-const mira = await Engram.create('./mira.engram', {
+const myAgent = await Engram.create('./myAgent.engram', {
   reflectMission: 'Focus on architecture preferences, project patterns, and infrastructure decisions.',
   retainMission: 'Prioritize technical decisions, code patterns, and project context. Ignore greetings.',
-  ollamaUrl: 'http://starbase:40114',
+  ollamaUrl: 'http://localhost:11434',
 });
 ```
 
 ### Store a memory
 ```typescript
-await mira.retain('Tom prefers Terraform with the bpg provider for Proxmox IaC', {
+await myAgent.retain('Tom prefers Terraform with the bpg provider for Proxmox IaC', {
   memoryType: 'world',
   source: 'conversation:valor-engine-planning',
   sourceType: 'user_stated',
@@ -193,7 +193,7 @@ await mira.retain('Tom prefers Terraform with the bpg provider for Proxmox IaC',
 
 ### Recall memories
 ```typescript
-const response = await mira.recall('What IaC tools does Tom use?', { topK: 5 });
+const response = await myAgent.recall('What IaC tools does Tom use?', { topK: 5 });
 // response.results   → ranked chunks from four retrieval strategies
 // response.opinions  → relevant beliefs with confidence scores
 // response.observations → synthesized knowledge
@@ -202,16 +202,16 @@ const response = await mira.recall('What IaC tools does Tom use?', { topK: 5 });
 ### Run reflection
 ```bash
 # CLI
-npx engram reflect ./mira.engram
+npx engram reflect ./myAgent.engram
 
 # Or programmatically
-const result = await mira.reflect();
+const result = await myAgent.reflect();
 // result: { observationsCreated: 3, opinionsFormed: 1, opinionsReinforced: 2, ... }
 ```
 
 ### Process entity extraction queue
 ```typescript
-await mira.processExtractions();
+await myAgent.processExtractions();
 // Runs Ollama against queued chunks, builds out entity graph
 ```
 
@@ -234,12 +234,12 @@ Engram is a standalone library. valor-engine consumes it as a dependency:
 import { Engram } from 'engram';
 
 // One engram per operative
-const miraMemory = await Engram.open('./mira.engram');
+const myAgentMemory = await Engram.open('./myAgent.engram');
 const sitMemory = await Engram.open('./sit-agent.engram');
 
 // Auto-retain conversation turns
 gateway.on('message', async (msg) => {
-  await miraMemory.retain(msg.text, {
+  await myAgentMemory.retain(msg.text, {
     memoryType: 'experience',
     source: `conversation:${msg.conversationId}`,
     sourceType: 'user_stated',
@@ -248,7 +248,7 @@ gateway.on('message', async (msg) => {
 });
 
 // Inject context before LLM calls
-const context = await miraMemory.recall(userMessage, { topK: 10 });
+const context = await myAgentMemory.recall(userMessage, { topK: 10 });
 const systemPrompt = buildPromptWithMemory(basePrompt, context);
 ```
 

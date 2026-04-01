@@ -462,7 +462,7 @@ try {
   engramInstance = await Engram.open(
     path.resolve(__dirname, 'memory/gage.engram'),
     {
-      ollamaUrl: process.env.OLLAMA_BASE_URL ?? 'http://starbase:40114',
+      ollamaUrl: process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434',
       reflectMission: 'Focus on architecture preferences, infrastructure decisions, project patterns, and technical strategies.',
       retainMission: 'Prioritize technical decisions, project context, and stated preferences. Skip greetings and small talk.',
     },

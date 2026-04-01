@@ -8,7 +8,7 @@
 //
 // Usage:
 //   import { ENGRAM_TOOLS, createEngramToolHandler } from 'engram/mcp-tools';
-//   const handle = createEngramToolHandler(mira);
+//   const handle = createEngramToolHandler(myAgent);
 //   server.registerTools(ENGRAM_TOOLS);
 //   server.onToolCall((name, input) => handle(name, input));
 // =============================================================================
