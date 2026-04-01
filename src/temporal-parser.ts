@@ -18,16 +18,6 @@ export interface TemporalRange {
 }
 
 /**
- * Format a Date as a SQLite-compatible timestamp (YYYY-MM-DD HH:MM:SS).
- * SQLite's CURRENT_TIMESTAMP uses this format, so temporal comparisons
- * must use it too — ISO 8601's 'T' separator breaks lexicographic ordering.
- */
-function toSqliteTimestamp(d: Date): string {
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
-}
-
-/**
  * Parse natural language temporal expressions from a query string.
  * Returns null if no temporal expression is detected.
  *
@@ -35,7 +25,7 @@ function toSqliteTimestamp(d: Date): string {
  */
 export function parseTemporalQuery(
   query: string,
-  referenceDate: Date = new Date()
+  referenceDate: Date = new Date(),
 ): TemporalRange | null {
   const lower = query.toLowerCase();
 
@@ -57,16 +47,46 @@ export function parseTemporalQuery(
 // =============================================================================
 
 const MONTH_NAMES: Record<string, number> = {
-  january: 0, february: 1, march: 2, april: 3, may: 4, june: 5,
-  july: 6, august: 7, september: 8, october: 9, november: 10, december: 11,
-  jan: 0, feb: 1, mar: 2, apr: 3, jun: 5,
-  jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+  january: 0,
+  february: 1,
+  march: 2,
+  april: 3,
+  may: 4,
+  june: 5,
+  july: 6,
+  august: 7,
+  september: 8,
+  october: 9,
+  november: 10,
+  december: 11,
+  jan: 0,
+  feb: 1,
+  mar: 2,
+  apr: 3,
+  jun: 5,
+  jul: 6,
+  aug: 7,
+  sep: 8,
+  oct: 9,
+  nov: 10,
+  dec: 11,
 };
 
 const DAY_NAMES: Record<string, number> = {
-  sunday: 0, monday: 1, tuesday: 2, wednesday: 3,
-  thursday: 4, friday: 5, saturday: 6,
-  sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6,
+  sunday: 0,
+  monday: 1,
+  tuesday: 2,
+  wednesday: 3,
+  thursday: 4,
+  friday: 5,
+  saturday: 6,
+  sun: 0,
+  mon: 1,
+  tue: 2,
+  wed: 3,
+  thu: 4,
+  fri: 5,
+  sat: 6,
 };
 
 /**
@@ -80,14 +100,14 @@ function parseExplicitDate(query: string, ref: Date): TemporalRange | null {
     return dayRange(
       parseInt(isoMatch[1]),
       parseInt(isoMatch[2]) - 1,
-      parseInt(isoMatch[3])
+      parseInt(isoMatch[3]),
     );
   }
 
   // "March 15th" or "March 15" with optional year
   const monthNames = Object.keys(MONTH_NAMES).join('|');
   const mdyRegex = new RegExp(
-    `\\b(${monthNames})\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:[,\\s]+(\\d{4}))?\\b`
+    `\\b(${monthNames})\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:[,\\s]+(\\d{4}))?\\b`,
   );
   const mdyMatch = query.match(mdyRegex);
   if (mdyMatch) {
@@ -99,7 +119,7 @@ function parseExplicitDate(query: string, ref: Date): TemporalRange | null {
 
   // "15 March 2026" or "15th March"
   const dmyRegex = new RegExp(
-    `\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(${monthNames})(?:\\s+(\\d{4}))?\\b`
+    `\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(${monthNames})(?:\\s+(\\d{4}))?\\b`,
   );
   const dmyMatch = query.match(dmyRegex);
   if (dmyMatch) {
@@ -117,7 +137,7 @@ function parseExplicitDate(query: string, ref: Date): TemporalRange | null {
  */
 function parseRelativePeriod(query: string, ref: Date): TemporalRange | null {
   const match = query.match(
-    /\b(?:last|past|previous|recent)\s+(\d+)\s+(days?|weeks?|months?)\b/
+    /\b(?:last|past|previous|recent)\s+(\d+)\s+(days?|weeks?|months?)\b/,
   );
   if (!match) return null;
 
@@ -209,7 +229,7 @@ function parseNamedPeriod(query: string, ref: Date): TemporalRange | null {
 function parseNamedDay(query: string, ref: Date): TemporalRange | null {
   // "since Monday" → from that day to now
   const sinceMatch = query.match(
-    new RegExp(`\\bsince\\s+(${Object.keys(DAY_NAMES).join('|')})\\b`)
+    new RegExp(`\\bsince\\s+(${Object.keys(DAY_NAMES).join('|')})\\b`),
   );
   if (sinceMatch) {
     const targetDay = DAY_NAMES[sinceMatch[1]];
@@ -222,7 +242,7 @@ function parseNamedDay(query: string, ref: Date): TemporalRange | null {
 
   // "on Tuesday" or "last Friday"
   const dayMatch = query.match(
-    new RegExp(`\\b(?:on|last)\\s+(${Object.keys(DAY_NAMES).join('|')})\\b`)
+    new RegExp(`\\b(?:on|last)\\s+(${Object.keys(DAY_NAMES).join('|')})\\b`),
   );
   if (dayMatch) {
     const targetDay = DAY_NAMES[dayMatch[1]];
@@ -257,7 +277,7 @@ function parseMonthReference(query: string, ref: Date): TemporalRange | null {
 
   // "March 2026" or "in March" or "last March"
   const monthYearMatch = query.match(
-    new RegExp(`\\b(${monthNames})\\s+(\\d{4})\\b`)
+    new RegExp(`\\b(${monthNames})\\s+(\\d{4})\\b`),
   );
   if (monthYearMatch) {
     const month = MONTH_NAMES[monthYearMatch[1]];
@@ -271,7 +291,7 @@ function parseMonthReference(query: string, ref: Date): TemporalRange | null {
   }
 
   const inMonthMatch = query.match(
-    new RegExp(`\\b(?:in|last|during)\\s+(${monthNames})\\b`)
+    new RegExp(`\\b(?:in|last|during)\\s+(${monthNames})\\b`),
   );
   if (inMonthMatch) {
     const month = MONTH_NAMES[inMonthMatch[1]];
@@ -309,7 +329,8 @@ function parseQuarter(query: string, ref: Date): TemporalRange | null {
   if (/\blast\s+quarter\b/.test(query)) {
     const currentQ = Math.floor(ref.getUTCMonth() / 3);
     const prevQ = currentQ === 0 ? 3 : currentQ - 1;
-    const year = currentQ === 0 ? ref.getUTCFullYear() - 1 : ref.getUTCFullYear();
+    const year =
+      currentQ === 0 ? ref.getUTCFullYear() - 1 : ref.getUTCFullYear();
     const startMonth = prevQ * 3;
     const start = utcDate(year, startMonth, 1);
     const end = endOfMonth(year, startMonth + 2);
@@ -375,11 +396,23 @@ function parseYearReference(query: string, ref: Date): TemporalRange | null {
 // =============================================================================
 
 function startOfDay(d: Date): Date {
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0, 0));
+  return new Date(
+    Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0, 0),
+  );
 }
 
 function endOfDay(d: Date): Date {
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 23, 59, 59, 999));
+  return new Date(
+    Date.UTC(
+      d.getUTCFullYear(),
+      d.getUTCMonth(),
+      d.getUTCDate(),
+      23,
+      59,
+      59,
+      999,
+    ),
+  );
 }
 
 function startOfWeek(d: Date): Date {
@@ -399,7 +432,15 @@ function dayRange(year: number, month: number, day: number): TemporalRange {
   };
 }
 
-function utcDate(year: number, month: number, day: number, h = 0, m = 0, s = 0, ms = 0): Date {
+function utcDate(
+  year: number,
+  month: number,
+  day: number,
+  h = 0,
+  m = 0,
+  s = 0,
+  ms = 0,
+): Date {
   return new Date(Date.UTC(year, month, day, h, m, s, ms));
 }
 

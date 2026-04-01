@@ -42,7 +42,14 @@ import {
   type QueueStats,
 } from './retain.js';
 
-import { recall, formatForPrompt, type RecallOptions, type RecallResponse, type RecallResult, type FormatForPromptOptions } from './recall.js';
+import {
+  recall,
+  formatForPrompt,
+  type RecallOptions,
+  type RecallResponse,
+  type RecallResult,
+  type FormatForPromptOptions,
+} from './recall.js';
 import { parseTemporalQuery, type TemporalRange } from './temporal-parser.js';
 
 import {
@@ -71,7 +78,6 @@ import type {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-
 // =============================================================================
 // Public API Types
 // =============================================================================
@@ -94,9 +100,18 @@ export type {
   GenerationProvider,
   GenerationOptions,
 };
-export { OllamaEmbeddings, LocalEmbedder, ReflectScheduler, shouldRetain, formatForPrompt,
-  OllamaGeneration, OpenAICompatibleGeneration, AnthropicGeneration, parseTemporalQuery,
-  DEFAULT_OLLAMA_URL };
+export {
+  OllamaEmbeddings,
+  LocalEmbedder,
+  ReflectScheduler,
+  shouldRetain,
+  formatForPrompt,
+  OllamaGeneration,
+  OpenAICompatibleGeneration,
+  AnthropicGeneration,
+  parseTemporalQuery,
+  DEFAULT_OLLAMA_URL,
+};
 export type { TemporalRange };
 
 export interface EngramOptions {
@@ -163,7 +178,10 @@ export class Engram {
   // Internal factory — shared by create() and open()
   // ---------------------------------------------------------------------------
 
-  private static async init(path: string, options: EngramOptions): Promise<Engram> {
+  private static async init(
+    path: string,
+    options: EngramOptions,
+  ): Promise<Engram> {
     const {
       ollamaUrl = DEFAULT_OLLAMA_URL,
       embedModel,
@@ -179,7 +197,9 @@ export class Engram {
     // Load sqlite-vec for vector search. Graceful fallback: semantic strategy
     // is simply skipped (recall.ts catches the error) if the extension is absent.
     try {
-      const mod = await import('sqlite-vec') as unknown as { load: (db: Database.Database) => void };
+      const mod = (await import('sqlite-vec')) as unknown as {
+        load: (db: Database.Database) => void;
+      };
       mod.load(db);
     } catch {
       // sqlite-vec not installed — semantic search disabled
@@ -192,20 +212,28 @@ export class Engram {
 
     // Migration: add text_hash column to existing .engram files (pre-F4)
     const columns = db.pragma('table_info(chunks)') as Array<{ name: string }>;
-    if (!columns.some(c => c.name === 'text_hash')) {
+    if (!columns.some((c) => c.name === 'text_hash')) {
       db.exec('ALTER TABLE chunks ADD COLUMN text_hash TEXT');
-      db.exec('CREATE INDEX IF NOT EXISTS idx_chunks_text_hash ON chunks(text_hash) WHERE is_active = TRUE');
+      db.exec(
+        'CREATE INDEX IF NOT EXISTS idx_chunks_text_hash ON chunks(text_hash) WHERE is_active = TRUE',
+      );
     }
 
     // Backfill text_hash for any existing chunks that predate this migration
-    const missing = db.prepare(
-      `SELECT COUNT(*) as c FROM chunks WHERE text_hash IS NULL AND is_active = TRUE`
-    ).get() as { c: number };
+    const missing = db
+      .prepare(
+        `SELECT COUNT(*) as c FROM chunks WHERE text_hash IS NULL AND is_active = TRUE`,
+      )
+      .get() as { c: number };
     if (missing.c > 0) {
-      const rows = db.prepare(
-        `SELECT id, text FROM chunks WHERE text_hash IS NULL AND is_active = TRUE`
-      ).all() as Array<{ id: string; text: string }>;
-      const updateHash = db.prepare(`UPDATE chunks SET text_hash = ? WHERE id = ?`);
+      const rows = db
+        .prepare(
+          `SELECT id, text FROM chunks WHERE text_hash IS NULL AND is_active = TRUE`,
+        )
+        .all() as Array<{ id: string; text: string }>;
+      const updateHash = db.prepare(
+        `UPDATE chunks SET text_hash = ? WHERE id = ?`,
+      );
       const backfill = db.transaction(() => {
         for (const row of rows) {
           updateHash.run(computeTextHash(row.text), row.id);
@@ -215,9 +243,13 @@ export class Engram {
     }
 
     // Migration: add next_retry_after column to existing .engram files
-    const eqColumns = db.pragma('table_info(extraction_queue)') as Array<{ name: string }>;
-    if (!eqColumns.some(c => c.name === 'next_retry_after')) {
-      db.exec('ALTER TABLE extraction_queue ADD COLUMN next_retry_after TIMESTAMP');
+    const eqColumns = db.pragma('table_info(extraction_queue)') as Array<{
+      name: string;
+    }>;
+    if (!eqColumns.some((c) => c.name === 'next_retry_after')) {
+      db.exec(
+        'ALTER TABLE extraction_queue ADD COLUMN next_retry_after TIMESTAMP',
+      );
     }
 
     // Embedding provider selection (priority order):
@@ -272,9 +304,12 @@ export class Engram {
       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
     `);
     const tx = this.db.transaction(() => {
-      if (options.reflectMission !== undefined) upsert.run('reflect_mission', options.reflectMission);
-      if (options.retainMission !== undefined)  upsert.run('retain_mission',  options.retainMission);
-      if (options.disposition  !== undefined)  upsert.run('disposition',     JSON.stringify(options.disposition));
+      if (options.reflectMission !== undefined)
+        upsert.run('reflect_mission', options.reflectMission);
+      if (options.retainMission !== undefined)
+        upsert.run('retain_mission', options.retainMission);
+      if (options.disposition !== undefined)
+        upsert.run('disposition', JSON.stringify(options.disposition));
     });
     tx();
   }
@@ -287,7 +322,10 @@ export class Engram {
    * Create or reinitialize an engram at the given path.
    * All provided options are written to bank_config on every call.
    */
-  static async create(path: string, options: EngramOptions = {}): Promise<Engram> {
+  static async create(
+    path: string,
+    options: EngramOptions = {},
+  ): Promise<Engram> {
     const engram = await Engram.init(path, options);
     engram.upsertBankConfig(options);
     return engram;
@@ -297,10 +335,17 @@ export class Engram {
    * Open an existing engram. Schema is bootstrapped if missing (safe on new files too).
    * Bank config is updated only for options that are explicitly provided.
    */
-  static async open(path: string, options: EngramOptions = {}): Promise<Engram> {
+  static async open(
+    path: string,
+    options: EngramOptions = {},
+  ): Promise<Engram> {
     const engram = await Engram.init(path, options);
-    const configKeys: Array<keyof EngramOptions> = ['reflectMission', 'retainMission', 'disposition'];
-    if (configKeys.some(k => options[k] !== undefined)) {
+    const configKeys: Array<keyof EngramOptions> = [
+      'reflectMission',
+      'retainMission',
+      'disposition',
+    ];
+    if (configKeys.some((k) => options[k] !== undefined)) {
       engram.upsertBankConfig(options);
     }
     return engram;
@@ -321,7 +366,7 @@ export class Engram {
    */
   async retainBatch(
     items: Array<{ text: string; options?: RetainOptions }>,
-    onProgress?: (current: number, total: number) => void
+    onProgress?: (current: number, total: number) => void,
   ): Promise<RetainResult[]> {
     return retainBatch(this.db, items, this.embedder, onProgress);
   }
@@ -330,7 +375,10 @@ export class Engram {
    * Retrieve relevant memories via 4-way retrieval (semantic + keyword + graph + temporal),
    * fused via Reciprocal Rank Fusion and weighted by trust score.
    */
-  async recall(query: string, options?: RecallOptions): Promise<RecallResponse> {
+  async recall(
+    query: string,
+    options?: RecallOptions,
+  ): Promise<RecallResponse> {
     return recall(this.db, query, this.embedder, options);
   }
 
@@ -352,7 +400,9 @@ export class Engram {
    * Drain the entity extraction queue. Calls Ollama to extract entities and
    * relations from retained chunks, building out the knowledge graph.
    */
-  async processExtractions(batchSize: number = 10): Promise<{ processed: number; failed: number }> {
+  async processExtractions(
+    batchSize: number = 10,
+  ): Promise<{ processed: number; failed: number }> {
     return processExtractionQueue(this.db, this.generator, batchSize);
   }
 
@@ -377,16 +427,22 @@ export class Engram {
    */
   async forget(chunkId: string): Promise<boolean> {
     const result = this.db.transaction(() => {
-      const chunkResult = this.db.prepare(
-        `UPDATE chunks SET is_active = FALSE, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND is_active = TRUE`
-      ).run(chunkId);
+      const chunkResult = this.db
+        .prepare(
+          `UPDATE chunks SET is_active = FALSE, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND is_active = TRUE`,
+        )
+        .run(chunkId);
 
       if (chunkResult.changes > 0) {
-        this.db.prepare(`
+        this.db
+          .prepare(
+            `
           UPDATE extraction_queue
           SET status = 'completed', error = 'chunk deactivated'
           WHERE chunk_id = ? AND status IN ('pending', 'processing')
-        `).run(chunkId);
+        `,
+          )
+          .run(chunkId);
       }
 
       return chunkResult;
@@ -400,11 +456,17 @@ export class Engram {
    * linked to the new one via superseded_by. Use when correcting information:
    * supersede("Tom prefers Terraform" → "Tom switched to Pulumi").
    */
-  async supersede(oldChunkId: string, newText: string, options?: RetainOptions): Promise<RetainResult> {
+  async supersede(
+    oldChunkId: string,
+    newText: string,
+    options?: RetainOptions,
+  ): Promise<RetainResult> {
     const newResult = await this.retain(newText, options);
-    this.db.prepare(
-      `UPDATE chunks SET is_active = FALSE, superseded_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
-    ).run(newResult.chunkId, oldChunkId);
+    this.db
+      .prepare(
+        `UPDATE chunks SET is_active = FALSE, superseded_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      )
+      .run(newResult.chunkId, oldChunkId);
     return newResult;
   }
 
@@ -415,15 +477,21 @@ export class Engram {
    */
   async forgetBySource(sourcePattern: string): Promise<number> {
     const result = this.db.transaction(() => {
-      const chunkIds = this.db.prepare(`
+      const chunkIds = this.db
+        .prepare(
+          `
         SELECT id
         FROM chunks
         WHERE source LIKE ? AND is_active = TRUE
-      `).all(`%${sourcePattern}%`) as Array<{ id: string }>;
+      `,
+        )
+        .all(`%${sourcePattern}%`) as Array<{ id: string }>;
 
-      const chunkResult = this.db.prepare(
-        `UPDATE chunks SET is_active = FALSE, updated_at = CURRENT_TIMESTAMP WHERE source LIKE ? AND is_active = TRUE`
-      ).run(`%${sourcePattern}%`);
+      const chunkResult = this.db
+        .prepare(
+          `UPDATE chunks SET is_active = FALSE, updated_at = CURRENT_TIMESTAMP WHERE source LIKE ? AND is_active = TRUE`,
+        )
+        .run(`%${sourcePattern}%`);
 
       if (chunkIds.length > 0) {
         const updateQueue = this.db.prepare(`
@@ -462,10 +530,15 @@ export class Engram {
    * This is the low-level primitive — it does NOT make a match/new decision.
    * The agent's adapter layer uses these results to implement its own policy.
    */
-  findSimilarSessions(embedding: Float32Array, limit: number = 3): SessionCandidate[] {
+  findSimilarSessions(
+    embedding: Float32Array,
+    limit: number = 3,
+  ): SessionCandidate[] {
     const embeddingBuffer = Buffer.from(embedding.buffer);
     try {
-      const rows = this.db.prepare(`
+      const rows = this.db
+        .prepare(
+          `
         SELECT id, data_json,
                vec_distance_cosine(topic_embedding, ?) AS distance
         FROM working_memory
@@ -473,7 +546,13 @@ export class Engram {
           AND topic_embedding IS NOT NULL
         ORDER BY distance ASC
         LIMIT ?
-      `).all(embeddingBuffer, limit) as Array<{ id: string; data_json: string; distance: number }>;
+      `,
+        )
+        .all(embeddingBuffer, limit) as Array<{
+        id: string;
+        data_json: string;
+        distance: number;
+      }>;
 
       return rows.map((c) => ({
         id: c.id,
@@ -498,7 +577,7 @@ export class Engram {
    */
   async inferWorkingSession(
     message: string,
-    options: WorkingMemoryOptions = {}
+    options: WorkingMemoryOptions = {},
   ): Promise<WorkingSessionResult> {
     const maxActive = Math.max(1, options.maxActive ?? 5);
     const threshold = Math.max(0, Math.min(options.threshold ?? 0.55, 1));
@@ -523,9 +602,11 @@ export class Engram {
       reason = 'match';
 
       // Touch the session timestamp
-      this.db.prepare(
-        `UPDATE working_memory SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`
-      ).run(best.id);
+      this.db
+        .prepare(
+          `UPDATE working_memory SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+        )
+        .run(best.id);
     } else {
       // Create new session
       session = await this.createWorkingSession(message, embeddingBuffer);
@@ -562,7 +643,7 @@ export class Engram {
    */
   async createWorkingSession(
     message: string,
-    embeddingBuffer: Buffer
+    embeddingBuffer: Buffer,
   ): Promise<WorkingMemoryState> {
     const id = `wm-${randomUUID().substring(0, 12)}`;
     const now = new Date().toISOString();
@@ -573,10 +654,14 @@ export class Engram {
       updated_at: now,
     };
 
-    this.db.prepare(`
+    this.db
+      .prepare(
+        `
       INSERT INTO working_memory (id, data_json, seed_query, topic_embedding)
       VALUES (?, ?, ?, ?)
-    `).run(id, JSON.stringify(state), message.slice(0, 200), embeddingBuffer);
+    `,
+      )
+      .run(id, JSON.stringify(state), message.slice(0, 200), embeddingBuffer);
 
     return state;
   }
@@ -588,13 +673,18 @@ export class Engram {
    */
   async updateWorkingSession(
     sessionId: string,
-    updates: Partial<WorkingMemoryState>
+    updates: Partial<WorkingMemoryState>,
   ): Promise<void> {
-    const row = this.db.prepare(
-      `SELECT data_json FROM working_memory WHERE id = ? AND (expires_at IS NULL OR expires_at > datetime('now'))`
-    ).get(sessionId) as { data_json: string } | undefined;
+    const row = this.db
+      .prepare(
+        `SELECT data_json FROM working_memory WHERE id = ? AND (expires_at IS NULL OR expires_at > datetime('now'))`,
+      )
+      .get(sessionId) as { data_json: string } | undefined;
 
-    if (!row) throw new Error(`Working memory session ${sessionId} not found or expired`);
+    if (!row)
+      throw new Error(
+        `Working memory session ${sessionId} not found or expired`,
+      );
 
     const existing = JSON.parse(row.data_json) as WorkingMemoryState;
     const merged: WorkingMemoryState = {
@@ -608,11 +698,15 @@ export class Engram {
     const embedding = await this.embedder.embed(seedQuery);
     const embeddingBuffer = Buffer.from(embedding.buffer);
 
-    this.db.prepare(`
+    this.db
+      .prepare(
+        `
       UPDATE working_memory
       SET data_json = ?, seed_query = ?, topic_embedding = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-    `).run(JSON.stringify(merged), seedQuery, embeddingBuffer, sessionId);
+    `,
+      )
+      .run(JSON.stringify(merged), seedQuery, embeddingBuffer, sessionId);
   }
 
   /**
@@ -620,24 +714,30 @@ export class Engram {
    * Returns null if the session doesn't exist or has expired.
    */
   getWorkingSession(sessionId: string): WorkingMemoryState | null {
-    const row = this.db.prepare(
-      `SELECT data_json FROM working_memory WHERE id = ? AND (expires_at IS NULL OR expires_at > datetime('now'))`
-    ).get(sessionId) as { data_json: string } | undefined;
+    const row = this.db
+      .prepare(
+        `SELECT data_json FROM working_memory WHERE id = ? AND (expires_at IS NULL OR expires_at > datetime('now'))`,
+      )
+      .get(sessionId) as { data_json: string } | undefined;
 
-    return row ? JSON.parse(row.data_json) as WorkingMemoryState : null;
+    return row ? (JSON.parse(row.data_json) as WorkingMemoryState) : null;
   }
 
   /**
    * List all active (non-expired) working memory sessions.
    */
   listWorkingSessions(): WorkingMemoryState[] {
-    const rows = this.db.prepare(`
+    const rows = this.db
+      .prepare(
+        `
       SELECT data_json FROM working_memory
       WHERE expires_at IS NULL OR expires_at > datetime('now')
       ORDER BY updated_at DESC
-    `).all() as Array<{ data_json: string }>;
+    `,
+      )
+      .all() as Array<{ data_json: string }>;
 
-    return rows.map(r => JSON.parse(r.data_json) as WorkingMemoryState);
+    return rows.map((r) => JSON.parse(r.data_json) as WorkingMemoryState);
   }
 
   /**
@@ -645,9 +745,11 @@ export class Engram {
    * then mark it as expired.
    */
   async snapshotWorkingSession(sessionId: string): Promise<RetainResult> {
-    const row = this.db.prepare(
-      `SELECT data_json, seed_query FROM working_memory WHERE id = ?`
-    ).get(sessionId) as { data_json: string; seed_query: string | null } | undefined;
+    const row = this.db
+      .prepare(`SELECT data_json, seed_query FROM working_memory WHERE id = ?`)
+      .get(sessionId) as
+      | { data_json: string; seed_query: string | null }
+      | undefined;
 
     if (!row) throw new Error(`Working memory session ${sessionId} not found`);
 
@@ -656,7 +758,9 @@ export class Engram {
     const summary = [
       `Session goal: ${state.goal}`,
       progressNotes ? `Progress: ${progressNotes}` : '',
-    ].filter(Boolean).join(' ');
+    ]
+      .filter(Boolean)
+      .join(' ');
 
     const result = await this.retain(summary, {
       memoryType: 'experience',
@@ -667,9 +771,11 @@ export class Engram {
     });
 
     // Mark as expired
-    this.db.prepare(
-      `UPDATE working_memory SET expires_at = datetime('now') WHERE id = ?`
-    ).run(sessionId);
+    this.db
+      .prepare(
+        `UPDATE working_memory SET expires_at = datetime('now') WHERE id = ?`,
+      )
+      .run(sessionId);
 
     return result;
   }
@@ -679,20 +785,26 @@ export class Engram {
    * the given threshold. Call this from a background maintenance tick.
    */
   async expireStaleWorkingSessions(maxAgeHours: number = 48): Promise<number> {
-    const stale = this.db.prepare(`
+    const stale = this.db
+      .prepare(
+        `
       SELECT id FROM working_memory
       WHERE updated_at <= datetime('now', '-' || ? || ' hours')
         AND (expires_at IS NULL OR expires_at > datetime('now'))
-    `).all(String(maxAgeHours)) as Array<{ id: string }>;
+    `,
+      )
+      .all(String(maxAgeHours)) as Array<{ id: string }>;
 
     for (const { id } of stale) {
       try {
         await this.snapshotWorkingSession(id);
       } catch {
         // If snapshot fails, still expire it
-        this.db.prepare(
-          `UPDATE working_memory SET expires_at = datetime('now') WHERE id = ?`
-        ).run(id);
+        this.db
+          .prepare(
+            `UPDATE working_memory SET expires_at = datetime('now') WHERE id = ?`,
+          )
+          .run(id);
       }
     }
 
@@ -703,9 +815,11 @@ export class Engram {
    * Clear a specific working memory session without snapshotting.
    */
   clearWorkingSession(sessionId: string): boolean {
-    const result = this.db.prepare(
-      `UPDATE working_memory SET expires_at = datetime('now') WHERE id = ? AND (expires_at IS NULL OR expires_at > datetime('now'))`
-    ).run(sessionId);
+    const result = this.db
+      .prepare(
+        `UPDATE working_memory SET expires_at = datetime('now') WHERE id = ? AND (expires_at IS NULL OR expires_at > datetime('now'))`,
+      )
+      .run(sessionId);
     return result.changes > 0;
   }
 
@@ -714,11 +828,15 @@ export class Engram {
    * Snapshots the oldest sessions that exceed the cap.
    */
   private async enforceSessionCap(maxActive: number): Promise<void> {
-    const active = this.db.prepare(`
+    const active = this.db
+      .prepare(
+        `
       SELECT id FROM working_memory
       WHERE expires_at IS NULL OR expires_at > datetime('now')
       ORDER BY updated_at ASC
-    `).all() as Array<{ id: string }>;
+    `,
+      )
+      .all() as Array<{ id: string }>;
 
     const excess = active.length - maxActive;
     if (excess <= 0) return;
@@ -727,9 +845,11 @@ export class Engram {
       try {
         await this.snapshotWorkingSession(active[i].id);
       } catch {
-        this.db.prepare(
-          `UPDATE working_memory SET expires_at = datetime('now') WHERE id = ?`
-        ).run(active[i].id);
+        this.db
+          .prepare(
+            `UPDATE working_memory SET expires_at = datetime('now') WHERE id = ?`,
+          )
+          .run(active[i].id);
       }
     }
   }

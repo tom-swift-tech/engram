@@ -221,8 +221,12 @@ describe('parseTemporalQuery()', () => {
 
   it('returns null for non-temporal queries', () => {
     expect(parseTemporalQuery('what tools does Tom use', REF)).toBeNull();
-    expect(parseTemporalQuery('Terraform infrastructure preferences', REF)).toBeNull();
-    expect(parseTemporalQuery('how does the build pipeline work', REF)).toBeNull();
+    expect(
+      parseTemporalQuery('Terraform infrastructure preferences', REF),
+    ).toBeNull();
+    expect(
+      parseTemporalQuery('how does the build pipeline work', REF),
+    ).toBeNull();
   });
 });
 
@@ -240,23 +244,37 @@ describe('recall() — auto-temporal from natural language', () => {
   let db: Database.Database;
   const embedder = new MockEmbedder();
 
-  beforeEach(() => { db = createTestDb(); });
+  beforeEach(() => {
+    db = createTestDb();
+  });
   afterEach(() => db.close());
 
   it('activates temporal strategy for "last week" without explicit after/before', async () => {
     // Insert a chunk with a recent created_at
-    const r = await retain(db, 'deployed the new API gateway', embedder, { trustScore: 0.9 });
+    const r = await retain(db, 'deployed the new API gateway', embedder, {
+      trustScore: 0.9,
+    });
     // Set created_at to 5 days ago
-    const fiveDaysAgo = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString();
-    db.prepare(`UPDATE chunks SET created_at = ? WHERE id = ?`).run(fiveDaysAgo, r.chunkId);
+    const fiveDaysAgo = new Date(
+      Date.now() - 5 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    db.prepare(`UPDATE chunks SET created_at = ? WHERE id = ?`).run(
+      fiveDaysAgo,
+      r.chunkId,
+    );
 
     // Also insert an old chunk
     const old = await retain(db, 'set up the original server', embedder, {
       trustScore: 0.9,
       dedupMode: 'none',
     });
-    const sixMonthsAgo = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString();
-    db.prepare(`UPDATE chunks SET created_at = ? WHERE id = ?`).run(sixMonthsAgo, old.chunkId);
+    const sixMonthsAgo = new Date(
+      Date.now() - 180 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    db.prepare(`UPDATE chunks SET created_at = ? WHERE id = ?`).run(
+      sixMonthsAgo,
+      old.chunkId,
+    );
 
     const result = await recall(db, 'what happened last week', embedder, {
       strategies: ['temporal'],
@@ -264,13 +282,21 @@ describe('recall() — auto-temporal from natural language', () => {
 
     // Temporal should have activated and found the recent chunk
     expect(result.strategiesUsed).toContain('temporal');
-    expect(result.results.some(r => r.text.includes('API gateway'))).toBe(true);
-    expect(result.results.some(r => r.text.includes('original server'))).toBe(false);
+    expect(result.results.some((r) => r.text.includes('API gateway'))).toBe(
+      true,
+    );
+    expect(result.results.some((r) => r.text.includes('original server'))).toBe(
+      false,
+    );
   });
 
   it('does not override explicit after/before', async () => {
-    await retain(db, 'a fact from 2020', embedder, { eventTime: '2020-06-01T00:00:00Z' });
-    await retain(db, 'a recent fact', embedder, { eventTime: '2026-03-15T00:00:00Z' });
+    await retain(db, 'a fact from 2020', embedder, {
+      eventTime: '2020-06-01T00:00:00Z',
+    });
+    await retain(db, 'a recent fact', embedder, {
+      eventTime: '2026-03-15T00:00:00Z',
+    });
 
     // Explicit filter should take precedence over "yesterday" in query
     const result = await recall(db, 'fact yesterday', embedder, {
@@ -279,26 +305,33 @@ describe('recall() — auto-temporal from natural language', () => {
       before: '2021-01-01T00:00:00Z',
     });
 
-    const texts = result.results.map(r => r.text);
+    const texts = result.results.map((r) => r.text);
     expect(texts).toContain('a fact from 2020');
     expect(texts).not.toContain('a recent fact');
   });
 
   it('"today" filters to only today\'s memories', async () => {
-    const todayChunk = await retain(db, 'morning standup notes', embedder, { trustScore: 0.9 });
+    const todayChunk = await retain(db, 'morning standup notes', embedder, {
+      trustScore: 0.9,
+    });
     const oldChunk = await retain(db, 'old standup notes', embedder, {
       trustScore: 0.9,
       dedupMode: 'none',
     });
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-    db.prepare(`UPDATE chunks SET created_at = ? WHERE id = ?`).run(thirtyDaysAgo, oldChunk.chunkId);
+    const thirtyDaysAgo = new Date(
+      Date.now() - 30 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    db.prepare(`UPDATE chunks SET created_at = ? WHERE id = ?`).run(
+      thirtyDaysAgo,
+      oldChunk.chunkId,
+    );
 
     const result = await recall(db, 'standup notes from today', embedder, {
       strategies: ['temporal'],
     });
 
     expect(result.strategiesUsed).toContain('temporal');
-    expect(result.results.some(r => r.id === todayChunk.chunkId)).toBe(true);
-    expect(result.results.some(r => r.id === oldChunk.chunkId)).toBe(false);
+    expect(result.results.some((r) => r.id === todayChunk.chunkId)).toBe(true);
+    expect(result.results.some((r) => r.id === oldChunk.chunkId)).toBe(false);
   });
 });

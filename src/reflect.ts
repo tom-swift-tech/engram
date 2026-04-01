@@ -1,6 +1,6 @@
 // =============================================================================
 // reflect.ts - The Learning Engine (Reconsolidation)
-// 
+//
 // Implements the "reflect" operation for Engram
 // Mirrors biological memory reconsolidation — periodic review of
 // accumulated traces produces higher-order understanding.
@@ -16,7 +16,11 @@
 import Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
 import { pathToFileURL } from 'url';
-import { OllamaGeneration, DEFAULT_OLLAMA_URL, type GenerationProvider } from './generation.js';
+import {
+  OllamaGeneration,
+  DEFAULT_OLLAMA_URL,
+  type GenerationProvider,
+} from './generation.js';
 
 // =============================================================================
 // Types
@@ -94,7 +98,7 @@ interface LLMReflectOutput {
   opinion_updates: Array<{
     belief: string;
     direction: 'reinforce' | 'challenge' | 'new';
-    confidence_delta: number;  // +/- adjustment
+    confidence_delta: number; // +/- adjustment
     domain: string;
     evidence_chunk_ids: string[];
     entity_names: string[];
@@ -114,33 +118,41 @@ function buildReflectPrompt(
   unreflectedFacts: Chunk[],
   existingObservations: Observation[],
   existingOpinions: ExistingOpinion[],
-  bankConfig: Record<string, string>
+  bankConfig: Record<string, string>,
 ): string {
-  const reflectMission = bankConfig['reflect_mission'] || 
+  const reflectMission =
+    bankConfig['reflect_mission'] ||
     'Identify patterns, consolidate related facts, and form beliefs about preferences and approaches.';
-  
-  const disposition = bankConfig['disposition'] 
-    ? JSON.parse(bankConfig['disposition']) 
+
+  const disposition = bankConfig['disposition']
+    ? JSON.parse(bankConfig['disposition'])
     : { skepticism: 0.5, literalism: 0.5, empathy: 0.5 };
 
-  const factsBlock = unreflectedFacts.map(f => {
-    const timeStr = f.event_time ? ` [${f.event_time}]` : '';
-    const ctxStr = f.context ? ` (context: ${f.context})` : '';
-    const srcStr = f.source ? ` [source: ${f.source}]` : '';
-    return `  - [${f.id}] (${f.memory_type})${timeStr}${ctxStr}${srcStr}: ${f.text}`;
-  }).join('\n');
+  const factsBlock = unreflectedFacts
+    .map((f) => {
+      const timeStr = f.event_time ? ` [${f.event_time}]` : '';
+      const ctxStr = f.context ? ` (context: ${f.context})` : '';
+      const srcStr = f.source ? ` [source: ${f.source}]` : '';
+      return `  - [${f.id}] (${f.memory_type})${timeStr}${ctxStr}${srcStr}: ${f.text}`;
+    })
+    .join('\n');
 
-  const obsBlock = existingObservations.length > 0
-    ? existingObservations.map(o => 
-        `  - [${o.id}] (${o.domain}/${o.topic}): ${o.summary}`
-      ).join('\n')
-    : '  (none yet)';
+  const obsBlock =
+    existingObservations.length > 0
+      ? existingObservations
+          .map((o) => `  - [${o.id}] (${o.domain}/${o.topic}): ${o.summary}`)
+          .join('\n')
+      : '  (none yet)';
 
-  const opBlock = existingOpinions.length > 0
-    ? existingOpinions.map(o =>
-        `  - [${o.id}] (confidence: ${o.confidence.toFixed(2)}, domain: ${o.domain}): ${o.belief}`
-      ).join('\n')
-    : '  (none yet)';
+  const opBlock =
+    existingOpinions.length > 0
+      ? existingOpinions
+          .map(
+            (o) =>
+              `  - [${o.id}] (confidence: ${o.confidence.toFixed(2)}, domain: ${o.domain}): ${o.belief}`,
+          )
+          .join('\n')
+      : '  (none yet)';
 
   return `You are the reflection engine for an AI agent's memory system. Your job is to analyze recent memories and produce structured insights.
 
@@ -220,40 +232,13 @@ If you find no meaningful patterns, return empty arrays. Do not force observatio
 // Ollama Client (minimal, no external deps beyond fetch)
 // =============================================================================
 
-async function ollamaGenerate(
-  url: string, 
-  model: string, 
-  prompt: string
-): Promise<string> {
-  const response = await fetch(`${url}/api/generate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model,
-      prompt,
-      stream: false,
-      options: {
-        temperature: 0.3,     // Low temp for analytical work
-        num_predict: 4096,    // Enough for structured output
-      }
-    })
-  });
-
-  if (!response.ok) {
-    throw new Error(`Ollama error ${response.status}: ${await response.text()}`);
-  }
-
-  const data = await response.json();
-  return data.response;
-}
-
 function parseReflectOutput(raw: string): LLMReflectOutput {
   // Strip any markdown fencing the model might add despite instructions
   const cleaned = raw
     .replace(/```json\s*/g, '')
     .replace(/```\s*/g, '')
     .trim();
-  
+
   try {
     const parsed = JSON.parse(cleaned);
     return {
@@ -262,7 +247,10 @@ function parseReflectOutput(raw: string): LLMReflectOutput {
       observation_refreshes: parsed.observation_refreshes || [],
     };
   } catch (e) {
-    throw new Error(`Failed to parse reflect output: ${e}\nRaw: ${cleaned.substring(0, 500)}`);
+    throw new Error(
+      `Failed to parse reflect output: ${e}\nRaw: ${cleaned.substring(0, 500)}`,
+      { cause: e },
+    );
   }
 }
 
@@ -271,7 +259,9 @@ function parseReflectOutput(raw: string): LLMReflectOutput {
 // =============================================================================
 
 function getUnreflectedFacts(db: Database.Database, limit: number): Chunk[] {
-  return db.prepare(`
+  return db
+    .prepare(
+      `
     SELECT id, text, memory_type, source, context, event_time, created_at
     FROM chunks
     WHERE reflected_at IS NULL
@@ -279,36 +269,52 @@ function getUnreflectedFacts(db: Database.Database, limit: number): Chunk[] {
       AND memory_type IN ('world', 'experience')
     ORDER BY created_at ASC
     LIMIT ?
-  `).all(limit) as Chunk[];
+  `,
+    )
+    .all(limit) as Chunk[];
 }
 
-function getExistingObservations(db: Database.Database, limit: number = 20): Observation[] {
-  const rows = db.prepare(`
+function getExistingObservations(
+  db: Database.Database,
+  limit: number = 20,
+): Observation[] {
+  const rows = db
+    .prepare(
+      `
     SELECT id, summary, source_chunks, source_entities, domain, topic
     FROM observations
     WHERE is_active = TRUE
     ORDER BY last_refreshed DESC, synthesized_at DESC
     LIMIT ?
-  `).all(limit) as any[];
+  `,
+    )
+    .all(limit) as any[];
 
-  return rows.map(r => ({
+  return rows.map((r) => ({
     ...r,
     source_chunks: JSON.parse(r.source_chunks || '[]'),
     source_entities: JSON.parse(r.source_entities || '[]'),
   }));
 }
 
-function getExistingOpinions(db: Database.Database, limit: number = 20): ExistingOpinion[] {
-  const rows = db.prepare(`
+function getExistingOpinions(
+  db: Database.Database,
+  limit: number = 20,
+): ExistingOpinion[] {
+  const rows = db
+    .prepare(
+      `
     SELECT id, belief, confidence, supporting_chunks, contradicting_chunks,
            evidence_count, domain, related_entities
     FROM opinions
     WHERE is_active = TRUE
     ORDER BY confidence DESC, evidence_count DESC
     LIMIT ?
-  `).all(limit) as any[];
+  `,
+    )
+    .all(limit) as any[];
 
-  return rows.map(r => ({
+  return rows.map((r) => ({
     ...r,
     supporting_chunks: JSON.parse(r.supporting_chunks || '[]'),
     contradicting_chunks: JSON.parse(r.contradicting_chunks || '[]'),
@@ -317,7 +323,10 @@ function getExistingOpinions(db: Database.Database, limit: number = 20): Existin
 }
 
 function getBankConfig(db: Database.Database): Record<string, string> {
-  const rows = db.prepare('SELECT key, value FROM bank_config').all() as { key: string; value: string }[];
+  const rows = db.prepare('SELECT key, value FROM bank_config').all() as {
+    key: string;
+    value: string;
+  }[];
   const config: Record<string, string> = {};
   for (const row of rows) {
     config[row.key] = row.value;
@@ -342,15 +351,17 @@ function beliefSimilarity(a: string, b: string): number {
 
   const aTokens = new Set(aNorm.split(' ').filter(Boolean));
   const bTokens = new Set(bNorm.split(' ').filter(Boolean));
-  const intersection = [...aTokens].filter(token => bTokens.has(token)).length;
+  const intersection = [...aTokens].filter((token) =>
+    bTokens.has(token),
+  ).length;
   return intersection / Math.max(aTokens.size, bTokens.size, 1);
 }
 
 function resolveEntityIds(db: Database.Database, names: string[]): string[] {
   const stmt = db.prepare(
-    `SELECT id FROM entities WHERE canonical_name = ? AND is_active = TRUE`
+    `SELECT id FROM entities WHERE canonical_name = ? AND is_active = TRUE`,
   );
-  return names.map(name => {
+  return names.map((name) => {
     const row = stmt.get(name.toLowerCase()) as { id: string } | undefined;
     return row?.id ?? name; // fallback to name if not yet extracted
   });
@@ -359,10 +370,12 @@ function resolveEntityIds(db: Database.Database, names: string[]): string[] {
 function findMatchingOpinion(
   existingOpinions: ExistingOpinion[],
   belief: string,
-  domain: string
+  domain: string,
 ): ExistingOpinion | undefined {
-  const exact = existingOpinions.find(op =>
-    op.domain === domain && normalizeBelief(op.belief) === normalizeBelief(belief)
+  const exact = existingOpinions.find(
+    (op) =>
+      op.domain === domain &&
+      normalizeBelief(op.belief) === normalizeBelief(belief),
   );
   if (exact) return exact;
 
@@ -392,17 +405,21 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
     minFactsThreshold = 5,
   } = config;
 
-  const generator = config.generator ?? new OllamaGeneration({ url: ollamaUrl, model: reflectModel });
+  const generator =
+    config.generator ??
+    new OllamaGeneration({ url: ollamaUrl, model: reflectModel });
 
   const db = new Database(dbPath);
   const startTime = Date.now();
   const logId = randomUUID();
 
   // Start the reflect log entry
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO reflect_log (id, status, model_used)
     VALUES (?, 'running', ?)
-  `).run(logId, generator.name);
+  `,
+  ).run(logId, generator.name);
 
   const result: ReflectResult = {
     logId,
@@ -419,16 +436,18 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
   try {
     // 1. Gather unreflected facts
     const unreflected = getUnreflectedFacts(db, batchSize);
-    
+
     if (unreflected.length < minFactsThreshold) {
       result.status = 'completed';
       result.durationMs = Date.now() - startTime;
-      db.prepare(`
+      db.prepare(
+        `
         UPDATE reflect_log 
         SET completed_at = CURRENT_TIMESTAMP, status = 'completed',
             facts_processed = 0
         WHERE id = ?
-      `).run(logId);
+      `,
+      ).run(logId);
       db.close();
       return result;
     }
@@ -439,8 +458,17 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
     const bankConfig = getBankConfig(db);
 
     // 3. Build prompt and call LLM
-    const prompt = buildReflectPrompt(unreflected, existingObs, existingOps, bankConfig);
-    const rawResponse = await generator.generate(prompt, { temperature: 0.3, maxTokens: 4096, jsonMode: true });
+    const prompt = buildReflectPrompt(
+      unreflected,
+      existingObs,
+      existingOps,
+      bankConfig,
+    );
+    const rawResponse = await generator.generate(prompt, {
+      temperature: 0.3,
+      maxTokens: 4096,
+      jsonMode: true,
+    });
     const output = parseReflectOutput(rawResponse);
 
     // 4. Apply results in a transaction
@@ -462,7 +490,7 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
           JSON.stringify(entityIds),
           obs.domain,
           obs.topic,
-          now
+          now,
         );
         result.observationsCreated++;
       }
@@ -477,17 +505,21 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
         WHERE id = ?
       `);
       for (const refresh of output.observation_refreshes) {
-        const existing = existingObs.find(o => o.id === refresh.existing_observation_id);
+        const existing = existingObs.find(
+          (o) => o.id === refresh.existing_observation_id,
+        );
         if (existing) {
-          const mergedSources = [...new Set([
-            ...existing.source_chunks,
-            ...refresh.new_source_chunk_ids
-          ])];
+          const mergedSources = [
+            ...new Set([
+              ...existing.source_chunks,
+              ...refresh.new_source_chunk_ids,
+            ]),
+          ];
           updateObsSimple.run(
             refresh.updated_summary,
             JSON.stringify(mergedSources),
             now,
-            refresh.existing_observation_id
+            refresh.existing_observation_id,
           );
           result.observationsUpdated++;
         }
@@ -519,9 +551,10 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
 
       for (const opUpdate of output.opinion_updates) {
         if (opUpdate.direction === 'new') {
-          const initialConfidence = Math.min(0.7, Math.max(0.3,
-            0.5 + opUpdate.confidence_delta
-          ));
+          const initialConfidence = Math.min(
+            0.7,
+            Math.max(0.3, 0.5 + opUpdate.confidence_delta),
+          );
           const opEntityIds = resolveEntityIds(db, opUpdate.entity_names);
           insertOpinion.run(
             `op-${randomUUID().substring(0, 8)}`,
@@ -531,40 +564,58 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
             opUpdate.domain,
             JSON.stringify(opEntityIds),
             now,
-            opUpdate.evidence_chunk_ids.length
+            opUpdate.evidence_chunk_ids.length,
           );
           result.opinionsFormed++;
-
         } else if (opUpdate.direction === 'reinforce') {
-          const existing = findMatchingOpinion(existingOps, opUpdate.belief, opUpdate.domain);
+          const existing = findMatchingOpinion(
+            existingOps,
+            opUpdate.belief,
+            opUpdate.domain,
+          );
           if (existing) {
-            const clampedDelta = Math.min(0.15, Math.max(0, opUpdate.confidence_delta));
-            const mergedSupporting = [...new Set([
-              ...existing.supporting_chunks,
-              ...opUpdate.evidence_chunk_ids
-            ])];
+            const clampedDelta = Math.min(
+              0.15,
+              Math.max(0, opUpdate.confidence_delta),
+            );
+            const mergedSupporting = [
+              ...new Set([
+                ...existing.supporting_chunks,
+                ...opUpdate.evidence_chunk_ids,
+              ]),
+            ];
             reinforceOpinion.run(
               clampedDelta,
               JSON.stringify(mergedSupporting),
-              now, now,
-              existing.id
+              now,
+              now,
+              existing.id,
             );
             result.opinionsReinforced++;
           }
-
         } else if (opUpdate.direction === 'challenge') {
-          const existing = findMatchingOpinion(existingOps, opUpdate.belief, opUpdate.domain);
+          const existing = findMatchingOpinion(
+            existingOps,
+            opUpdate.belief,
+            opUpdate.domain,
+          );
           if (existing) {
-            const clampedDelta = Math.max(-0.15, Math.min(0, opUpdate.confidence_delta));
-            const mergedContradicting = [...new Set([
-              ...existing.contradicting_chunks,
-              ...opUpdate.evidence_chunk_ids
-            ])];
+            const clampedDelta = Math.max(
+              -0.15,
+              Math.min(0, opUpdate.confidence_delta),
+            );
+            const mergedContradicting = [
+              ...new Set([
+                ...existing.contradicting_chunks,
+                ...opUpdate.evidence_chunk_ids,
+              ]),
+            ];
             challengeOpinion.run(
               clampedDelta,
               JSON.stringify(mergedContradicting),
-              now, now,
-              existing.id
+              now,
+              now,
+              existing.id,
             );
             result.opinionsChallenged++;
           }
@@ -585,7 +636,8 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
 
     // 5. Update reflect log
     result.durationMs = Date.now() - startTime;
-    db.prepare(`
+    db.prepare(
+      `
       UPDATE reflect_log
       SET completed_at = CURRENT_TIMESTAMP,
           status = 'completed',
@@ -596,27 +648,28 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
           opinions_reinforced = ?,
           opinions_challenged = ?
       WHERE id = ?
-    `).run(
+    `,
+    ).run(
       result.factsProcessed,
       result.observationsCreated,
       result.observationsUpdated,
       result.opinionsFormed,
       result.opinionsReinforced,
       result.opinionsChallenged,
-      logId
+      logId,
     );
-
   } catch (error: any) {
     result.status = 'failed';
     result.error = error.message;
     result.durationMs = Date.now() - startTime;
-    
-    db.prepare(`
+
+    db.prepare(
+      `
       UPDATE reflect_log
       SET completed_at = CURRENT_TIMESTAMP, status = 'failed', error = ?
       WHERE id = ?
-    `).run(error.message, logId);
-    
+    `,
+    ).run(error.message, logId);
   } finally {
     db.close();
   }
@@ -647,8 +700,10 @@ export class ReflectScheduler {
       return;
     }
 
-    console.log(`[Reflect] Starting scheduler (every ${intervalMs / 1000}s) for ${this.config.dbPath}`);
-    
+    console.log(
+      `[Reflect] Starting scheduler (every ${intervalMs / 1000}s) for ${this.config.dbPath}`,
+    );
+
     this.intervalHandle = setInterval(async () => {
       if (this.isRunning) {
         console.log('[Reflect] Previous cycle still running, skipping');
@@ -671,16 +726,16 @@ export class ReflectScheduler {
 
   async runOnce(): Promise<ReflectResult | null> {
     if (this.isRunning) return null;
-    
+
     this.isRunning = true;
     try {
       console.log(`[Reflect] Starting cycle for ${this.config.dbPath}`);
       const result = await reflect(this.config);
       console.log(
         `[Reflect] Cycle complete: ${result.factsProcessed} facts → ` +
-        `${result.observationsCreated} new obs, ${result.observationsUpdated} updated obs, ` +
-        `${result.opinionsFormed} new opinions, ${result.opinionsReinforced} reinforced, ` +
-        `${result.opinionsChallenged} challenged (${result.durationMs}ms)`
+          `${result.observationsCreated} new obs, ${result.observationsUpdated} updated obs, ` +
+          `${result.opinionsFormed} new opinions, ${result.opinionsReinforced} reinforced, ` +
+          `${result.opinionsChallenged} challenged (${result.durationMs}ms)`,
       );
       return result;
     } catch (error) {
@@ -707,13 +762,13 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const model = process.env.REFLECT_MODEL || 'llama3.1:8b';
 
   console.log(`[Reflect] Manual run: ${dbPath} via ${model} @ ${ollamaUrl}`);
-  
+
   reflect({ dbPath, ollamaUrl, reflectModel: model })
-    .then(result => {
+    .then((result) => {
       console.log('[Reflect] Result:', JSON.stringify(result, null, 2));
       process.exit(result.status === 'completed' ? 0 : 1);
     })
-    .catch(err => {
+    .catch((err) => {
       console.error('[Reflect] Fatal:', err);
       process.exit(1);
     });

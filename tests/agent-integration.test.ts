@@ -11,7 +11,12 @@
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { Engram, shouldRetain } from '../src/engram.js';
-import { MockEmbedder, tmpDbPath, cleanupDb, mockOllamaFetch } from './helpers.js';
+import {
+  MockEmbedder,
+  tmpDbPath,
+  cleanupDb,
+  mockOllamaFetch,
+} from './helpers.js';
 
 // ---------------------------------------------------------------------------
 // Scenario-specific mock data
@@ -19,21 +24,47 @@ import { MockEmbedder, tmpDbPath, cleanupDb, mockOllamaFetch } from './helpers.j
 
 const EXTRACTION_K8S = JSON.stringify({
   entities: [
-    { name: 'auth-service', canonical_name: 'auth-service', entity_type: 'project', aliases: [] },
-    { name: 'Kubernetes', canonical_name: 'kubernetes', entity_type: 'technology', aliases: ['k8s'] },
+    {
+      name: 'auth-service',
+      canonical_name: 'auth-service',
+      entity_type: 'project',
+      aliases: [],
+    },
+    {
+      name: 'Kubernetes',
+      canonical_name: 'kubernetes',
+      entity_type: 'technology',
+      aliases: ['k8s'],
+    },
     { name: 'Tom', canonical_name: 'tom', entity_type: 'person', aliases: [] },
-    { name: 'Helm', canonical_name: 'helm', entity_type: 'technology', aliases: [] },
+    {
+      name: 'Helm',
+      canonical_name: 'helm',
+      entity_type: 'technology',
+      aliases: [],
+    },
   ],
   relations: [
-    { source: 'auth-service', target: 'kubernetes', relation_type: 'migrating_to', description: 'auth-service is being migrated to Kubernetes' },
-    { source: 'tom', target: 'helm', relation_type: 'uses', description: 'Tom uses Helm for K8s deployments' },
+    {
+      source: 'auth-service',
+      target: 'kubernetes',
+      relation_type: 'migrating_to',
+      description: 'auth-service is being migrated to Kubernetes',
+    },
+    {
+      source: 'tom',
+      target: 'helm',
+      relation_type: 'uses',
+      description: 'Tom uses Helm for K8s deployments',
+    },
   ],
 });
 
 const REFLECT_K8S = JSON.stringify({
   observations: [
     {
-      summary: 'The team is actively migrating auth-service from Docker Compose to Kubernetes using Helm charts',
+      summary:
+        'The team is actively migrating auth-service from Docker Compose to Kubernetes using Helm charts',
       domain: 'infrastructure',
       topic: 'container orchestration',
       source_chunk_ids: [],
@@ -49,7 +80,8 @@ const REFLECT_K8S = JSON.stringify({
   ],
   opinion_updates: [
     {
-      belief: 'Helm is the preferred deployment mechanism for this teams Kubernetes workloads',
+      belief:
+        'Helm is the preferred deployment mechanism for this teams Kubernetes workloads',
       direction: 'new',
       confidence_delta: 0.25,
       domain: 'infrastructure',
@@ -77,14 +109,20 @@ describe('Agent Integration — multi-topic conversation lifecycle', () => {
     dbPath = tmpDbPath();
     engram = await Engram.create(dbPath, {
       embedder,
-      reflectMission: 'Focus on infrastructure decisions, deployment patterns, and performance optimization.',
-      retainMission: 'Prioritize technical decisions, architecture changes, and performance insights.',
+      reflectMission:
+        'Focus on infrastructure decisions, deployment patterns, and performance optimization.',
+      retainMission:
+        'Prioritize technical decisions, architecture changes, and performance insights.',
     });
   });
 
   afterAll(() => {
     vi.unstubAllGlobals();
-    try { engram?.close(); } catch { /* already closed in phase 13 */ }
+    try {
+      engram?.close();
+    } catch {
+      /* already closed in phase 13 */
+    }
     cleanupDb(dbPath);
   });
 
@@ -95,7 +133,7 @@ describe('Agent Integration — multi-topic conversation lifecycle', () => {
     expect(greeting.score).toBeLessThan(0.5);
 
     const substantive = shouldRetain(
-      'We need to migrate auth-service from Docker Compose to Kubernetes using Helm charts'
+      'We need to migrate auth-service from Docker Compose to Kubernetes using Helm charts',
     );
     expect(substantive.score).toBeGreaterThanOrEqual(0.5);
   });
@@ -125,14 +163,16 @@ describe('Agent Integration — multi-topic conversation lifecycle', () => {
       topK: 5,
     });
     expect(response.results.length).toBeGreaterThan(0);
-    expect(response.results.some(r => r.text.includes('Docker Compose'))).toBe(true);
+    expect(
+      response.results.some((r) => r.text.includes('Docker Compose')),
+    ).toBe(true);
   });
 
   // ── Phase 3: Session creation — new K8s session ─────────────────────────
 
   it('Phase 3: creates a new working session for K8s topic', async () => {
     const result = await engram.inferWorkingSession(
-      'Help me plan the auth-service Kubernetes migration'
+      'Help me plan the auth-service Kubernetes migration',
     );
 
     expect(result.session.id).toMatch(/^wm-/);
@@ -147,7 +187,7 @@ describe('Agent Integration — multi-topic conversation lifecycle', () => {
 
   it('Phase 4: resumes the K8s session on follow-up message', async () => {
     const result = await engram.inferWorkingSession(
-      'What about the auth-service Helm chart values?'
+      'What about the auth-service Helm chart values?',
     );
 
     expect(result.diagnostics.reason).toBe('match');
@@ -159,7 +199,7 @@ describe('Agent Integration — multi-topic conversation lifecycle', () => {
   it('Phase 5: creates a new session for a different topic', async () => {
     const result = await engram.inferWorkingSession(
       'ZZZZ PostgreSQL dashboard query is slow, need to add indexes ZZZZ',
-      { threshold: 0.999 }
+      { threshold: 0.999 },
     );
 
     expect(result.diagnostics.reason).toBe('new');
@@ -179,7 +219,7 @@ describe('Agent Integration — multi-topic conversation lifecycle', () => {
     // ("Help me plan the auth-service Kubernetes migration") for MockEmbedder
     // to produce a cosine similarity >= 0.72 (default threshold)
     const result = await engram.inferWorkingSession(
-      'Help me plan the auth-service Kubernetes health checks'
+      'Help me plan the auth-service Kubernetes health checks',
     );
 
     expect(result.session.id).toBe(sessionA);
@@ -195,7 +235,8 @@ describe('Agent Integration — multi-topic conversation lifecycle', () => {
   it('Phase 7: updates session with progress notes', async () => {
     await engram.updateWorkingSession(sessionA, {
       status: 'in_progress',
-      progress: 'Drafted Helm chart with health checks. Need to configure ingress next.',
+      progress:
+        'Drafted Helm chart with health checks. Need to configure ingress next.',
     } as any);
 
     const updated = engram.getWorkingSession(sessionA);
@@ -291,18 +332,25 @@ describe('Agent Integration — multi-topic conversation lifecycle', () => {
     expect(retrieved).toBeNull();
 
     // The snapshot chunk should be findable
-    const recallResult = await engram.recall('PostgreSQL', { strategies: ['keyword'] });
-    expect(recallResult.results.some(r => r.source?.includes('working_memory'))).toBe(true);
+    const recallResult = await engram.recall('PostgreSQL', {
+      strategies: ['keyword'],
+    });
+    expect(
+      recallResult.results.some((r) => r.source?.includes('working_memory')),
+    ).toBe(true);
   });
 
   // ── Phase 12: Full recall — everything present ──────────────────────────
 
   it('Phase 12: full recall returns chunks, observations, and opinions', async () => {
-    const response = await engram.recall('Kubernetes Helm deployment auth-service', {
-      topK: 10,
-      includeObservations: true,
-      includeOpinions: true,
-    });
+    const response = await engram.recall(
+      'Kubernetes Helm deployment auth-service',
+      {
+        topK: 10,
+        includeObservations: true,
+        includeOpinions: true,
+      },
+    );
 
     // Chunks from retained facts
     expect(response.results.length).toBeGreaterThan(0);

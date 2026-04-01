@@ -63,14 +63,22 @@ export interface RecallResult {
   trustScore: number;
   sourceType: string;
   eventTime: string | null;
-  score: number;           // final fused score
-  strategies: string[];    // which strategies found this
+  score: number; // final fused score
+  strategies: string[]; // which strategies found this
 }
 
 export interface RecallResponse {
   results: RecallResult[];
-  opinions: Array<{ belief: string; confidence: number; domain: string | null }>;
-  observations: Array<{ summary: string; domain: string | null; topic: string | null }>;
+  opinions: Array<{
+    belief: string;
+    confidence: number;
+    domain: string | null;
+  }>;
+  observations: Array<{
+    summary: string;
+    domain: string | null;
+    topic: string | null;
+  }>;
   totalCandidates: number;
   strategiesUsed: string[];
 }
@@ -116,7 +124,7 @@ function semanticSearch(
   db: Database.Database,
   queryEmbedding: Float32Array,
   limit: number,
-  filters: QueryFilters
+  filters: QueryFilters,
 ): ScoredChunk[] {
   const { memoryTypes, minTrust = 0, sourceFilter, contextFilter } = filters;
   const embeddingBuffer = Buffer.from(queryEmbedding.buffer);
@@ -127,7 +135,9 @@ function semanticSearch(
     : '';
 
   try {
-    const rows = db.prepare(`
+    const rows = db
+      .prepare(
+        `
       SELECT c.id, c.text, c.memory_type, c.source, c.context, c.trust_score,
              c.source_type, c.event_time, c.created_at,
              vec_distance_cosine(c.embedding, ?) AS distance
@@ -140,14 +150,18 @@ function semanticSearch(
         ${typeFilter}
       ORDER BY distance ASC
       LIMIT ?
-    `).all(
-      embeddingBuffer,
-      minTrust,
-      sourceFilter ?? null, sourceFilter ?? null,
-      contextFilter ?? null, contextFilter ?? null,
-      ...(memoryTypes ?? []),
-      limit
-    ) as any[];
+    `,
+      )
+      .all(
+        embeddingBuffer,
+        minTrust,
+        sourceFilter ?? null,
+        sourceFilter ?? null,
+        contextFilter ?? null,
+        contextFilter ?? null,
+        ...(memoryTypes ?? []),
+        limit,
+      ) as any[];
 
     return rows.map((r, i) => ({
       ...r,
@@ -167,7 +181,7 @@ function keywordSearch(
   db: Database.Database,
   query: string,
   limit: number,
-  filters: QueryFilters
+  filters: QueryFilters,
 ): ScoredChunk[] {
   const { memoryTypes, minTrust = 0, sourceFilter, contextFilter } = filters;
 
@@ -177,7 +191,9 @@ function keywordSearch(
     : '';
 
   try {
-    const rows = db.prepare(`
+    const rows = db
+      .prepare(
+        `
       SELECT c.id, c.text, c.memory_type, c.source, c.context, c.trust_score,
              c.source_type, c.event_time, c.created_at,
              rank AS bm25_rank
@@ -191,14 +207,18 @@ function keywordSearch(
         ${typeFilter}
       ORDER BY rank
       LIMIT ?
-    `).all(
-      query,
-      minTrust,
-      sourceFilter ?? null, sourceFilter ?? null,
-      contextFilter ?? null, contextFilter ?? null,
-      ...(memoryTypes ?? []),
-      limit
-    ) as any[];
+    `,
+      )
+      .all(
+        query,
+        minTrust,
+        sourceFilter ?? null,
+        sourceFilter ?? null,
+        contextFilter ?? null,
+        contextFilter ?? null,
+        ...(memoryTypes ?? []),
+        limit,
+      ) as any[];
 
     return rows.map((r, i) => ({
       ...r,
@@ -219,12 +239,15 @@ function graphSearch(
   db: Database.Database,
   query: string,
   limit: number,
-  filters: QueryFilters
+  filters: QueryFilters,
 ): ScoredChunk[] {
   const { memoryTypes, minTrust = 0, sourceFilter, contextFilter } = filters;
 
   // Simple approach: tokenize query, match against entity names/aliases
-  const queryTokens = query.toLowerCase().split(/\s+/).filter(t => t.length > 2);
+  const queryTokens = query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((t) => t.length > 2);
 
   if (queryTokens.length === 0) return [];
 
@@ -233,19 +256,27 @@ function graphSearch(
     const likeClauses = queryTokens
       .map(() => `(e.canonical_name LIKE ? OR e.aliases LIKE ?)`)
       .join(' OR ');
-    const likeParams = queryTokens.flatMap(t => [`%${t}%`, `%${t}%`]);
+    const likeParams = queryTokens.flatMap((t) => [`%${t}%`, `%${t}%`]);
 
-    const matchedEntities = db.prepare(`
+    const matchedEntities = db
+      .prepare(
+        `
       SELECT e.id, e.canonical_name, e.mention_count
       FROM entities e
       WHERE e.is_active = TRUE AND (${likeClauses})
       ORDER BY e.mention_count DESC
       LIMIT 10
-    `).all(...likeParams) as Array<{ id: string; canonical_name: string; mention_count: number }>;
+    `,
+      )
+      .all(...likeParams) as Array<{
+      id: string;
+      canonical_name: string;
+      mention_count: number;
+    }>;
 
     if (matchedEntities.length === 0) return [];
 
-    const entityIds = matchedEntities.map(e => e.id);
+    const entityIds = matchedEntities.map((e) => e.id);
 
     // 1-hop: chunks directly mentioning these entities
     const placeholders = entityIds.map(() => '?').join(',');
@@ -253,7 +284,9 @@ function graphSearch(
       ? `AND c.memory_type IN (${inClausePlaceholders(memoryTypes)})`
       : '';
 
-    const directChunks = db.prepare(`
+    const directChunks = db
+      .prepare(
+        `
       SELECT DISTINCT c.id, c.text, c.memory_type, c.source, c.context, c.trust_score,
              c.source_type, c.event_time, c.created_at
       FROM chunk_entities ce
@@ -266,17 +299,23 @@ function graphSearch(
         ${typeFilter}
       ORDER BY c.trust_score DESC, c.created_at DESC
       LIMIT ?
-    `).all(
-      ...entityIds,
-      minTrust,
-      sourceFilter ?? null, sourceFilter ?? null,
-      contextFilter ?? null, contextFilter ?? null,
-      ...(memoryTypes ?? []),
-      limit
-    ) as any[];
+    `,
+      )
+      .all(
+        ...entityIds,
+        minTrust,
+        sourceFilter ?? null,
+        sourceFilter ?? null,
+        contextFilter ?? null,
+        contextFilter ?? null,
+        ...(memoryTypes ?? []),
+        limit,
+      ) as any[];
 
     // 2-hop: chunks mentioning entities related to matched entities
-    const relatedChunks = db.prepare(`
+    const relatedChunks = db
+      .prepare(
+        `
       SELECT DISTINCT c.id, c.text, c.memory_type, c.source, c.context, c.trust_score,
              c.source_type, c.event_time, c.created_at
       FROM relations r
@@ -294,15 +333,20 @@ function graphSearch(
         ${typeFilter}
       ORDER BY r.confidence DESC, c.trust_score DESC
       LIMIT ?
-    `).all(
-      ...entityIds, ...entityIds,
-      minTrust,
-      ...directChunks.map((c: any) => c.id),
-      sourceFilter ?? null, sourceFilter ?? null,
-      contextFilter ?? null, contextFilter ?? null,
-      ...(memoryTypes ?? []),
-      Math.max(0, limit - directChunks.length)
-    ) as any[];
+    `,
+      )
+      .all(
+        ...entityIds,
+        ...entityIds,
+        minTrust,
+        ...directChunks.map((c: any) => c.id),
+        sourceFilter ?? null,
+        sourceFilter ?? null,
+        contextFilter ?? null,
+        contextFilter ?? null,
+        ...(memoryTypes ?? []),
+        Math.max(0, limit - directChunks.length),
+      ) as any[];
 
     const combined = [...directChunks, ...relatedChunks];
     return combined.map((r, i) => ({
@@ -329,29 +373,33 @@ function temporalSearch(
     minTrust?: number;
     sourceFilter?: string;
     contextFilter?: string;
-  }
+  },
 ): ScoredChunk[] {
   if (!filters.after && !filters.before) return [];
 
   const { sourceFilter, contextFilter } = filters;
-  const minTrustVal = typeof filters.minTrust === 'number' ? filters.minTrust : 0;
+  const minTrustVal =
+    typeof filters.minTrust === 'number' ? filters.minTrust : 0;
 
-  const conditions: string[] = [
-    'c.is_active = TRUE',
-    'c.trust_score >= ?',
-  ];
+  const conditions: string[] = ['c.is_active = TRUE', 'c.trust_score >= ?'];
   const params: any[] = [minTrustVal];
 
   if (filters.after) {
-    conditions.push('(datetime(c.event_time) >= datetime(?) OR (c.event_time IS NULL AND datetime(c.created_at) >= datetime(?)))');
+    conditions.push(
+      '(datetime(c.event_time) >= datetime(?) OR (c.event_time IS NULL AND datetime(c.created_at) >= datetime(?)))',
+    );
     params.push(filters.after, filters.after);
   }
   if (filters.before) {
-    conditions.push('(datetime(c.event_time) <= datetime(?) OR (c.event_time IS NULL AND datetime(c.created_at) <= datetime(?)))');
+    conditions.push(
+      '(datetime(c.event_time) <= datetime(?) OR (c.event_time IS NULL AND datetime(c.created_at) <= datetime(?)))',
+    );
     params.push(filters.before, filters.before);
   }
   if (filters.memoryTypes?.length) {
-    conditions.push(`c.memory_type IN (${inClausePlaceholders(filters.memoryTypes)})`);
+    conditions.push(
+      `c.memory_type IN (${inClausePlaceholders(filters.memoryTypes)})`,
+    );
     params.push(...filters.memoryTypes);
   }
 
@@ -362,14 +410,18 @@ function temporalSearch(
   params.push(contextFilter ?? null, contextFilter ?? null);
 
   try {
-    const rows = db.prepare(`
+    const rows = db
+      .prepare(
+        `
       SELECT c.id, c.text, c.memory_type, c.source, c.context, c.trust_score,
              c.source_type, c.event_time, c.created_at
       FROM chunks c
       WHERE ${conditions.join(' AND ')}
       ORDER BY COALESCE(c.event_time, c.created_at) DESC
       LIMIT ?
-    `).all(...params, limit) as any[];
+    `,
+      )
+      .all(...params, limit) as any[];
 
     return rows.map((r, i) => ({
       ...r,
@@ -387,9 +439,12 @@ function temporalSearch(
 
 function reciprocalRankFusion(
   strategyResults: ScoredChunk[][],
-  k: number = 60
+  k: number = 60,
 ): Map<string, { score: number; strategies: string[]; chunk: ScoredChunk }> {
-  const fused = new Map<string, { score: number; strategies: string[]; chunk: ScoredChunk }>();
+  const fused = new Map<
+    string,
+    { score: number; strategies: string[]; chunk: ScoredChunk }
+  >();
 
   for (const results of strategyResults) {
     for (const chunk of results) {
@@ -414,7 +469,10 @@ function reciprocalRankFusion(
   return fused;
 }
 
-function temporalDecayMultiplier(createdAt: string, halfLifeDays: number): number {
+function temporalDecayMultiplier(
+  createdAt: string,
+  halfLifeDays: number,
+): number {
   if (halfLifeDays === 0) return 1.0;
   const ageMs = Date.now() - new Date(createdAt).getTime();
   const ageDays = ageMs / (1000 * 60 * 60 * 24);
@@ -423,32 +481,41 @@ function temporalDecayMultiplier(createdAt: string, halfLifeDays: number): numbe
 }
 
 function applyWeighting(
-  fused: Map<string, { score: number; strategies: string[]; chunk: ScoredChunk }>,
+  fused: Map<
+    string,
+    { score: number; strategies: string[]; chunk: ScoredChunk }
+  >,
   options: {
     decayHalfLifeDays?: number;
     sourceBoost?: { pattern: string; multiplier: number };
     contextBoost?: { pattern: string; multiplier: number };
-  } = {}
+  } = {},
 ): void {
   const { decayHalfLifeDays = 180, sourceBoost, contextBoost } = options;
 
   for (const [, entry] of fused) {
     // Trust: 0.5 trust → 0.9x, 1.0 trust → 1.2x
-    const trustMultiplier = 0.6 + (entry.chunk.trust_score * 0.6);
+    const trustMultiplier = 0.6 + entry.chunk.trust_score * 0.6;
     // Multi-strategy bonus
     const strategyBoost = 1 + (entry.strategies.length - 1) * 0.1;
     // Temporal decay
-    const decay = temporalDecayMultiplier(entry.chunk.created_at, decayHalfLifeDays);
+    const decay = temporalDecayMultiplier(
+      entry.chunk.created_at,
+      decayHalfLifeDays,
+    );
     // Source boost
-    const srcMultiplier = (sourceBoost && entry.chunk.source?.includes(sourceBoost.pattern))
-      ? sourceBoost.multiplier
-      : 1.0;
+    const srcMultiplier =
+      sourceBoost && entry.chunk.source?.includes(sourceBoost.pattern)
+        ? sourceBoost.multiplier
+        : 1.0;
     // Context boost
-    const ctxMultiplier = (contextBoost && entry.chunk.context?.includes(contextBoost.pattern))
-      ? contextBoost.multiplier
-      : 1.0;
+    const ctxMultiplier =
+      contextBoost && entry.chunk.context?.includes(contextBoost.pattern)
+        ? contextBoost.multiplier
+        : 1.0;
 
-    entry.score *= trustMultiplier * strategyBoost * decay * srcMultiplier * ctxMultiplier;
+    entry.score *=
+      trustMultiplier * strategyBoost * decay * srcMultiplier * ctxMultiplier;
   }
 }
 
@@ -460,7 +527,7 @@ export async function recall(
   db: Database.Database,
   query: string,
   embedder: EmbeddingProvider,
-  options: RecallOptions = {}
+  options: RecallOptions = {},
 ): Promise<RecallResponse> {
   const {
     topK = 10,
@@ -481,21 +548,36 @@ export async function recall(
   } = options;
 
   // Auto-derive temporal bounds from natural language when not explicitly provided
-  const parsed = (!after && !before) ? parseTemporalQuery(query) : null;
+  const parsed = !after && !before ? parseTemporalQuery(query) : null;
   const effectiveAfter = after ?? parsed?.after;
   const effectiveBefore = before ?? parsed?.before;
 
   const perStrategyLimit = topK * 3; // Oversample per strategy, then fuse
-  const filters: QueryFilters = { memoryTypes, minTrust, sourceFilter, contextFilter };
+  const filters: QueryFilters = {
+    memoryTypes,
+    minTrust,
+    sourceFilter,
+    contextFilter,
+  };
   const strategyResults: ScoredChunk[][] = [];
   const strategiesUsed: string[] = [];
 
   // Run strategies
   if (strategies.includes('semantic')) {
-    const queryEmbedding = 'embedQuery' in embedder
-      ? await (embedder as EmbeddingProvider & { embedQuery: (t: string) => Promise<Float32Array> }).embedQuery(query)
-      : await embedder.embed(query);
-    const results = semanticSearch(db, queryEmbedding, perStrategyLimit, filters);
+    const queryEmbedding =
+      'embedQuery' in embedder
+        ? await (
+            embedder as EmbeddingProvider & {
+              embedQuery: (t: string) => Promise<Float32Array>;
+            }
+          ).embedQuery(query)
+        : await embedder.embed(query);
+    const results = semanticSearch(
+      db,
+      queryEmbedding,
+      perStrategyLimit,
+      filters,
+    );
     if (results.length > 0) {
       strategyResults.push(results);
       strategiesUsed.push('semantic');
@@ -519,7 +601,11 @@ export async function recall(
   }
 
   if (strategies.includes('temporal') && (effectiveAfter || effectiveBefore)) {
-    const results = temporalSearch(db, perStrategyLimit, { after: effectiveAfter, before: effectiveBefore, ...filters });
+    const results = temporalSearch(db, perStrategyLimit, {
+      after: effectiveAfter,
+      before: effectiveBefore,
+      ...filters,
+    });
     if (results.length > 0) {
       strategyResults.push(results);
       strategiesUsed.push('temporal');
@@ -535,11 +621,12 @@ export async function recall(
     .sort((a, b) => b.score - a.score)
     .slice(0, topK);
 
-  const results: RecallResult[] = sorted.map(entry => ({
+  const results: RecallResult[] = sorted.map((entry) => ({
     id: entry.chunk.id,
-    text: entry.chunk.text.length > snippetChars
-      ? entry.chunk.text.substring(0, snippetChars) + '...'
-      : entry.chunk.text,
+    text:
+      entry.chunk.text.length > snippetChars
+        ? entry.chunk.text.substring(0, snippetChars) + '...'
+        : entry.chunk.text,
     memoryType: entry.chunk.memory_type,
     source: entry.chunk.source,
     trustScore: entry.chunk.trust_score,
@@ -553,57 +640,99 @@ export async function recall(
   const opinions = includeOpinions
     ? (() => {
         // Extract query tokens for keyword matching against belief text
-        const tokens = query.toLowerCase().split(/\s+/).filter(t => t.length > 3);
+        const tokens = query
+          .toLowerCase()
+          .split(/\s+/)
+          .filter((t) => t.length > 3);
 
         if (tokens.length > 0) {
-          const conditions = tokens.map(() => `LOWER(belief) LIKE ?`).join(' OR ');
-          const params = tokens.map(t => `%${t}%`);
-          const scoped = db.prepare(`
+          const conditions = tokens
+            .map(() => `LOWER(belief) LIKE ?`)
+            .join(' OR ');
+          const params = tokens.map((t) => `%${t}%`);
+          const scoped = db
+            .prepare(
+              `
             SELECT belief, confidence, domain
             FROM opinions
             WHERE is_active = TRUE AND confidence >= 0.5 AND (${conditions})
             ORDER BY confidence DESC
             LIMIT 5
-          `).all(...params) as Array<{ belief: string; confidence: number; domain: string | null }>;
+          `,
+            )
+            .all(...params) as Array<{
+            belief: string;
+            confidence: number;
+            domain: string | null;
+          }>;
           if (scoped.length > 0) return scoped;
         }
 
         // Fall back to global top opinions
-        return db.prepare(`
+        return db
+          .prepare(
+            `
           SELECT belief, confidence, domain
           FROM opinions
           WHERE is_active = TRUE AND confidence >= 0.5
           ORDER BY confidence DESC
           LIMIT 5
-        `).all() as Array<{ belief: string; confidence: number; domain: string | null }>;
+        `,
+          )
+          .all() as Array<{
+          belief: string;
+          confidence: number;
+          domain: string | null;
+        }>;
       })()
     : [];
 
   // Gather relevant observations
   const observations = includeObservations
     ? (() => {
-        const tokens = query.toLowerCase().split(/\s+/).filter(t => t.length > 3);
+        const tokens = query
+          .toLowerCase()
+          .split(/\s+/)
+          .filter((t) => t.length > 3);
 
         if (tokens.length > 0) {
-          const conditions = tokens.map(() => `LOWER(summary) LIKE ?`).join(' OR ');
-          const params = tokens.map(t => `%${t}%`);
-          const scoped = db.prepare(`
+          const conditions = tokens
+            .map(() => `LOWER(summary) LIKE ?`)
+            .join(' OR ');
+          const params = tokens.map((t) => `%${t}%`);
+          const scoped = db
+            .prepare(
+              `
             SELECT summary, domain, topic
             FROM observations
             WHERE is_active = TRUE AND (${conditions})
             ORDER BY last_refreshed DESC, synthesized_at DESC
             LIMIT 5
-          `).all(...params) as Array<{ summary: string; domain: string | null; topic: string | null }>;
+          `,
+            )
+            .all(...params) as Array<{
+            summary: string;
+            domain: string | null;
+            topic: string | null;
+          }>;
           if (scoped.length > 0) return scoped;
         }
 
-        return db.prepare(`
+        return db
+          .prepare(
+            `
           SELECT summary, domain, topic
           FROM observations
           WHERE is_active = TRUE
           ORDER BY last_refreshed DESC, synthesized_at DESC
           LIMIT 5
-        `).all() as Array<{ summary: string; domain: string | null; topic: string | null }>;
+        `,
+          )
+          .all() as Array<{
+          summary: string;
+          domain: string | null;
+          topic: string | null;
+        }>;
       })()
     : [];
 
@@ -640,7 +769,7 @@ export interface FormatForPromptOptions {
  */
 export function formatForPrompt(
   response: RecallResponse,
-  options: FormatForPromptOptions = {}
+  options: FormatForPromptOptions = {},
 ): string {
   const {
     maxChars = 2000,
@@ -671,9 +800,12 @@ export function formatForPrompt(
     for (const o of response.opinions) {
       const conf = `${(o.confidence * 100).toFixed(0)}%`;
       const domain = o.domain ? ` (${o.domain})` : '';
-      if (!tryAdd(`- [${conf}] ${o.belief}${domain}`)) { omitted++; }
+      if (!tryAdd(`- [${conf}] ${o.belief}${domain}`)) {
+        omitted++;
+      }
     }
-    if (omitted > 0) tryAdd(`(${omitted} belief${omitted > 1 ? 's' : ''} omitted)`);
+    if (omitted > 0)
+      tryAdd(`(${omitted} belief${omitted > 1 ? 's' : ''} omitted)`);
     tryAdd('');
   }
 
@@ -684,9 +816,12 @@ export function formatForPrompt(
     let omitted = 0;
     for (const o of response.observations) {
       const topic = o.topic ? ` (${o.topic})` : '';
-      if (!tryAdd(`- ${o.summary}${topic}`)) { omitted++; }
+      if (!tryAdd(`- ${o.summary}${topic}`)) {
+        omitted++;
+      }
     }
-    if (omitted > 0) tryAdd(`(${omitted} observation${omitted > 1 ? 's' : ''} omitted)`);
+    if (omitted > 0)
+      tryAdd(`(${omitted} observation${omitted > 1 ? 's' : ''} omitted)`);
     tryAdd('');
   }
 
@@ -698,9 +833,12 @@ export function formatForPrompt(
     for (const r of response.results) {
       const trust = showTrust ? `[trust ${r.trustScore.toFixed(2)}] ` : '';
       const src = showSource && r.source ? ` [${r.source}]` : '';
-      if (!tryAdd(`- ${trust}${r.text}${src}`)) { omitted++; }
+      if (!tryAdd(`- ${trust}${r.text}${src}`)) {
+        omitted++;
+      }
     }
-    if (omitted > 0) tryAdd(`(${omitted} result${omitted > 1 ? 's' : ''} omitted)`);
+    if (omitted > 0)
+      tryAdd(`(${omitted} result${omitted > 1 ? 's' : ''} omitted)`);
   }
 
   return lines.join('\n');

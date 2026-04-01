@@ -13,7 +13,10 @@ import {
 function mockFetch(responseBody: unknown, ok = true, status = 200) {
   const calls: Array<{ url: string; init: RequestInit }> = [];
 
-  const fn = async (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  const fn = async (
+    url: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> => {
     calls.push({ url: url as string, init: init! });
     return {
       ok,
@@ -73,7 +76,9 @@ describe('OllamaGeneration', () => {
     mockFetch({ error: 'bad' }, false, 500);
 
     const gen = new OllamaGeneration();
-    await expect(gen.generate('test')).rejects.toThrow('Ollama generation failed (500)');
+    await expect(gen.generate('test')).rejects.toThrow(
+      'Ollama generation failed (500)',
+    );
   });
 });
 
@@ -83,7 +88,10 @@ describe('OllamaGeneration', () => {
 
 describe('OpenAICompatibleGeneration', () => {
   it('has correct name', () => {
-    const gen = new OpenAICompatibleGeneration('http://localhost:8080', 'gpt-4o');
+    const gen = new OpenAICompatibleGeneration(
+      'http://localhost:8080',
+      'gpt-4o',
+    );
     expect(gen.name).toBe('openai-compat/gpt-4o');
   });
 
@@ -92,7 +100,10 @@ describe('OpenAICompatibleGeneration', () => {
       choices: [{ message: { content: 'reply' } }],
     });
 
-    const gen = new OpenAICompatibleGeneration('http://localhost:8080', 'gpt-4o');
+    const gen = new OpenAICompatibleGeneration(
+      'http://localhost:8080',
+      'gpt-4o',
+    );
     const result = await gen.generate('test prompt');
 
     expect(result).toBe('reply');
@@ -110,7 +121,11 @@ describe('OpenAICompatibleGeneration', () => {
       choices: [{ message: { content: 'ok' } }],
     });
 
-    const gen = new OpenAICompatibleGeneration('http://localhost:8080', 'gpt-4o', 'sk-test-key');
+    const gen = new OpenAICompatibleGeneration(
+      'http://localhost:8080',
+      'gpt-4o',
+      'sk-test-key',
+    );
     await gen.generate('test');
 
     const headers = calls[0].init.headers as Record<string, string>;
@@ -122,7 +137,10 @@ describe('OpenAICompatibleGeneration', () => {
       choices: [{ message: { content: '{}' } }],
     });
 
-    const gen = new OpenAICompatibleGeneration('http://localhost:8080', 'gpt-4o');
+    const gen = new OpenAICompatibleGeneration(
+      'http://localhost:8080',
+      'gpt-4o',
+    );
     await gen.generate('test', { jsonMode: true });
 
     const body = JSON.parse(calls[0].init.body as string);
@@ -132,8 +150,13 @@ describe('OpenAICompatibleGeneration', () => {
   it('throws on non-ok response', async () => {
     mockFetch({ error: 'bad' }, false, 401);
 
-    const gen = new OpenAICompatibleGeneration('http://localhost:8080', 'gpt-4o');
-    await expect(gen.generate('test')).rejects.toThrow('OpenAI-compatible generation failed (401)');
+    const gen = new OpenAICompatibleGeneration(
+      'http://localhost:8080',
+      'gpt-4o',
+    );
+    await expect(gen.generate('test')).rejects.toThrow(
+      'OpenAI-compatible generation failed (401)',
+    );
   });
 });
 
@@ -152,8 +175,14 @@ describe('AnthropicGeneration', () => {
       content: [{ text: 'response text' }],
     });
 
-    const gen = new AnthropicGeneration('sk-ant-test', 'claude-sonnet-4-20250514');
-    const result = await gen.generate('test prompt', { temperature: 0.5, maxTokens: 1024 });
+    const gen = new AnthropicGeneration(
+      'sk-ant-test',
+      'claude-sonnet-4-20250514',
+    );
+    const result = await gen.generate('test prompt', {
+      temperature: 0.5,
+      maxTokens: 1024,
+    });
 
     expect(result).toBe('response text');
     expect(gen.name).toBe('anthropic/claude-sonnet-4-20250514');
@@ -175,6 +204,8 @@ describe('AnthropicGeneration', () => {
     mockFetch({ error: 'bad' }, false, 429);
 
     const gen = new AnthropicGeneration('sk-ant-test');
-    await expect(gen.generate('test')).rejects.toThrow('Anthropic generation failed (429)');
+    await expect(gen.generate('test')).rejects.toThrow(
+      'Anthropic generation failed (429)',
+    );
   });
 });

@@ -24,7 +24,8 @@ import type { RecallOptions } from './recall.js';
 export const ENGRAM_TOOLS = [
   {
     name: 'engram_retain' as const,
-    description: 'Store a memory trace. Fast path (~5ms, no LLM). Parameters use camelCase: text (required), memoryType (world|experience|observation|opinion), sourceType (user_stated|inferred|external_doc|tool_result|agent_generated), trustScore (0.0-1.0). Example: {text: "Tom prefers Terraform", memoryType: "world", sourceType: "user_stated", trustScore: 0.9}',
+    description:
+      'Store a memory trace. Fast path (~5ms, no LLM). Parameters use camelCase: text (required), memoryType (world|experience|observation|opinion), sourceType (user_stated|inferred|external_doc|tool_result|agent_generated), trustScore (0.0-1.0). Example: {text: "Tom prefers Terraform", memoryType: "world", sourceType: "user_stated", trustScore: 0.9}',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -35,34 +36,47 @@ export const ENGRAM_TOOLS = [
         memoryType: {
           type: 'string',
           enum: ['world', 'experience', 'observation', 'opinion'],
-          description: 'world=facts about the world, experience=agent\'s own actions, observation=synthesized knowledge, opinion=belief with confidence',
+          description:
+            "world=facts about the world, experience=agent's own actions, observation=synthesized knowledge, opinion=belief with confidence",
         },
         source: {
           type: 'string',
-          description: 'Source identifier: conversation ID, filename, tool name, etc.',
+          description:
+            'Source identifier: conversation ID, filename, tool name, etc.',
         },
         context: {
           type: 'string',
-          description: 'Freeform context tag (e.g. "infrastructure", "career", "mission:VALOR-042")',
+          description:
+            'Freeform context tag (e.g. "infrastructure", "career", "mission:VALOR-042")',
         },
         sourceType: {
           type: 'string',
-          enum: ['user_stated', 'inferred', 'external_doc', 'tool_result', 'agent_generated'],
-          description: 'Provenance classification. Affects trust weighting during recall.',
+          enum: [
+            'user_stated',
+            'inferred',
+            'external_doc',
+            'tool_result',
+            'agent_generated',
+          ],
+          description:
+            'Provenance classification. Affects trust weighting during recall.',
         },
         trustScore: {
           type: 'number',
           minimum: 0,
           maximum: 1,
-          description: 'Trust level 0.0–1.0. user_stated typically 0.8–0.9, inferred 0.4–0.6.',
+          description:
+            'Trust level 0.0–1.0. user_stated typically 0.8–0.9, inferred 0.4–0.6.',
         },
         eventTime: {
           type: 'string',
-          description: 'ISO 8601 timestamp for when the event/fact occurred (may differ from storage time)',
+          description:
+            'ISO 8601 timestamp for when the event/fact occurred (may differ from storage time)',
         },
         temporalLabel: {
           type: 'string',
-          description: 'Human-readable time reference, e.g. "last spring", "Q4 2025"',
+          description:
+            'Human-readable time reference, e.g. "last spring", "Q4 2025"',
         },
       },
       required: ['text'],
@@ -71,7 +85,8 @@ export const ENGRAM_TOOLS = [
 
   {
     name: 'engram_recall' as const,
-    description: 'Retrieve relevant memories via four-strategy search (semantic, keyword, graph, temporal) fused with Reciprocal Rank Fusion. Temporal expressions in queries are auto-parsed — "last week", "yesterday", "March 15th", "past 30 days", "Q1 2026" all work without explicit after/before. Example: {query: "What happened last week?", topK: 5}. Returns results[], opinions[], observations[].',
+    description:
+      'Retrieve relevant memories via four-strategy search (semantic, keyword, graph, temporal) fused with Reciprocal Rank Fusion. Temporal expressions in queries are auto-parsed — "last week", "yesterday", "March 15th", "past 30 days", "Q1 2026" all work without explicit after/before. Example: {query: "What happened last week?", topK: 5}. Returns results[], opinions[], observations[].',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -85,12 +100,18 @@ export const ENGRAM_TOOLS = [
         },
         strategies: {
           type: 'array',
-          items: { type: 'string', enum: ['semantic', 'keyword', 'graph', 'temporal'] },
+          items: {
+            type: 'string',
+            enum: ['semantic', 'keyword', 'graph', 'temporal'],
+          },
           description: 'Retrieval strategies to use. Omit to use all four.',
         },
         memoryTypes: {
           type: 'array',
-          items: { type: 'string', enum: ['world', 'experience', 'observation', 'opinion'] },
+          items: {
+            type: 'string',
+            enum: ['world', 'experience', 'observation', 'opinion'],
+          },
           description: 'Filter to specific memory types. Omit to search all.',
         },
         minTrust: {
@@ -113,7 +134,8 @@ export const ENGRAM_TOOLS = [
         },
         includeObservations: {
           type: 'boolean',
-          description: 'Include synthesized observations in response (default: true)',
+          description:
+            'Include synthesized observations in response (default: true)',
         },
       },
       required: ['query'],
@@ -122,7 +144,8 @@ export const ENGRAM_TOOLS = [
 
   {
     name: 'engram_reflect' as const,
-    description: 'Run a reflection cycle: processes unreflected memories through the LLM to synthesize observations and update opinions. Requires Ollama. Typically run on a schedule rather than per-turn.',
+    description:
+      'Run a reflection cycle: processes unreflected memories through the LLM to synthesize observations and update opinions. Requires Ollama. Typically run on a schedule rather than per-turn.',
     inputSchema: {
       type: 'object' as const,
       properties: {},
@@ -131,7 +154,8 @@ export const ENGRAM_TOOLS = [
 
   {
     name: 'engram_process_extractions' as const,
-    description: 'Drain the entity extraction queue to build the knowledge graph from retained chunks. Requires Ollama. Run after retain() calls to enable graph-based recall.',
+    description:
+      'Drain the entity extraction queue to build the knowledge graph from retained chunks. Requires Ollama. Run after retain() calls to enable graph-based recall.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -145,7 +169,8 @@ export const ENGRAM_TOOLS = [
 
   {
     name: 'engram_forget' as const,
-    description: 'Soft-delete a memory chunk. The chunk is excluded from recall but remains in the database for audit.',
+    description:
+      'Soft-delete a memory chunk. The chunk is excluded from recall but remains in the database for audit.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -160,7 +185,8 @@ export const ENGRAM_TOOLS = [
 
   {
     name: 'engram_supersede' as const,
-    description: 'Replace an outdated fact with new text. The old chunk is soft-deleted and linked to the new one. Use when correcting information.',
+    description:
+      'Replace an outdated fact with new text. The old chunk is soft-deleted and linked to the new one. Use when correcting information.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -180,7 +206,13 @@ export const ENGRAM_TOOLS = [
         context: { type: 'string' },
         sourceType: {
           type: 'string',
-          enum: ['user_stated', 'inferred', 'external_doc', 'tool_result', 'agent_generated'],
+          enum: [
+            'user_stated',
+            'inferred',
+            'external_doc',
+            'tool_result',
+            'agent_generated',
+          ],
         },
         trustScore: { type: 'number', minimum: 0, maximum: 1 },
       },
@@ -189,13 +221,15 @@ export const ENGRAM_TOOLS = [
   },
   {
     name: 'engram_session' as const,
-    description: 'Infer or resume a working memory session for the given message. Call once per incoming user message before the LLM call. Default similarity threshold: 0.55. Example: {message: "plan the deployment"}. Returns session state + related long-term context.',
+    description:
+      'Infer or resume a working memory session for the given message. Call once per incoming user message before the LLM call. Default similarity threshold: 0.55. Example: {message: "plan the deployment"}. Returns session state + related long-term context.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         message: {
           type: 'string',
-          description: 'The incoming user message to match against active sessions',
+          description:
+            'The incoming user message to match against active sessions',
         },
         maxActive: {
           type: 'number',
@@ -203,7 +237,8 @@ export const ENGRAM_TOOLS = [
         },
         threshold: {
           type: 'number',
-          description: 'Cosine similarity threshold for session matching (default: 0.55). Lower = more aggressive matching, higher = more new sessions.',
+          description:
+            'Cosine similarity threshold for session matching (default: 0.55). Lower = more aggressive matching, higher = more new sessions.',
         },
       },
       required: ['message'],
@@ -211,7 +246,8 @@ export const ENGRAM_TOOLS = [
   },
   {
     name: 'engram_queue_stats' as const,
-    description: 'Get extraction queue health stats: pending, processing, completed, and failed counts plus the oldest pending item age. Use to diagnose why the knowledge graph is not growing or to decide when to call engram_process_extractions.',
+    description:
+      'Get extraction queue health stats: pending, processing, completed, and failed counts plus the oldest pending item age. Use to diagnose why the knowledge graph is not growing or to decide when to call engram_process_extractions.',
     inputSchema: {
       type: 'object' as const,
       properties: {},
@@ -219,7 +255,7 @@ export const ENGRAM_TOOLS = [
   },
 ] as const;
 
-export type EngramToolName = typeof ENGRAM_TOOLS[number]['name'];
+export type EngramToolName = (typeof ENGRAM_TOOLS)[number]['name'];
 
 // =============================================================================
 // MCP Response Types
@@ -240,8 +276,19 @@ export interface McpToolResult {
 // Input Validation
 // =============================================================================
 
-const VALID_MEMORY_TYPES = new Set(['world', 'experience', 'observation', 'opinion']);
-const VALID_SOURCE_TYPES = new Set(['user_stated', 'inferred', 'external_doc', 'tool_result', 'agent_generated']);
+const VALID_MEMORY_TYPES = new Set([
+  'world',
+  'experience',
+  'observation',
+  'opinion',
+]);
+const VALID_SOURCE_TYPES = new Set([
+  'user_stated',
+  'inferred',
+  'external_doc',
+  'tool_result',
+  'agent_generated',
+]);
 const VALID_STRATEGIES = new Set(['semantic', 'keyword', 'graph', 'temporal']);
 
 /** Clamp a numeric trust value to [0, 1]. Returns undefined if not a number. */
@@ -251,16 +298,34 @@ function clampTrust(v: unknown): number | undefined {
 }
 
 /** Filter an array to only values present in a valid set. Returns undefined if result is empty or input is not an array. */
-function filterEnums<T extends string>(arr: unknown, valid: Set<string>): T[] | undefined {
+function filterEnums<T extends string>(
+  arr: unknown,
+  valid: Set<string>,
+): T[] | undefined {
   if (!Array.isArray(arr)) return undefined;
-  const filtered = arr.filter(v => typeof v === 'string' && valid.has(v)) as T[];
+  const filtered = arr.filter(
+    (v) => typeof v === 'string' && valid.has(v),
+  ) as T[];
   return filtered.length > 0 ? filtered : undefined;
 }
 
 /** Assert a required string field is a non-empty string. Returns error result if invalid. */
-function requireString(v: unknown, fieldName: string): { error: McpToolResult } | { value: string } {
+function requireString(
+  v: unknown,
+  fieldName: string,
+): { error: McpToolResult } | { value: string } {
   if (typeof v !== 'string' || v.trim() === '') {
-    return { error: { content: [{ type: 'text', text: `engram tool error: ${fieldName} must be a non-empty string` }], isError: true } };
+    return {
+      error: {
+        content: [
+          {
+            type: 'text',
+            text: `engram tool error: ${fieldName} must be a non-empty string`,
+          },
+        ],
+        isError: true,
+      },
+    };
   }
   return { value: v };
 }
@@ -276,7 +341,7 @@ function requireString(v: unknown, fieldName: string): { error: McpToolResult } 
 export function createEngramToolHandler(engram: Engram) {
   return async function handleTool(
     name: EngramToolName,
-    input: Record<string, unknown>
+    input: Record<string, unknown>,
   ): Promise<McpToolResult> {
     try {
       switch (name) {
@@ -284,13 +349,22 @@ export function createEngramToolHandler(engram: Engram) {
           const textCheck = requireString(input.text, 'text');
           if ('error' in textCheck) return textCheck.error;
           const opts: RetainOptions = {
-            memoryType: VALID_MEMORY_TYPES.has(input.memoryType as string) ? input.memoryType as RetainOptions['memoryType'] : undefined,
-            sourceType: VALID_SOURCE_TYPES.has(input.sourceType as string) ? input.sourceType as RetainOptions['sourceType'] : undefined,
+            memoryType: VALID_MEMORY_TYPES.has(input.memoryType as string)
+              ? (input.memoryType as RetainOptions['memoryType'])
+              : undefined,
+            sourceType: VALID_SOURCE_TYPES.has(input.sourceType as string)
+              ? (input.sourceType as RetainOptions['sourceType'])
+              : undefined,
             trustScore: clampTrust(input.trustScore),
             source: typeof input.source === 'string' ? input.source : undefined,
-            context: typeof input.context === 'string' ? input.context : undefined,
-            eventTime: typeof input.eventTime === 'string' ? input.eventTime : undefined,
-            temporalLabel: typeof input.temporalLabel === 'string' ? input.temporalLabel : undefined,
+            context:
+              typeof input.context === 'string' ? input.context : undefined,
+            eventTime:
+              typeof input.eventTime === 'string' ? input.eventTime : undefined,
+            temporalLabel:
+              typeof input.temporalLabel === 'string'
+                ? input.temporalLabel
+                : undefined,
           };
           const result = await engram.retain(textCheck.value, opts);
           return { content: [{ type: 'text', text: JSON.stringify(result) }] };
@@ -300,26 +374,44 @@ export function createEngramToolHandler(engram: Engram) {
           const queryCheck = requireString(input.query, 'query');
           if ('error' in queryCheck) return queryCheck.error;
           const opts: RecallOptions = {
-            topK: typeof input.topK === 'number' ? Math.max(1, Math.floor(input.topK)) : undefined,
-            strategies: filterEnums<'semantic' | 'keyword' | 'graph' | 'temporal'>(input.strategies, VALID_STRATEGIES),
-            memoryTypes: filterEnums<'world' | 'experience' | 'observation' | 'opinion'>(input.memoryTypes, VALID_MEMORY_TYPES),
+            topK:
+              typeof input.topK === 'number'
+                ? Math.max(1, Math.floor(input.topK))
+                : undefined,
+            strategies: filterEnums<
+              'semantic' | 'keyword' | 'graph' | 'temporal'
+            >(input.strategies, VALID_STRATEGIES),
+            memoryTypes: filterEnums<
+              'world' | 'experience' | 'observation' | 'opinion'
+            >(input.memoryTypes, VALID_MEMORY_TYPES),
             minTrust: clampTrust(input.minTrust),
             after: typeof input.after === 'string' ? input.after : undefined,
             before: typeof input.before === 'string' ? input.before : undefined,
-            includeOpinions: typeof input.includeOpinions === 'boolean' ? input.includeOpinions : undefined,
-            includeObservations: typeof input.includeObservations === 'boolean' ? input.includeObservations : undefined,
+            includeOpinions:
+              typeof input.includeOpinions === 'boolean'
+                ? input.includeOpinions
+                : undefined,
+            includeObservations:
+              typeof input.includeObservations === 'boolean'
+                ? input.includeObservations
+                : undefined,
           };
           const result = await engram.recall(queryCheck.value, opts);
-          return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+          return {
+            content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+          };
         }
 
         case 'engram_reflect': {
           const result = await engram.reflect();
-          return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+          return {
+            content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+          };
         }
 
         case 'engram_process_extractions': {
-          const batchSize = typeof input.batchSize === 'number' ? input.batchSize : 10;
+          const batchSize =
+            typeof input.batchSize === 'number' ? input.batchSize : 10;
           const result = await engram.processExtractions(batchSize);
           return { content: [{ type: 'text', text: JSON.stringify(result) }] };
         }
@@ -328,7 +420,9 @@ export function createEngramToolHandler(engram: Engram) {
           const chunkIdCheck = requireString(input.chunkId, 'chunkId');
           if ('error' in chunkIdCheck) return chunkIdCheck.error;
           const forgotten = await engram.forget(chunkIdCheck.value);
-          return { content: [{ type: 'text', text: JSON.stringify({ forgotten }) }] };
+          return {
+            content: [{ type: 'text', text: JSON.stringify({ forgotten }) }],
+          };
         }
 
         case 'engram_supersede': {
@@ -337,13 +431,22 @@ export function createEngramToolHandler(engram: Engram) {
           const newTextCheck = requireString(input.newText, 'newText');
           if ('error' in newTextCheck) return newTextCheck.error;
           const opts: RetainOptions = {
-            memoryType: VALID_MEMORY_TYPES.has(input.memoryType as string) ? input.memoryType as RetainOptions['memoryType'] : undefined,
-            sourceType: VALID_SOURCE_TYPES.has(input.sourceType as string) ? input.sourceType as RetainOptions['sourceType'] : undefined,
+            memoryType: VALID_MEMORY_TYPES.has(input.memoryType as string)
+              ? (input.memoryType as RetainOptions['memoryType'])
+              : undefined,
+            sourceType: VALID_SOURCE_TYPES.has(input.sourceType as string)
+              ? (input.sourceType as RetainOptions['sourceType'])
+              : undefined,
             trustScore: clampTrust(input.trustScore),
             source: typeof input.source === 'string' ? input.source : undefined,
-            context: typeof input.context === 'string' ? input.context : undefined,
+            context:
+              typeof input.context === 'string' ? input.context : undefined,
           };
-          const result = await engram.supersede(oldChunkIdCheck.value, newTextCheck.value, opts);
+          const result = await engram.supersede(
+            oldChunkIdCheck.value,
+            newTextCheck.value,
+            opts,
+          );
           return { content: [{ type: 'text', text: JSON.stringify(result) }] };
         }
 
@@ -351,16 +454,22 @@ export function createEngramToolHandler(engram: Engram) {
           const msgCheck = requireString(input.message, 'message');
           if ('error' in msgCheck) return msgCheck.error;
           const opts = {
-            maxActive: typeof input.maxActive === 'number' ? input.maxActive : undefined,
-            threshold: typeof input.threshold === 'number' ? input.threshold : undefined,
+            maxActive:
+              typeof input.maxActive === 'number' ? input.maxActive : undefined,
+            threshold:
+              typeof input.threshold === 'number' ? input.threshold : undefined,
           };
           const result = await engram.inferWorkingSession(msgCheck.value, opts);
-          return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+          return {
+            content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+          };
         }
 
         case 'engram_queue_stats': {
           const stats = engram.getQueueStats();
-          return { content: [{ type: 'text', text: JSON.stringify(stats, null, 2) }] };
+          return {
+            content: [{ type: 'text', text: JSON.stringify(stats, null, 2) }],
+          };
         }
       }
     } catch (error: unknown) {

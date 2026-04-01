@@ -18,11 +18,17 @@ import type { EmbeddingProvider } from './retain.js';
 // different models each get their own singleton pipeline.
 const pipelineCache: Map<string, Promise<unknown>> = new Map();
 
-async function getPipeline(modelName: string, quantized: boolean): Promise<unknown> {
+async function getPipeline(
+  modelName: string,
+  quantized: boolean,
+): Promise<unknown> {
   const cacheKey = `${modelName}:${quantized}`;
   if (!pipelineCache.has(cacheKey)) {
     const { pipeline } = await import('@xenova/transformers');
-    pipelineCache.set(cacheKey, pipeline('feature-extraction', modelName, { quantized }));
+    pipelineCache.set(
+      cacheKey,
+      pipeline('feature-extraction', modelName, { quantized }),
+    );
   }
   return pipelineCache.get(cacheKey)!;
 }
@@ -118,15 +124,19 @@ export class LocalEmbedder implements EmbeddingProvider {
     return this.embedWithMode(text, 'query');
   }
 
-  private async embedWithMode(text: string, mode: 'query' | 'document'): Promise<Float32Array> {
-    const extractor = await getPipeline(this.modelName, this.quantized) as (
+  private async embedWithMode(
+    text: string,
+    mode: 'query' | 'document',
+  ): Promise<Float32Array> {
+    const extractor = (await getPipeline(this.modelName, this.quantized)) as (
       text: string,
-      options: { pooling: string; normalize: boolean }
+      options: { pooling: string; normalize: boolean },
     ) => Promise<{ data: ArrayLike<number> }>;
 
-    const prefix = mode === 'query'
-      ? this.modelInfo.queryPrefix
-      : this.modelInfo.documentPrefix;
+    const prefix =
+      mode === 'query'
+        ? this.modelInfo.queryPrefix
+        : this.modelInfo.documentPrefix;
 
     const output = await extractor(prefix + text, {
       pooling: 'mean',

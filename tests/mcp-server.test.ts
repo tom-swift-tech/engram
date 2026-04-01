@@ -25,11 +25,11 @@ describe('MCP Server', () => {
 
     server = new Server(
       { name: 'engram', version: '0.1.0' },
-      { capabilities: { tools: {} } }
+      { capabilities: { tools: {} } },
     );
 
     server.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: ENGRAM_TOOLS.map(tool => ({
+      tools: ENGRAM_TOOLS.map((tool) => ({
         name: tool.name,
         description: tool.description,
         inputSchema: tool.inputSchema,
@@ -40,15 +40,16 @@ describe('MCP Server', () => {
       const { name, arguments: toolArgs } = request.params;
       return handleTool(
         name as EngramToolName,
-        (toolArgs ?? {}) as Record<string, unknown>
+        (toolArgs ?? {}) as Record<string, unknown>,
       );
     });
 
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
 
     client = new Client(
       { name: 'test-client', version: '1.0.0' },
-      { capabilities: {} }
+      { capabilities: {} },
     );
 
     await server.connect(serverTransport);
@@ -65,7 +66,7 @@ describe('MCP Server', () => {
   it('ListTools returns all 8 tool schemas', async () => {
     const result = await client.listTools();
     expect(result.tools.length).toBe(8);
-    const names = result.tools.map(t => t.name);
+    const names = result.tools.map((t) => t.name);
     expect(names).toContain('engram_retain');
     expect(names).toContain('engram_recall');
     expect(names).toContain('engram_reflect');
@@ -106,7 +107,9 @@ describe('MCP Server', () => {
     const content = result.content as Array<{ type: string; text: string }>;
     const parsed = JSON.parse(content[0].text);
     expect(parsed.results.length).toBeGreaterThan(0);
-    expect(parsed.results.some((r: any) => r.text.includes('Terraform'))).toBe(true);
+    expect(parsed.results.some((r: any) => r.text.includes('Terraform'))).toBe(
+      true,
+    );
   });
 
   it('engram_session creates a new working memory session', async () => {
@@ -129,7 +132,10 @@ describe('MCP Server', () => {
       name: 'engram_retain',
       arguments: { text: 'Temporary fact to forget' },
     });
-    const retainContent = retainResult.content as Array<{ type: string; text: string }>;
+    const retainContent = retainResult.content as Array<{
+      type: string;
+      text: string;
+    }>;
     const chunkId = JSON.parse(retainContent[0].text).chunkId;
 
     // Forget it
@@ -138,7 +144,10 @@ describe('MCP Server', () => {
       arguments: { chunkId },
     });
 
-    const forgetContent = forgetResult.content as Array<{ type: string; text: string }>;
+    const forgetContent = forgetResult.content as Array<{
+      type: string;
+      text: string;
+    }>;
     const parsed = JSON.parse(forgetContent[0].text);
     expect(parsed.forgotten).toBe(true);
   });
@@ -149,7 +158,10 @@ describe('MCP Server', () => {
       name: 'engram_retain',
       arguments: { text: 'Tom uses Docker Compose for everything' },
     });
-    const retainContent = retainResult.content as Array<{ type: string; text: string }>;
+    const retainContent = retainResult.content as Array<{
+      type: string;
+      text: string;
+    }>;
     const oldChunkId = JSON.parse(retainContent[0].text).chunkId;
 
     // Supersede it
@@ -161,7 +173,10 @@ describe('MCP Server', () => {
       },
     });
 
-    const content = supersedeResult.content as Array<{ type: string; text: string }>;
+    const content = supersedeResult.content as Array<{
+      type: string;
+      text: string;
+    }>;
     const parsed = JSON.parse(content[0].text);
     expect(parsed.chunkId).toMatch(/^chk-/);
     expect(parsed).toHaveProperty('queued');
@@ -191,8 +206,7 @@ describe('MCP Server', () => {
       name: 'engram_recall',
       arguments: {
         query: 'TypeFilter safety test',
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        memoryTypes: ['world', "world'; DROP TABLE chunks;--", 'invalid'] as any,
+        memoryTypes: ['world', "world'; DROP TABLE chunks;--", 'invalid'],
         topK: 5,
       },
     });

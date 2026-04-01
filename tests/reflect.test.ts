@@ -104,9 +104,9 @@ describe('reflect()', () => {
     await reflect({ dbPath });
 
     const db = new Database(dbPath);
-    const unreflected = db.prepare(
-      `SELECT count(*) as n FROM chunks WHERE reflected_at IS NULL`
-    ).get() as { n: number };
+    const unreflected = db
+      .prepare(`SELECT count(*) as n FROM chunks WHERE reflected_at IS NULL`)
+      .get() as { n: number };
     db.close();
     expect(unreflected.n).toBe(0);
   });
@@ -119,7 +119,9 @@ describe('reflect()', () => {
     const result = await reflect({ dbPath });
 
     const db = new Database(dbPath);
-    const log = db.prepare('SELECT * FROM reflect_log WHERE id = ?').get(result.logId) as any;
+    const log = db
+      .prepare('SELECT * FROM reflect_log WHERE id = ?')
+      .get(result.logId) as any;
     db.close();
 
     expect(log.status).toBe('completed');
@@ -139,7 +141,9 @@ describe('reflect()', () => {
     expect(result.error).toBeDefined();
 
     const db = new Database(dbPath);
-    const log = db.prepare('SELECT * FROM reflect_log WHERE id = ?').get(result.logId) as any;
+    const log = db
+      .prepare('SELECT * FROM reflect_log WHERE id = ?')
+      .get(result.logId) as any;
     db.close();
     expect(log.status).toBe('failed');
     expect(log.error).toBeTruthy();
@@ -148,7 +152,15 @@ describe('reflect()', () => {
   it('sets status to failed when Ollama is unreachable', async () => {
     dbPath = tmpDbPath();
     await setupDb(dbPath, 5);
-    vi.stubGlobal('fetch', async () => ({ ok: false, status: 503, text: async () => 'Service Unavailable' } as unknown as Response));
+    vi.stubGlobal(
+      'fetch',
+      async () =>
+        ({
+          ok: false,
+          status: 503,
+          text: async () => 'Service Unavailable',
+        }) as unknown as Response,
+    );
 
     const result = await reflect({ dbPath });
     expect(result.status).toBe('failed');
@@ -169,43 +181,56 @@ describe('reflect()', () => {
 
     const db = new Database(dbPath);
     // Same belief text, different domains
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO opinions (id, belief, confidence, domain, supporting_chunks, related_entities)
       VALUES ('op-infra', 'Kubernetes is the preferred orchestration platform', 0.7, 'infrastructure', '[]', '[]')
-    `).run();
-    db.prepare(`
+    `,
+    ).run();
+    db.prepare(
+      `
       INSERT INTO opinions (id, belief, confidence, domain, supporting_chunks, related_entities)
       VALUES ('op-dev', 'Kubernetes is the preferred orchestration platform', 0.7, 'development', '[]', '[]')
-    `).run();
+    `,
+    ).run();
     db.close();
 
     // Reinforce only the 'infrastructure' domain opinion
-    vi.stubGlobal('fetch', mockOllamaFetch(JSON.stringify({
-      observations: [],
-      opinion_updates: [
-        {
-          belief: 'Kubernetes is the preferred orchestration platform',
-          direction: 'reinforce',
-          confidence_delta: 0.1,
-          domain: 'infrastructure',
-          evidence_chunk_ids: ['chk-x'],
-          entity_names: [],
-        },
-      ],
-      observation_refreshes: [],
-    })));
+    vi.stubGlobal(
+      'fetch',
+      mockOllamaFetch(
+        JSON.stringify({
+          observations: [],
+          opinion_updates: [
+            {
+              belief: 'Kubernetes is the preferred orchestration platform',
+              direction: 'reinforce',
+              confidence_delta: 0.1,
+              domain: 'infrastructure',
+              evidence_chunk_ids: ['chk-x'],
+              entity_names: [],
+            },
+          ],
+          observation_refreshes: [],
+        }),
+      ),
+    );
 
     const result = await reflect({ dbPath });
     expect(result.opinionsReinforced).toBe(1);
 
     const verify = new Database(dbPath);
-    const opinions = verify.prepare(`
+    const opinions = verify
+      .prepare(
+        `
       SELECT id, confidence FROM opinions WHERE id IN ('op-infra', 'op-dev')
-    `).all() as Array<{ id: string; confidence: number }>;
+    `,
+      )
+      .all() as Array<{ id: string; confidence: number }>;
     verify.close();
 
-    const infra = opinions.find(op => op.id === 'op-infra')!;
-    const dev = opinions.find(op => op.id === 'op-dev')!;
+    const infra = opinions.find((op) => op.id === 'op-infra')!;
+    const dev = opinions.find((op) => op.id === 'op-dev')!;
     // Only the infrastructure opinion should have increased confidence
     expect(infra.confidence).toBeGreaterThan(0.7);
     expect(dev.confidence).toBe(0.7);
@@ -216,45 +241,60 @@ describe('reflect()', () => {
     await setupDb(dbPath, 5);
 
     const db = new Database(dbPath);
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO opinions (id, belief, confidence, domain, supporting_chunks, related_entities)
       VALUES ('op-1', 'Tom prefers Terraform for all infrastructure work', 0.7, 'infrastructure', '[]', '[]')
-    `).run();
-    db.prepare(`
+    `,
+    ).run();
+    db.prepare(
+      `
       INSERT INTO opinions (id, belief, confidence, domain, supporting_chunks, related_entities)
       VALUES ('op-2', 'Tom prefers Terraform for all production deployments', 0.7, 'infrastructure', '[]', '[]')
-    `).run();
+    `,
+    ).run();
     db.close();
 
-    vi.stubGlobal('fetch', mockOllamaFetch(JSON.stringify({
-      observations: [],
-      opinion_updates: [
-        {
-          belief: 'Tom prefers Terraform for all production deployments',
-          direction: 'reinforce',
-          confidence_delta: 0.1,
-          domain: 'infrastructure',
-          evidence_chunk_ids: ['chk-1'],
-          entity_names: [],
-        },
-      ],
-      observation_refreshes: [],
-    })));
+    vi.stubGlobal(
+      'fetch',
+      mockOllamaFetch(
+        JSON.stringify({
+          observations: [],
+          opinion_updates: [
+            {
+              belief: 'Tom prefers Terraform for all production deployments',
+              direction: 'reinforce',
+              confidence_delta: 0.1,
+              domain: 'infrastructure',
+              evidence_chunk_ids: ['chk-1'],
+              entity_names: [],
+            },
+          ],
+          observation_refreshes: [],
+        }),
+      ),
+    );
 
     const result = await reflect({ dbPath });
     expect(result.opinionsReinforced).toBe(1);
 
     const verify = new Database(dbPath);
-    const opinions = verify.prepare(`
+    const opinions = verify
+      .prepare(
+        `
       SELECT id, belief, confidence
       FROM opinions
       WHERE id IN ('op-1', 'op-2')
       ORDER BY id
-    `).all() as Array<{ id: string; belief: string; confidence: number }>;
+    `,
+      )
+      .all() as Array<{ id: string; belief: string; confidence: number }>;
     verify.close();
 
-    expect(opinions.find(op => op.id === 'op-1')?.confidence).toBe(0.7);
-    expect(opinions.find(op => op.id === 'op-2')?.confidence).toBeGreaterThan(0.7);
+    expect(opinions.find((op) => op.id === 'op-1')?.confidence).toBe(0.7);
+    expect(opinions.find((op) => op.id === 'op-2')?.confidence).toBeGreaterThan(
+      0.7,
+    );
   });
 
   it('reinforces via fuzzy match when belief text differs slightly', async () => {
@@ -263,35 +303,43 @@ describe('reflect()', () => {
 
     const db = new Database(dbPath);
     // Stored belief has slightly different wording than what the LLM will output
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO opinions (id, belief, confidence, domain, supporting_chunks, related_entities)
       VALUES ('op-fuzzy', 'Alice strongly prefers Rust over other systems languages for performance work', 0.6, 'preferences', '[]', '[]')
-    `).run();
+    `,
+    ).run();
     db.close();
 
     // LLM outputs a belief that is similar but not identical (triggers beliefSimilarity >= 0.85)
-    vi.stubGlobal('fetch', mockOllamaFetch(JSON.stringify({
-      observations: [],
-      opinion_updates: [
-        {
-          belief: 'Alice strongly prefers Rust over other systems languages for performance tasks',
-          direction: 'reinforce',
-          confidence_delta: 0.1,
-          domain: 'preferences',
-          evidence_chunk_ids: ['chk-fuzzy'],
-          entity_names: [],
-        },
-      ],
-      observation_refreshes: [],
-    })));
+    vi.stubGlobal(
+      'fetch',
+      mockOllamaFetch(
+        JSON.stringify({
+          observations: [],
+          opinion_updates: [
+            {
+              belief:
+                'Alice strongly prefers Rust over other systems languages for performance tasks',
+              direction: 'reinforce',
+              confidence_delta: 0.1,
+              domain: 'preferences',
+              evidence_chunk_ids: ['chk-fuzzy'],
+              entity_names: [],
+            },
+          ],
+          observation_refreshes: [],
+        }),
+      ),
+    );
 
     const result = await reflect({ dbPath });
     expect(result.opinionsReinforced).toBe(1);
 
     const verify = new Database(dbPath);
-    const op = verify.prepare(
-      `SELECT confidence FROM opinions WHERE id = 'op-fuzzy'`
-    ).get() as { confidence: number };
+    const op = verify
+      .prepare(`SELECT confidence FROM opinions WHERE id = 'op-fuzzy'`)
+      .get() as { confidence: number };
     verify.close();
 
     // With row-ID-based UPDATE, fuzzy match successfully updates the opinion

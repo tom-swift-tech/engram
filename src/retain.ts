@@ -31,7 +31,12 @@ export interface RetainOptions {
   /** Freeform context tag */
   context?: string;
   /** Trust classification */
-  sourceType?: 'user_stated' | 'inferred' | 'external_doc' | 'tool_result' | 'agent_generated';
+  sourceType?:
+    | 'user_stated'
+    | 'inferred'
+    | 'external_doc'
+    | 'tool_result'
+    | 'agent_generated';
   /** Trust score override (0.0 - 1.0) */
   trustScore?: number;
   /** When the event/fact occurred */
@@ -76,7 +81,7 @@ export class OllamaEmbeddings implements EmbeddingProvider {
   constructor(
     url: string = DEFAULT_OLLAMA_URL,
     model: string = 'nomic-embed-text',
-    dimensions: number = 768
+    dimensions: number = 768,
   ) {
     this.url = url;
     this.model = model;
@@ -91,7 +96,9 @@ export class OllamaEmbeddings implements EmbeddingProvider {
     });
 
     if (!response.ok) {
-      throw new Error(`Embedding failed: ${response.status} ${await response.text()}`);
+      throw new Error(
+        `Embedding failed: ${response.status} ${await response.text()}`,
+      );
     }
 
     const data = await response.json();
@@ -118,12 +125,14 @@ export function computeTextHash(text: string): string {
 
 function findNormalizedDuplicate(
   db: Database.Database,
-  text: string
+  text: string,
 ): { id: string; trust_score: number } | undefined {
   const hash = computeTextHash(text);
-  return db.prepare(
-    `SELECT id, trust_score FROM chunks WHERE is_active = TRUE AND text_hash = ? LIMIT 1`
-  ).get(hash) as { id: string; trust_score: number } | undefined;
+  return db
+    .prepare(
+      `SELECT id, trust_score FROM chunks WHERE is_active = TRUE AND text_hash = ? LIMIT 1`,
+    )
+    .get(hash) as { id: string; trust_score: number } | undefined;
 }
 
 // =============================================================================
@@ -134,7 +143,7 @@ export async function retain(
   db: Database.Database,
   text: string,
   embedder: EmbeddingProvider,
-  options: RetainOptions = {}
+  options: RetainOptions = {},
 ): Promise<RetainResult> {
   const {
     memoryType = 'world',
@@ -152,17 +161,20 @@ export async function retain(
 
   // Dedup check — runs before embed to avoid unnecessary Ollama calls
   if (dedupMode !== 'none') {
-    const existing = (dedupMode === 'normalized'
-      ? findNormalizedDuplicate(db, text)
-      : db.prepare(
-          `SELECT id, trust_score FROM chunks WHERE is_active = TRUE AND text = ? LIMIT 1`
-        ).get(text)
+    const existing = (
+      dedupMode === 'normalized'
+        ? findNormalizedDuplicate(db, text)
+        : db
+            .prepare(
+              `SELECT id, trust_score FROM chunks WHERE is_active = TRUE AND text = ? LIMIT 1`,
+            )
+            .get(text)
     ) as { id: string; trust_score: number } | undefined;
 
     if (existing) {
       const newTrust = Math.max(existing.trust_score, trustScore);
       db.prepare(
-        `UPDATE chunks SET trust_score = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+        `UPDATE chunks SET trust_score = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
       ).run(newTrust, existing.id);
       return { chunkId: existing.id, queued: false, deduplicated: true };
     }
@@ -176,11 +188,13 @@ export async function retain(
 
   // Write chunk + Tier 1 extraction + queue Tier 2 in a single transaction
   let tier1: { entitiesLinked: number; relationsCreated: number } | undefined;
-  const shouldExtract = !skipExtraction && (memoryType === 'world' || memoryType === 'experience');
+  const shouldExtract =
+    !skipExtraction && (memoryType === 'world' || memoryType === 'experience');
 
   const insertTransaction = db.transaction(() => {
     // Insert chunk
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO chunks (
         id, text, embedding, memory_type,
         source, source_uri, context,
@@ -188,12 +202,21 @@ export async function retain(
         event_time, event_time_end, temporal_label,
         text_hash
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      chunkId, text, embeddingBuffer, memoryType,
-      source, sourceUri, context,
-      sourceType, trustScore,
-      eventTime, eventTimeEnd, temporalLabel,
-      computeTextHash(text)
+    `,
+    ).run(
+      chunkId,
+      text,
+      embeddingBuffer,
+      memoryType,
+      source,
+      sourceUri,
+      context,
+      sourceType,
+      trustScore,
+      eventTime,
+      eventTimeEnd,
+      temporalLabel,
+      computeTextHash(text),
     );
 
     // Tier 1: CPU extraction (instant, inline, no LLM)
@@ -203,10 +226,12 @@ export async function retain(
 
     // Queue for Tier 2 LLM extraction (unchanged)
     if (shouldExtract) {
-      db.prepare(`
+      db.prepare(
+        `
         INSERT OR IGNORE INTO extraction_queue (chunk_id)
         VALUES (?)
-      `).run(chunkId);
+      `,
+      ).run(chunkId);
     }
   });
 
@@ -227,7 +252,7 @@ export async function retainBatch(
   db: Database.Database,
   items: Array<{ text: string; options?: RetainOptions }>,
   embedder: EmbeddingProvider,
-  onProgress?: (current: number, total: number) => void
+  onProgress?: (current: number, total: number) => void,
 ): Promise<RetainResult[]> {
   const results: RetainResult[] = [];
 
@@ -327,7 +352,7 @@ interface ExtractionOutput {
 
 async function extractEntities(
   text: string,
-  generator: GenerationProvider
+  generator: GenerationProvider,
 ): Promise<ExtractionOutput> {
   const prompt = ENTITY_EXTRACTION_PROMPT.replace('{TEXT}', text);
 
@@ -359,13 +384,15 @@ async function extractEntities(
 export async function processExtractionQueue(
   db: Database.Database,
   generator: GenerationProvider,
-  batchSize: number = 10
+  batchSize: number = 10,
 ): Promise<{ processed: number; failed: number }> {
   let processed = 0;
   let failed = 0;
 
   // Grab pending items (respecting exponential backoff windows)
-  const pending = db.prepare(`
+  const pending = db
+    .prepare(
+      `
     SELECT eq.chunk_id, c.text
     FROM extraction_queue eq
     JOIN chunks c ON eq.chunk_id = c.id
@@ -375,15 +402,19 @@ export async function processExtractionQueue(
       AND (eq.next_retry_after IS NULL OR eq.next_retry_after <= CURRENT_TIMESTAMP)
     ORDER BY eq.queued_at ASC
     LIMIT ?
-  `).all(batchSize) as Array<{ chunk_id: string; text: string }>;
+  `,
+    )
+    .all(batchSize) as Array<{ chunk_id: string; text: string }>;
 
   for (const item of pending) {
     // Mark as processing
-    db.prepare(`
+    db.prepare(
+      `
       UPDATE extraction_queue
       SET status = 'processing', last_attempt = CURRENT_TIMESTAMP, attempts = attempts + 1
       WHERE chunk_id = ?
-    `).run(item.chunk_id);
+    `,
+    ).run(item.chunk_id);
 
     try {
       const extracted = await extractEntities(item.text, generator);
@@ -414,9 +445,13 @@ export async function processExtractionQueue(
           entityIdMap[ent.canonical_name] = entityId;
 
           upsertEntity.run(
-            entityId, ent.name, ent.canonical_name, ent.entity_type,
+            entityId,
+            ent.name,
+            ent.canonical_name,
+            ent.entity_type,
             JSON.stringify(ent.aliases || []),
-            now, now
+            now,
+            now,
           );
 
           linkChunkEntity.run(item.chunk_id, entityId);
@@ -434,7 +469,14 @@ export async function processExtractionQueue(
           if (sourceId && targetId) {
             const relId = `rel-${randomUUID().substring(0, 8)}`;
             try {
-              insertRelation.run(relId, sourceId, targetId, rel.relation_type, rel.description, item.chunk_id);
+              insertRelation.run(
+                relId,
+                sourceId,
+                targetId,
+                rel.relation_type,
+                rel.description,
+                item.chunk_id,
+              );
             } catch {
               // Duplicate edge — ON CONFLICT REPLACE handles this
             }
@@ -442,29 +484,33 @@ export async function processExtractionQueue(
         }
 
         // Mark extraction complete
-        db.prepare(`
+        db.prepare(
+          `
           UPDATE extraction_queue SET status = 'completed' WHERE chunk_id = ?
-        `).run(item.chunk_id);
+        `,
+        ).run(item.chunk_id);
       });
 
       applyExtraction();
       processed++;
-
     } catch (error: any) {
       // attempts was already incremented above; read it back to decide whether to retry
-      const row = db.prepare(
-        `SELECT attempts FROM extraction_queue WHERE chunk_id = ?`
-      ).get(item.chunk_id) as { attempts: number } | undefined;
+      const row = db
+        .prepare(`SELECT attempts FROM extraction_queue WHERE chunk_id = ?`)
+        .get(item.chunk_id) as { attempts: number } | undefined;
       const attempts = row?.attempts ?? 3;
       const status = attempts >= 3 ? 'failed' : 'pending';
       // Exponential backoff: 30s after 1st failure, 60s after 2nd
-      const backoffSeconds = status === 'pending' ? Math.pow(2, attempts - 1) * 30 : null;
+      const backoffSeconds =
+        status === 'pending' ? Math.pow(2, attempts - 1) * 30 : null;
       db.prepare(
-        `UPDATE extraction_queue SET status = ?, error = ?, next_retry_after = ? WHERE chunk_id = ?`
+        `UPDATE extraction_queue SET status = ?, error = ?, next_retry_after = ? WHERE chunk_id = ?`,
       ).run(
         status,
         error.message,
-        backoffSeconds != null ? new Date(Date.now() + backoffSeconds * 1000).toISOString() : null,
+        backoffSeconds != null
+          ? new Date(Date.now() + backoffSeconds * 1000).toISOString()
+          : null,
         item.chunk_id,
       );
       failed++;
@@ -487,7 +533,9 @@ export interface QueueStats {
 }
 
 export function getQueueStats(db: Database.Database): QueueStats {
-  return db.prepare(`
+  return db
+    .prepare(
+      `
     SELECT
       SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
       SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) as processing,
@@ -495,7 +543,9 @@ export function getQueueStats(db: Database.Database): QueueStats {
       SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
       MIN(CASE WHEN status = 'pending' THEN queued_at END) as oldest_pending
     FROM extraction_queue
-  `).get() as QueueStats;
+  `,
+    )
+    .get() as QueueStats;
 }
 
 // =============================================================================
@@ -528,31 +578,51 @@ export function shouldRetain(text: string): { score: number; reason: string } {
   }
 
   // --- Social/phatic patterns ---
-  if (/^(hey|hi|hello|thanks|thank you|ok|okay|sure|got it|sounds good|cool|nice|great|awesome|yep|yes|no|nope|bye|goodbye|lol|haha)[\s!.,?]*$/i.test(lower)) {
+  if (
+    /^(hey|hi|hello|thanks|thank you|ok|okay|sure|got it|sounds good|cool|nice|great|awesome|yep|yes|no|nope|bye|goodbye|lol|haha)[\s!.,?]*$/i.test(
+      lower,
+    )
+  ) {
     score -= 0.4;
     reasons.push('phatic expression');
   }
 
   // --- Decision language ---
-  if (/\b(decided|chose|choosing|will use|switched to|prefer|prefers|going with|selected|picked|agreed|committed)\b/i.test(text)) {
+  if (
+    /\b(decided|chose|choosing|will use|switched to|prefer|prefers|going with|selected|picked|agreed|committed)\b/i.test(
+      text,
+    )
+  ) {
     score += 0.2;
     reasons.push('decision language');
   }
 
   // --- Technical terms (camelCase, paths, mixed alphanumeric) ---
-  if (/\b[a-z]+[A-Z][a-zA-Z]*\b|\b\w+[./\\]\w+\b|\b(?:[a-z]+\d+|\d+[a-z]+)[a-z0-9]*\b/i.test(text)) {
+  if (
+    /\b[a-z]+[A-Z][a-zA-Z]*\b|\b\w+[./\\]\w+\b|\b(?:[a-z]+\d+|\d+[a-z]+)[a-z0-9]*\b/i.test(
+      text,
+    )
+  ) {
     score += 0.1;
     reasons.push('technical terms');
   }
 
   // --- Temporal markers ---
-  if (/\b(yesterday|today|tomorrow|next week|last week|deadline|by [A-Z][a-z]+|january|february|march|april|may|june|july|august|september|october|november|december|\b\d{4}\b|\d{1,2}[\/\-]\d{1,2})\b/i.test(text)) {
+  if (
+    /\b(yesterday|today|tomorrow|next week|last week|deadline|by [A-Z][a-z]+|january|february|march|april|may|june|july|august|september|october|november|december|\b\d{4}\b|\d{1,2}[/-]\d{1,2})\b/i.test(
+      text,
+    )
+  ) {
     score += 0.1;
     reasons.push('temporal markers');
   }
 
   // --- Pure interrogative (question with no embedded facts) ---
-  if (/^(what|who|where|when|why|how|which|can|could|would|will|should|is|are|do|does|did)\b.+\?$/i.test(lower)) {
+  if (
+    /^(what|who|where|when|why|how|which|can|could|would|will|should|is|are|do|does|did)\b.+\?$/i.test(
+      lower,
+    )
+  ) {
     score -= 0.2;
     reasons.push('pure interrogative');
   }

@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { Engram, type SessionCandidate } from '../src/engram.js';
+import { Engram } from '../src/engram.js';
 import { MockEmbedder, tmpDbPath, cleanupDb } from './helpers.js';
 
 describe('Working Memory', () => {
@@ -7,7 +7,11 @@ describe('Working Memory', () => {
   let dbPath: string;
 
   afterEach(() => {
-    try { engram?.close(); } catch { /* already closed */ }
+    try {
+      engram?.close();
+    } catch {
+      /* already closed */
+    }
     engram = undefined;
     cleanupDb(dbPath);
   });
@@ -18,7 +22,9 @@ describe('Working Memory', () => {
     dbPath = tmpDbPath();
     engram = await Engram.create(dbPath, { embedder: new MockEmbedder() });
 
-    const result = await engram.inferWorkingSession('check my email for updates');
+    const result = await engram.inferWorkingSession(
+      'check my email for updates',
+    );
 
     expect(result.session.id).toMatch(/^wm-/);
     expect(result.session.goal).toContain('check my email');
@@ -32,7 +38,9 @@ describe('Working Memory', () => {
     dbPath = tmpDbPath();
     engram = await Engram.create(dbPath, { embedder: new MockEmbedder() });
 
-    const first = await engram.inferWorkingSession('check my email for updates');
+    const first = await engram.inferWorkingSession(
+      'check my email for updates',
+    );
     const second = await engram.inferWorkingSession('any new emails today');
 
     expect(second.diagnostics.reason).toBe('match');
@@ -45,8 +53,13 @@ describe('Working Memory', () => {
     dbPath = tmpDbPath();
     engram = await Engram.create(dbPath, { embedder: new MockEmbedder() });
 
-    const email = await engram.inferWorkingSession('check my email for updates from the office');
-    const garden = await engram.inferWorkingSession('ZZZZZ plant roses in the garden ZZZZZ', { threshold: 0.999 });
+    const email = await engram.inferWorkingSession(
+      'check my email for updates from the office',
+    );
+    const garden = await engram.inferWorkingSession(
+      'ZZZZZ plant roses in the garden ZZZZZ',
+      { threshold: 0.999 },
+    );
 
     expect(email.session.id).not.toBe(garden.session.id);
 
@@ -78,7 +91,7 @@ describe('Working Memory', () => {
     engram = await Engram.create(dbPath, { embedder: new MockEmbedder() });
 
     await expect(
-      engram.updateWorkingSession('wm-doesnotexist', { goal: 'test' })
+      engram.updateWorkingSession('wm-doesnotexist', { goal: 'test' }),
     ).rejects.toThrow('not found');
   });
 
@@ -100,7 +113,10 @@ describe('Working Memory', () => {
     engram = await Engram.create(dbPath, { embedder: new MockEmbedder() });
 
     await engram.inferWorkingSession('task one about alpha');
-    const second = await engram.inferWorkingSession('ZZZZ completely different topic ZZZZ', { threshold: 0.999 });
+    const second = await engram.inferWorkingSession(
+      'ZZZZ completely different topic ZZZZ',
+      { threshold: 0.999 },
+    );
     engram.clearWorkingSession(second.session.id);
 
     const sessions = engram.listWorkingSessions();
@@ -124,8 +140,12 @@ describe('Working Memory', () => {
     expect(retrieved).toBeNull();
 
     // The snapshot chunk should be findable via recall
-    const recallResult = await engram.recall('API schema', { strategies: ['keyword'] });
-    expect(recallResult.results.some(r => r.source?.includes('working_memory'))).toBe(true);
+    const recallResult = await engram.recall('API schema', {
+      strategies: ['keyword'],
+    });
+    expect(
+      recallResult.results.some((r) => r.source?.includes('working_memory')),
+    ).toBe(true);
   });
 
   it('snapshotWorkingSession includes progress in the chunk when set', async () => {
@@ -134,14 +154,19 @@ describe('Working Memory', () => {
 
     const result = await engram.inferWorkingSession('debug the auth bug');
     await engram.updateWorkingSession(result.session.id, {
-      progress: 'Identified root cause in JWT validation. Applied fix to middleware.',
+      progress:
+        'Identified root cause in JWT validation. Applied fix to middleware.',
     });
 
     await engram.snapshotWorkingSession(result.session.id);
 
     // Snapshot should include progress notes
-    const recallResult = await engram.recall('JWT validation fix', { strategies: ['keyword'] });
-    expect(recallResult.results.some(r => r.source?.includes('working_memory'))).toBe(true);
+    const recallResult = await engram.recall('JWT validation fix', {
+      strategies: ['keyword'],
+    });
+    expect(
+      recallResult.results.some((r) => r.source?.includes('working_memory')),
+    ).toBe(true);
   });
 
   // ── Clear ──────────────────────────────────────────────────────────────
@@ -157,8 +182,12 @@ describe('Working Memory', () => {
     expect(engram.getWorkingSession(result.session.id)).toBeNull();
 
     // No experience chunk should exist from this session
-    const recallResult = await engram.recall('throwaway', { strategies: ['keyword'] });
-    expect(recallResult.results.some(r => r.source?.includes('working_memory'))).toBe(false);
+    const recallResult = await engram.recall('throwaway', {
+      strategies: ['keyword'],
+    });
+    expect(
+      recallResult.results.some((r) => r.source?.includes('working_memory')),
+    ).toBe(false);
   });
 
   it('clearWorkingSession returns false for already-expired session', async () => {
@@ -183,7 +212,9 @@ describe('Working Memory', () => {
     await engram.inferWorkingSession('CCCC third topic about gamma');
 
     // 4th with maxActive: 3 — should snapshot the oldest
-    await engram.inferWorkingSession('DDDD fourth topic about delta', { maxActive: 3 });
+    await engram.inferWorkingSession('DDDD fourth topic about delta', {
+      maxActive: 3,
+    });
 
     const sessions = engram.listWorkingSessions();
     expect(sessions.length).toBeLessThanOrEqual(3);
@@ -197,7 +228,9 @@ describe('Working Memory', () => {
     await engram.inferWorkingSession('AAAA first session');
 
     // Pass maxActive: 0 — should be clamped to 1, not snapshot the existing session
-    await engram.inferWorkingSession('ZZZZ completely different session ZZZZ', { maxActive: 0 });
+    await engram.inferWorkingSession('ZZZZ completely different session ZZZZ', {
+      maxActive: 0,
+    });
 
     // Should have at most 1 active (clamped), not 0
     const sessions = engram.listWorkingSessions();
@@ -216,7 +249,7 @@ describe('Working Memory', () => {
     // SQLite datetime('now', '-0 hours') == now, and updated_at was set moments ago,
     // so updated_at < now should be true (sub-second difference from INSERT time).
     // Small sleep to ensure the timestamp inequality holds.
-    await new Promise(r => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 50));
     const expired = await engram.expireStaleWorkingSessions(0);
 
     expect(expired).toBeGreaterThanOrEqual(1);
@@ -251,13 +284,17 @@ describe('Working Memory', () => {
 
     // Create two sessions with different topics
     await engram.inferWorkingSession('check my email for updates');
-    await engram.inferWorkingSession('ZZZZ plant roses in the garden ZZZZ', { threshold: 0.999 });
+    await engram.inferWorkingSession('ZZZZ plant roses in the garden ZZZZ', {
+      threshold: 0.999,
+    });
 
     const embedding = await engram.embedText('check my email for updates');
     const candidates = engram.findSimilarSessions(embedding);
 
     expect(candidates.length).toBe(2);
-    expect(candidates[0].similarity).toBeGreaterThanOrEqual(candidates[1].similarity);
+    expect(candidates[0].similarity).toBeGreaterThanOrEqual(
+      candidates[1].similarity,
+    );
     // Each candidate has parsed state, not raw JSON
     expect(candidates[0].state).toHaveProperty('id');
     expect(candidates[0].state).toHaveProperty('goal');
@@ -281,8 +318,12 @@ describe('Working Memory', () => {
     engram = await Engram.create(dbPath, { embedder: new MockEmbedder() });
 
     await engram.inferWorkingSession('AAAA first topic alpha');
-    await engram.inferWorkingSession('BBBB second topic beta', { threshold: 0.999 });
-    await engram.inferWorkingSession('CCCC third topic gamma', { threshold: 0.999 });
+    await engram.inferWorkingSession('BBBB second topic beta', {
+      threshold: 0.999,
+    });
+    await engram.inferWorkingSession('CCCC third topic gamma', {
+      threshold: 0.999,
+    });
 
     const embedding = await engram.embedText('first topic');
     const candidates = engram.findSimilarSessions(embedding, 1);
@@ -296,7 +337,10 @@ describe('Working Memory', () => {
 
     const embedding = await engram.embedText('custom session topic');
     const embeddingBuffer = Buffer.from(embedding.buffer);
-    const session = await engram.createWorkingSession('custom session topic', embeddingBuffer);
+    const session = await engram.createWorkingSession(
+      'custom session topic',
+      embeddingBuffer,
+    );
 
     expect(session.id).toMatch(/^wm-/);
     expect(session.goal).toBe('custom session topic');
@@ -317,7 +361,9 @@ describe('Working Memory', () => {
       trustScore: 0.9,
     });
 
-    const result = await engram.inferWorkingSession('plan the Terraform deployment');
+    const result = await engram.inferWorkingSession(
+      'plan the Terraform deployment',
+    );
 
     expect(result.relatedContext).toBeTruthy();
     expect(typeof result.relatedContext).toBe('string');

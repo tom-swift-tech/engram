@@ -33,7 +33,9 @@ export function loadSchema(db: Database.Database): void {
 export function createTestDb(): Database.Database {
   const db = new Database(':memory:');
   try {
-    const vec = require('sqlite-vec') as { load: (db: Database.Database) => void };
+    const vec = require('sqlite-vec') as {
+      load: (db: Database.Database) => void;
+    };
     vec.load(db);
   } catch {
     // sqlite-vec unavailable — semantic search tests will be skipped
@@ -84,7 +86,7 @@ export class MockEmbedder implements EmbeddingProvider {
       vec[i % this.dimensions] += text.charCodeAt(i) / 256;
     }
     const mag = Math.sqrt(vec.reduce((s, v) => s + v * v, 0));
-    return mag > 0 ? new Float32Array(vec.map(v => v / mag)) : vec;
+    return mag > 0 ? new Float32Array(vec.map((v) => v / mag)) : vec;
   }
 }
 
@@ -112,7 +114,10 @@ export class MockGenerator implements GenerationProvider {
 
 /** Wrap a JSON string as a fake Ollama /api/generate response. */
 export function mockOllamaFetch(responseJson: string): typeof globalThis.fetch {
-  return async (_url: string | URL | Request, _init?: RequestInit): Promise<Response> =>
+  return async (
+    _url: string | URL | Request,
+    _init?: RequestInit,
+  ): Promise<Response> =>
     ({
       ok: true,
       status: 200,
@@ -124,11 +129,26 @@ export function mockOllamaFetch(responseJson: string): typeof globalThis.fetch {
 /** Canned entity extraction: Alice → Rust, prefers relation. */
 export const EXTRACTION_RESPONSE = JSON.stringify({
   entities: [
-    { name: 'Alice', canonical_name: 'alice', entity_type: 'person', aliases: [] },
-    { name: 'Rust', canonical_name: 'rust', entity_type: 'technology', aliases: ['rs'] },
+    {
+      name: 'Alice',
+      canonical_name: 'alice',
+      entity_type: 'person',
+      aliases: [],
+    },
+    {
+      name: 'Rust',
+      canonical_name: 'rust',
+      entity_type: 'technology',
+      aliases: ['rs'],
+    },
   ],
   relations: [
-    { source: 'alice', target: 'rust', relation_type: 'prefers', description: 'Alice prefers Rust' },
+    {
+      source: 'alice',
+      target: 'rust',
+      relation_type: 'prefers',
+      description: 'Alice prefers Rust',
+    },
   ],
 });
 

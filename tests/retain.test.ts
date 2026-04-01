@@ -1,7 +1,17 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
-import { retain, retainBatch, processExtractionQueue, getQueueStats } from '../src/retain.js';
-import { createTestDb, MockEmbedder, MockGenerator, mockOllamaFetch, EXTRACTION_RESPONSE } from './helpers.js';
+import {
+  retain,
+  retainBatch,
+  processExtractionQueue,
+  getQueueStats,
+} from '../src/retain.js';
+import {
+  createTestDb,
+  MockEmbedder,
+  MockGenerator,
+  EXTRACTION_RESPONSE,
+} from './helpers.js';
 
 // ---------------------------------------------------------------------------
 // retain()
@@ -11,7 +21,9 @@ describe('retain()', () => {
   let db: Database.Database;
   const embedder = new MockEmbedder();
 
-  beforeEach(() => { db = createTestDb(); });
+  beforeEach(() => {
+    db = createTestDb();
+  });
   afterEach(() => db.close());
 
   it('stores chunk with correct fields', async () => {
@@ -24,7 +36,9 @@ describe('retain()', () => {
     });
 
     expect(result.chunkId).toMatch(/^chk-/);
-    const chunk = db.prepare('SELECT * FROM chunks WHERE id = ?').get(result.chunkId) as any;
+    const chunk = db
+      .prepare('SELECT * FROM chunks WHERE id = ?')
+      .get(result.chunkId) as any;
     expect(chunk.text).toBe('Tom prefers Terraform');
     expect(chunk.memory_type).toBe('world');
     expect(chunk.source_type).toBe('user_stated');
@@ -37,7 +51,9 @@ describe('retain()', () => {
 
   it('stores embedding as a buffer of the correct size', async () => {
     const result = await retain(db, 'test text', embedder);
-    const chunk = db.prepare('SELECT embedding FROM chunks WHERE id = ?').get(result.chunkId) as any;
+    const chunk = db
+      .prepare('SELECT embedding FROM chunks WHERE id = ?')
+      .get(result.chunkId) as any;
     // MockEmbedder dimensions=8, each float32 = 4 bytes → 32 bytes total
     expect(chunk.embedding).toBeInstanceOf(Buffer);
     expect(chunk.embedding.byteLength).toBe(embedder.dimensions * 4);
@@ -45,7 +61,9 @@ describe('retain()', () => {
 
   it('applies default options', async () => {
     const result = await retain(db, 'plain text', embedder);
-    const chunk = db.prepare('SELECT * FROM chunks WHERE id = ?').get(result.chunkId) as any;
+    const chunk = db
+      .prepare('SELECT * FROM chunks WHERE id = ?')
+      .get(result.chunkId) as any;
     expect(chunk.memory_type).toBe('world');
     expect(chunk.source_type).toBe('inferred');
     expect(chunk.trust_score).toBe(0.5);
@@ -56,40 +74,59 @@ describe('retain()', () => {
       eventTime: '2025-01-15T00:00:00Z',
       temporalLabel: 'mid-January 2025',
     });
-    const chunk = db.prepare('SELECT * FROM chunks WHERE id = ?').get(result.chunkId) as any;
+    const chunk = db
+      .prepare('SELECT * FROM chunks WHERE id = ?')
+      .get(result.chunkId) as any;
     expect(chunk.event_time).toBe('2025-01-15T00:00:00Z');
     expect(chunk.temporal_label).toBe('mid-January 2025');
   });
 
   it('queues extraction for world type', async () => {
-    const result = await retain(db, 'hello world', embedder, { memoryType: 'world' });
+    const result = await retain(db, 'hello world', embedder, {
+      memoryType: 'world',
+    });
     expect(result.queued).toBe(true);
-    const row = db.prepare('SELECT * FROM extraction_queue WHERE chunk_id = ?').get(result.chunkId);
+    const row = db
+      .prepare('SELECT * FROM extraction_queue WHERE chunk_id = ?')
+      .get(result.chunkId);
     expect(row).toBeTruthy();
   });
 
   it('queues extraction for experience type', async () => {
-    const result = await retain(db, 'I did a thing', embedder, { memoryType: 'experience' });
+    const result = await retain(db, 'I did a thing', embedder, {
+      memoryType: 'experience',
+    });
     expect(result.queued).toBe(true);
   });
 
   it('does not queue for observation type', async () => {
-    const result = await retain(db, 'observed pattern', embedder, { memoryType: 'observation' });
+    const result = await retain(db, 'observed pattern', embedder, {
+      memoryType: 'observation',
+    });
     expect(result.queued).toBe(false);
     // better-sqlite3 .get() returns undefined (not null) when no row exists
-    const row = db.prepare('SELECT * FROM extraction_queue WHERE chunk_id = ?').get(result.chunkId);
+    const row = db
+      .prepare('SELECT * FROM extraction_queue WHERE chunk_id = ?')
+      .get(result.chunkId);
     expect(row).toBeUndefined();
   });
 
   it('does not queue for opinion type', async () => {
-    const result = await retain(db, 'I believe this', embedder, { memoryType: 'opinion' });
+    const result = await retain(db, 'I believe this', embedder, {
+      memoryType: 'opinion',
+    });
     expect(result.queued).toBe(false);
   });
 
   it('skips queueing when skipExtraction is true', async () => {
-    const result = await retain(db, 'hello', embedder, { memoryType: 'world', skipExtraction: true });
+    const result = await retain(db, 'hello', embedder, {
+      memoryType: 'world',
+      skipExtraction: true,
+    });
     expect(result.queued).toBe(false);
-    const row = db.prepare('SELECT * FROM extraction_queue WHERE chunk_id = ?').get(result.chunkId);
+    const row = db
+      .prepare('SELECT * FROM extraction_queue WHERE chunk_id = ?')
+      .get(result.chunkId);
     expect(row).toBeUndefined();
   });
 
@@ -108,7 +145,9 @@ describe('retain() — deduplication', () => {
   let db: Database.Database;
   const embedder = new MockEmbedder();
 
-  beforeEach(() => { db = createTestDb(); });
+  beforeEach(() => {
+    db = createTestDb();
+  });
   afterEach(() => db.close());
 
   it('exact dedup: retaining identical text returns existing chunk', async () => {
@@ -118,38 +157,56 @@ describe('retain() — deduplication', () => {
     expect(r2.chunkId).toBe(r1.chunkId);
     expect(r2.deduplicated).toBe(true);
 
-    const count = db.prepare('SELECT count(*) as n FROM chunks').get() as { n: number };
+    const count = db.prepare('SELECT count(*) as n FROM chunks').get() as {
+      n: number;
+    };
     expect(count.n).toBe(1);
   });
 
   it('exact dedup: reinforces trust score with the higher value', async () => {
-    const r1 = await retain(db, 'Tom prefers Terraform', embedder, { trustScore: 0.5 });
+    const r1 = await retain(db, 'Tom prefers Terraform', embedder, {
+      trustScore: 0.5,
+    });
     await retain(db, 'Tom prefers Terraform', embedder, { trustScore: 0.9 });
 
-    const chunk = db.prepare('SELECT trust_score FROM chunks WHERE id = ?').get(r1.chunkId) as any;
+    const chunk = db
+      .prepare('SELECT trust_score FROM chunks WHERE id = ?')
+      .get(r1.chunkId) as any;
     expect(chunk.trust_score).toBe(0.9);
   });
 
   it('dedupMode none: always creates new chunks', async () => {
     await retain(db, 'Tom prefers Terraform', embedder, { dedupMode: 'none' });
-    const r2 = await retain(db, 'Tom prefers Terraform', embedder, { dedupMode: 'none' });
+    const r2 = await retain(db, 'Tom prefers Terraform', embedder, {
+      dedupMode: 'none',
+    });
 
     expect(r2.deduplicated).toBeUndefined();
-    const count = db.prepare('SELECT count(*) as n FROM chunks').get() as { n: number };
+    const count = db.prepare('SELECT count(*) as n FROM chunks').get() as {
+      n: number;
+    };
     expect(count.n).toBe(2);
   });
 
   it('dedupMode normalized: deduplicates despite case/whitespace differences', async () => {
-    const r1 = await retain(db, 'Tom prefers Terraform', embedder, { dedupMode: 'normalized' });
-    const r2 = await retain(db, '  tom prefers terraform  ', embedder, { dedupMode: 'normalized' });
+    const r1 = await retain(db, 'Tom prefers Terraform', embedder, {
+      dedupMode: 'normalized',
+    });
+    const r2 = await retain(db, '  tom prefers terraform  ', embedder, {
+      dedupMode: 'normalized',
+    });
 
     expect(r2.chunkId).toBe(r1.chunkId);
     expect(r2.deduplicated).toBe(true);
   });
 
   it('dedupMode normalized: deduplicates despite internal whitespace differences', async () => {
-    const r1 = await retain(db, 'Tom  prefers   Terraform', embedder, { dedupMode: 'normalized' });
-    const r2 = await retain(db, 'tom prefers terraform', embedder, { dedupMode: 'normalized' });
+    const r1 = await retain(db, 'Tom  prefers   Terraform', embedder, {
+      dedupMode: 'normalized',
+    });
+    const r2 = await retain(db, 'tom prefers terraform', embedder, {
+      dedupMode: 'normalized',
+    });
 
     expect(r2.chunkId).toBe(r1.chunkId);
     expect(r2.deduplicated).toBe(true);
@@ -160,7 +217,9 @@ describe('retain() — deduplication', () => {
     const r2 = await retain(db, 'Tom prefers Pulumi', embedder);
 
     expect(r1.chunkId).not.toBe(r2.chunkId);
-    const count = db.prepare('SELECT count(*) as n FROM chunks').get() as { n: number };
+    const count = db.prepare('SELECT count(*) as n FROM chunks').get() as {
+      n: number;
+    };
     expect(count.n).toBe(2);
   });
 });
@@ -174,14 +233,20 @@ describe('retainBatch()', () => {
     const db = createTestDb();
     const embedder = new MockEmbedder();
 
-    const results = await retainBatch(db, [
-      { text: 'first', options: { memoryType: 'world' } },
-      { text: 'second', options: { memoryType: 'world' } },
-      { text: 'third', options: { memoryType: 'world' } },
-    ], embedder);
+    const results = await retainBatch(
+      db,
+      [
+        { text: 'first', options: { memoryType: 'world' } },
+        { text: 'second', options: { memoryType: 'world' } },
+        { text: 'third', options: { memoryType: 'world' } },
+      ],
+      embedder,
+    );
 
     expect(results).toHaveLength(3);
-    const count = db.prepare('SELECT count(*) as n FROM chunks').get() as { n: number };
+    const count = db.prepare('SELECT count(*) as n FROM chunks').get() as {
+      n: number;
+    };
     expect(count.n).toBe(3);
     db.close();
   });
@@ -191,11 +256,18 @@ describe('retainBatch()', () => {
     const embedder = new MockEmbedder();
     const progress: Array<[number, number]> = [];
 
-    await retainBatch(db, [
-      { text: 'a' }, { text: 'b' }, { text: 'c' },
-    ], embedder, (current, total) => progress.push([current, total]));
+    await retainBatch(
+      db,
+      [{ text: 'a' }, { text: 'b' }, { text: 'c' }],
+      embedder,
+      (current, total) => progress.push([current, total]),
+    );
 
-    expect(progress).toEqual([[1, 3], [2, 3], [3, 3]]);
+    expect(progress).toEqual([
+      [1, 3],
+      [2, 3],
+      [3, 3],
+    ]);
     db.close();
   });
 
@@ -203,13 +275,19 @@ describe('retainBatch()', () => {
     const db = createTestDb();
     const embedder = new MockEmbedder();
 
-    await retainBatch(db, [
-      { text: 'world fact', options: { memoryType: 'world' } },
-      { text: 'my experience', options: { memoryType: 'experience' } },
-      { text: 'observed pattern', options: { memoryType: 'observation' } },
-    ], embedder);
+    await retainBatch(
+      db,
+      [
+        { text: 'world fact', options: { memoryType: 'world' } },
+        { text: 'my experience', options: { memoryType: 'experience' } },
+        { text: 'observed pattern', options: { memoryType: 'observation' } },
+      ],
+      embedder,
+    );
 
-    const count = db.prepare('SELECT count(*) as n FROM extraction_queue').get() as { n: number };
+    const count = db
+      .prepare('SELECT count(*) as n FROM extraction_queue')
+      .get() as { n: number };
     expect(count.n).toBe(2);
     db.close();
   });
@@ -235,8 +313,8 @@ describe('processExtractionQueue()', () => {
 
     // Entities created (by Tier 1 CPU + Tier 2 LLM)
     const entities = db.prepare('SELECT * FROM entities').all() as any[];
-    expect(entities.some(e => e.canonical_name === 'alice')).toBe(true);
-    expect(entities.some(e => e.canonical_name === 'rust')).toBe(true);
+    expect(entities.some((e) => e.canonical_name === 'alice')).toBe(true);
+    expect(entities.some((e) => e.canonical_name === 'rust')).toBe(true);
 
     // Relation created
     const relations = db.prepare('SELECT * FROM relations').all() as any[];
@@ -247,7 +325,9 @@ describe('processExtractionQueue()', () => {
     expect(links.length).toBeGreaterThan(0);
 
     // Queue item marked complete
-    const queued = db.prepare("SELECT status FROM extraction_queue LIMIT 1").get() as any;
+    const queued = db
+      .prepare('SELECT status FROM extraction_queue LIMIT 1')
+      .get() as any;
     expect(queued.status).toBe('completed');
 
     db.close();
@@ -258,14 +338,18 @@ describe('processExtractionQueue()', () => {
     const embedder = new MockEmbedder();
     const failGen: import('../src/generation.js').GenerationProvider = {
       name: 'mock/fail',
-      generate: async () => { throw new Error('generation error'); },
+      generate: async () => {
+        throw new Error('generation error');
+      },
     };
 
     await retain(db, 'some text', embedder, { memoryType: 'world' });
     const result = await processExtractionQueue(db, failGen);
 
     expect(result.failed).toBe(1);
-    const queued = db.prepare("SELECT status, attempts FROM extraction_queue LIMIT 1").get() as any;
+    const queued = db
+      .prepare('SELECT status, attempts FROM extraction_queue LIMIT 1')
+      .get() as any;
     // First failure: status back to 'pending' so it can be retried
     expect(queued.status).toBe('pending');
     expect(queued.attempts).toBe(1);
@@ -277,10 +361,14 @@ describe('processExtractionQueue()', () => {
     const embedder = new MockEmbedder();
     const failGen: import('../src/generation.js').GenerationProvider = {
       name: 'mock/fail',
-      generate: async () => { throw new Error('generation error'); },
+      generate: async () => {
+        throw new Error('generation error');
+      },
     };
 
-    await retain(db, 'retry exhaustion text', embedder, { memoryType: 'world' });
+    await retain(db, 'retry exhaustion text', embedder, {
+      memoryType: 'world',
+    });
 
     // Run 3 times — clear backoff window between each to simulate time passing
     await processExtractionQueue(db, failGen);
@@ -290,7 +378,9 @@ describe('processExtractionQueue()', () => {
     const thirdResult = await processExtractionQueue(db, failGen);
 
     expect(thirdResult.failed).toBe(1);
-    const queued = db.prepare("SELECT status, attempts FROM extraction_queue LIMIT 1").get() as any;
+    const queued = db
+      .prepare('SELECT status, attempts FROM extraction_queue LIMIT 1')
+      .get() as any;
     expect(queued.attempts).toBe(3);
     expect(queued.status).toBe('failed');
     db.close();
@@ -301,14 +391,18 @@ describe('processExtractionQueue()', () => {
     const embedder = new MockEmbedder();
     const failGen: import('../src/generation.js').GenerationProvider = {
       name: 'mock/fail',
-      generate: async () => { throw new Error('generation error'); },
+      generate: async () => {
+        throw new Error('generation error');
+      },
     };
 
     await retain(db, 'backoff test text', embedder, { memoryType: 'world' });
 
     // First call fails and sets a backoff window
     await processExtractionQueue(db, failGen);
-    const queued = db.prepare("SELECT status, next_retry_after FROM extraction_queue LIMIT 1").get() as any;
+    const queued = db
+      .prepare('SELECT status, next_retry_after FROM extraction_queue LIMIT 1')
+      .get() as any;
     expect(queued.status).toBe('pending');
     expect(queued.next_retry_after).toBeTruthy();
 
@@ -334,8 +428,12 @@ describe('processExtractionQueue()', () => {
     const embedder = new MockEmbedder();
     const generator = new MockGenerator(EXTRACTION_RESPONSE);
 
-    const retained = await retain(db, 'Alice prefers Rust', embedder, { memoryType: 'world' });
-    db.prepare(`UPDATE chunks SET is_active = FALSE WHERE id = ?`).run(retained.chunkId);
+    const retained = await retain(db, 'Alice prefers Rust', embedder, {
+      memoryType: 'world',
+    });
+    db.prepare(`UPDATE chunks SET is_active = FALSE WHERE id = ?`).run(
+      retained.chunkId,
+    );
 
     const result = await processExtractionQueue(db, generator);
     expect(result.processed).toBe(0);

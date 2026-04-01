@@ -17,7 +17,7 @@ describe('extractEntitiesCpu', () => {
   /** Insert a chunk so foreign key constraints are satisfied. */
   function insertChunk(chunkId: string, text: string): void {
     db.prepare(
-      `INSERT INTO chunks (id, text, memory_type) VALUES (?, ?, 'world')`
+      `INSERT INTO chunks (id, text, memory_type) VALUES (?, ?, 'world')`,
     ).run(chunkId, text);
   }
 
@@ -28,7 +28,7 @@ describe('extractEntitiesCpu', () => {
   it('links chunk to pre-existing entity via graph matching', () => {
     db.prepare(
       `INSERT INTO entities (id, name, canonical_name, entity_type, aliases)
-       VALUES ('ent-terraform', 'Terraform', 'terraform', 'technology', '[]')`
+       VALUES ('ent-terraform', 'Terraform', 'terraform', 'technology', '[]')`,
     ).run();
 
     const chunkId = 'chk-graph-1';
@@ -39,9 +39,11 @@ describe('extractEntitiesCpu', () => {
 
     expect(result.entitiesLinked).toBeGreaterThanOrEqual(1);
 
-    const link = db.prepare(
-      `SELECT * FROM chunk_entities WHERE chunk_id = ? AND entity_id = 'ent-terraform'`
-    ).get(chunkId);
+    const link = db
+      .prepare(
+        `SELECT * FROM chunk_entities WHERE chunk_id = ? AND entity_id = 'ent-terraform'`,
+      )
+      .get(chunkId);
     expect(link).toBeTruthy();
   });
 
@@ -56,14 +58,14 @@ describe('extractEntitiesCpu', () => {
     const text = 'We asked Tom about Terraform today';
     insertChunk(chunkId, text);
 
-    const result = extractEntitiesCpu(db, chunkId, text);
+    extractEntitiesCpu(db, chunkId, text);
 
-    const tom = db.prepare(
-      `SELECT * FROM entities WHERE canonical_name = 'tom'`
-    ).get() as any;
-    const terraform = db.prepare(
-      `SELECT * FROM entities WHERE canonical_name = 'terraform'`
-    ).get() as any;
+    const tom = db
+      .prepare(`SELECT * FROM entities WHERE canonical_name = 'tom'`)
+      .get() as any;
+    const terraform = db
+      .prepare(`SELECT * FROM entities WHERE canonical_name = 'terraform'`)
+      .get() as any;
 
     expect(tom).toBeTruthy();
     expect(terraform).toBeTruthy();
@@ -78,14 +80,14 @@ describe('extractEntitiesCpu', () => {
     const text = 'using better-sqlite3 with sqlite-vec';
     insertChunk(chunkId, text);
 
-    const result = extractEntitiesCpu(db, chunkId, text);
+    extractEntitiesCpu(db, chunkId, text);
 
-    const betterSqlite = db.prepare(
-      `SELECT * FROM entities WHERE canonical_name = 'better-sqlite3'`
-    ).get() as any;
-    const sqliteVec = db.prepare(
-      `SELECT * FROM entities WHERE canonical_name = 'sqlite-vec'`
-    ).get() as any;
+    const betterSqlite = db
+      .prepare(`SELECT * FROM entities WHERE canonical_name = 'better-sqlite3'`)
+      .get() as any;
+    const sqliteVec = db
+      .prepare(`SELECT * FROM entities WHERE canonical_name = 'sqlite-vec'`)
+      .get() as any;
 
     expect(betterSqlite).toBeTruthy();
     expect(betterSqlite?.entity_type).toBe('technology');
@@ -99,8 +101,12 @@ describe('extractEntitiesCpu', () => {
 
   it('creates relation for "X uses Y"', () => {
     // Pre-create entities so relation template can find them
-    db.prepare(`INSERT INTO entities (id, name, canonical_name, entity_type, aliases) VALUES ('ent-tom', 'Tom', 'tom', 'person', '[]')`).run();
-    db.prepare(`INSERT INTO entities (id, name, canonical_name, entity_type, aliases) VALUES ('ent-terraform', 'Terraform', 'terraform', 'technology', '[]')`).run();
+    db.prepare(
+      `INSERT INTO entities (id, name, canonical_name, entity_type, aliases) VALUES ('ent-tom', 'Tom', 'tom', 'person', '[]')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO entities (id, name, canonical_name, entity_type, aliases) VALUES ('ent-terraform', 'Terraform', 'terraform', 'technology', '[]')`,
+    ).run();
 
     const chunkId = 'chk-rel-uses';
     const text = 'Tom uses Terraform';
@@ -110,9 +116,9 @@ describe('extractEntitiesCpu', () => {
 
     expect(result.relationsCreated).toBeGreaterThanOrEqual(1);
 
-    const rel = db.prepare(
-      `SELECT * FROM relations WHERE relation_type = 'uses'`
-    ).get() as any;
+    const rel = db
+      .prepare(`SELECT * FROM relations WHERE relation_type = 'uses'`)
+      .get() as any;
     expect(rel).toBeTruthy();
   });
 
@@ -122,8 +128,12 @@ describe('extractEntitiesCpu', () => {
 
   it('creates relation for "X prefers Y"', () => {
     // Pre-create entities
-    db.prepare(`INSERT INTO entities (id, name, canonical_name, entity_type, aliases) VALUES ('ent-tom', 'Tom', 'tom', 'person', '[]')`).run();
-    db.prepare(`INSERT INTO entities (id, name, canonical_name, entity_type, aliases) VALUES ('ent-sqlite', 'Sqlite', 'sqlite', 'technology', '[]')`).run();
+    db.prepare(
+      `INSERT INTO entities (id, name, canonical_name, entity_type, aliases) VALUES ('ent-tom', 'Tom', 'tom', 'person', '[]')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO entities (id, name, canonical_name, entity_type, aliases) VALUES ('ent-sqlite', 'Sqlite', 'sqlite', 'technology', '[]')`,
+    ).run();
 
     const chunkId = 'chk-rel-prefers';
     const text = 'Tom prefers Sqlite';
@@ -133,9 +143,9 @@ describe('extractEntitiesCpu', () => {
 
     expect(result.relationsCreated).toBeGreaterThanOrEqual(1);
 
-    const rel = db.prepare(
-      `SELECT * FROM relations WHERE relation_type = 'prefers'`
-    ).get() as any;
+    const rel = db
+      .prepare(`SELECT * FROM relations WHERE relation_type = 'prefers'`)
+      .get() as any;
     expect(rel).toBeTruthy();
   });
 
@@ -145,8 +155,12 @@ describe('extractEntitiesCpu', () => {
 
   it('creates relation for "X switched to Y"', () => {
     // Pre-create entities
-    db.prepare(`INSERT INTO entities (id, name, canonical_name, entity_type, aliases) VALUES ('ent-tom', 'Tom', 'tom', 'person', '[]')`).run();
-    db.prepare(`INSERT INTO entities (id, name, canonical_name, entity_type, aliases) VALUES ('ent-pulumi', 'Pulumi', 'pulumi', 'technology', '[]')`).run();
+    db.prepare(
+      `INSERT INTO entities (id, name, canonical_name, entity_type, aliases) VALUES ('ent-tom', 'Tom', 'tom', 'person', '[]')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO entities (id, name, canonical_name, entity_type, aliases) VALUES ('ent-pulumi', 'Pulumi', 'pulumi', 'technology', '[]')`,
+    ).run();
 
     const chunkId = 'chk-rel-switched';
     const text = 'Tom switched to Pulumi';
@@ -164,7 +178,7 @@ describe('extractEntitiesCpu', () => {
   it('matches entities case-insensitively', () => {
     db.prepare(
       `INSERT INTO entities (id, name, canonical_name, entity_type, aliases)
-       VALUES ('ent-terraform', 'Terraform', 'terraform', 'technology', '[]')`
+       VALUES ('ent-terraform', 'Terraform', 'terraform', 'technology', '[]')`,
     ).run();
 
     const chunkId = 'chk-case-1';
@@ -175,9 +189,11 @@ describe('extractEntitiesCpu', () => {
 
     expect(result.entitiesLinked).toBeGreaterThanOrEqual(1);
 
-    const link = db.prepare(
-      `SELECT * FROM chunk_entities WHERE chunk_id = ? AND entity_id = 'ent-terraform'`
-    ).get(chunkId);
+    const link = db
+      .prepare(
+        `SELECT * FROM chunk_entities WHERE chunk_id = ? AND entity_id = 'ent-terraform'`,
+      )
+      .get(chunkId);
     expect(link).toBeTruthy();
   });
 
@@ -193,9 +209,9 @@ describe('extractEntitiesCpu', () => {
     extractEntitiesCpu(db, chunkId, text);
 
     // "The" should never be an entity
-    const theEntity = db.prepare(
-      `SELECT * FROM entities WHERE canonical_name = 'the'`
-    ).get();
+    const theEntity = db
+      .prepare(`SELECT * FROM entities WHERE canonical_name = 'the'`)
+      .get();
     expect(theEntity).toBeUndefined();
   });
 
@@ -210,24 +226,30 @@ describe('extractEntitiesCpu', () => {
     insertChunk(chunkId1, text);
     extractEntitiesCpu(db, chunkId1, text);
 
-    const afterFirst = db.prepare(
-      `SELECT mention_count FROM entities WHERE canonical_name = 'terraform'`
-    ).get() as any;
+    const afterFirst = db
+      .prepare(
+        `SELECT mention_count FROM entities WHERE canonical_name = 'terraform'`,
+      )
+      .get() as any;
     const firstCount = afterFirst?.mention_count ?? 0;
 
     const chunkId2 = 'chk-dedup-2';
     insertChunk(chunkId2, text);
     extractEntitiesCpu(db, chunkId2, text);
 
-    const afterSecond = db.prepare(
-      `SELECT mention_count FROM entities WHERE canonical_name = 'terraform'`
-    ).get() as any;
+    const afterSecond = db
+      .prepare(
+        `SELECT mention_count FROM entities WHERE canonical_name = 'terraform'`,
+      )
+      .get() as any;
     expect(afterSecond.mention_count).toBeGreaterThan(firstCount);
 
     // Should still be exactly one entity row for terraform
-    const count = db.prepare(
-      `SELECT COUNT(*) as cnt FROM entities WHERE canonical_name = 'terraform'`
-    ).get() as any;
+    const count = db
+      .prepare(
+        `SELECT COUNT(*) as cnt FROM entities WHERE canonical_name = 'terraform'`,
+      )
+      .get() as any;
     expect(count.cnt).toBe(1);
   });
 
@@ -253,7 +275,7 @@ describe('extractEntitiesCpu', () => {
     // Seed 50 entities
     const insert = db.prepare(
       `INSERT INTO entities (id, name, canonical_name, entity_type, aliases)
-       VALUES (?, ?, ?, 'technology', '[]')`
+       VALUES (?, ?, ?, 'technology', '[]')`,
     );
     for (let i = 0; i < 50; i++) {
       const name = `tech-entity-${i}`;
@@ -261,7 +283,8 @@ describe('extractEntitiesCpu', () => {
     }
 
     const chunkId = 'chk-perf-1';
-    const text = 'This is a moderately long text about tech-entity-7 and tech-entity-42 that should be processed quickly by the CPU extractor';
+    const text =
+      'This is a moderately long text about tech-entity-7 and tech-entity-42 that should be processed quickly by the CPU extractor';
     insertChunk(chunkId, text);
 
     const start = performance.now();

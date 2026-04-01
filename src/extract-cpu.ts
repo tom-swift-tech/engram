@@ -23,20 +23,85 @@ import { randomUUID } from 'crypto';
 
 /** Common English words that appear capitalized at sentence boundaries */
 const COMMON_WORDS = new Set([
-  'the', 'this', 'that', 'these', 'those', 'what', 'which', 'who', 'whom',
-  'when', 'where', 'how', 'why', 'also', 'just', 'only', 'very', 'much',
-  'some', 'many', 'most', 'such', 'each', 'every', 'both', 'few', 'more',
-  'other', 'another', 'still', 'already', 'here', 'there', 'then', 'now',
-  'after', 'before', 'since', 'while', 'because', 'although', 'however',
-  'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
-  'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august',
-  'september', 'october', 'november', 'december',
+  'the',
+  'this',
+  'that',
+  'these',
+  'those',
+  'what',
+  'which',
+  'who',
+  'whom',
+  'when',
+  'where',
+  'how',
+  'why',
+  'also',
+  'just',
+  'only',
+  'very',
+  'much',
+  'some',
+  'many',
+  'most',
+  'such',
+  'each',
+  'every',
+  'both',
+  'few',
+  'more',
+  'other',
+  'another',
+  'still',
+  'already',
+  'here',
+  'there',
+  'then',
+  'now',
+  'after',
+  'before',
+  'since',
+  'while',
+  'because',
+  'although',
+  'however',
+  'monday',
+  'tuesday',
+  'wednesday',
+  'thursday',
+  'friday',
+  'saturday',
+  'sunday',
+  'january',
+  'february',
+  'march',
+  'april',
+  'may',
+  'june',
+  'july',
+  'august',
+  'september',
+  'october',
+  'november',
+  'december',
 ]);
 
 /** Words to skip in technical term detection */
 const STOP_WORDS = new Set([
-  'the', 'and', 'for', 'with', 'not', 'but', 'this', 'that',
-  'http', 'https', 'www', 'com', 'org', 'net',
+  'the',
+  'and',
+  'for',
+  'with',
+  'not',
+  'but',
+  'this',
+  'that',
+  'http',
+  'https',
+  'www',
+  'com',
+  'org',
+  'net',
 ]);
 
 // =============================================================================
@@ -51,7 +116,7 @@ function upsertEntity(
     canonical_name: string;
     entity_type: string;
     aliases?: string[];
-  }
+  },
 ): void {
   const stmt = db.prepare(`
     INSERT INTO entities (id, name, canonical_name, entity_type, aliases, trust_score, source_type, mention_count)
@@ -73,7 +138,7 @@ function upsertEntity(
 function linkChunkEntity(
   db: Database.Database,
   chunkId: string,
-  entityId: string
+  entityId: string,
 ): void {
   const stmt = db.prepare(`
     INSERT OR IGNORE INTO chunk_entities (chunk_id, entity_id, mention_type)
@@ -95,11 +160,13 @@ function bumpEntityMention(db: Database.Database, entityId: string): void {
 
 function findEntity(
   db: Database.Database,
-  canonical: string
+  canonical: string,
 ): string | undefined {
-  const row = db.prepare(
-    `SELECT id FROM entities WHERE canonical_name = ? AND is_active = TRUE`
-  ).get(canonical) as { id: string } | undefined;
+  const row = db
+    .prepare(
+      `SELECT id FROM entities WHERE canonical_name = ? AND is_active = TRUE`,
+    )
+    .get(canonical) as { id: string } | undefined;
   return row?.id;
 }
 
@@ -112,7 +179,7 @@ function createRelation(
     description: string;
     sourceChunkId: string;
     confidence: number;
-  }
+  },
 ): boolean {
   try {
     const stmt = db.prepare(`
@@ -143,29 +210,37 @@ function strategyGraphMatching(
   db: Database.Database,
   chunkId: string,
   text: string,
-  linked: Set<string>
+  linked: Set<string>,
 ): number {
   let count = 0;
   const textLower = text.toLowerCase();
 
   // Canonical name matching — push substring search into SQLite
-  const byName = db.prepare(`
+  const byName = db
+    .prepare(
+      `
     SELECT id FROM entities
     WHERE is_active = TRUE
       AND LENGTH(canonical_name) > 2
       AND INSTR(?, canonical_name) > 0
-  `).all(textLower) as { id: string }[];
+  `,
+    )
+    .all(textLower) as { id: string }[];
 
   // Alias matching — json_each unpacks the aliases array in SQL
-  const byAlias = db.prepare(`
+  const byAlias = db
+    .prepare(
+      `
     SELECT DISTINCT e.id
     FROM entities e, json_each(e.aliases) AS a
     WHERE e.is_active = TRUE
       AND LENGTH(a.value) > 2
       AND INSTR(?, LOWER(a.value)) > 0
-  `).all(textLower) as { id: string }[];
+  `,
+    )
+    .all(textLower) as { id: string }[];
 
-  const matched = new Set([...byName, ...byAlias].map(r => r.id));
+  const matched = new Set([...byName, ...byAlias].map((r) => r.id));
   for (const id of matched) {
     if (linked.has(id)) continue;
     linkChunkEntity(db, chunkId, id);
@@ -185,7 +260,7 @@ function strategyProperNouns(
   db: Database.Database,
   chunkId: string,
   text: string,
-  linked: Set<string>
+  linked: Set<string>,
 ): number {
   let count = 0;
   const words = text.split(/\s+/);
@@ -228,26 +303,26 @@ function strategyTechnicalTerms(
   db: Database.Database,
   chunkId: string,
   text: string,
-  linked: Set<string>
+  linked: Set<string>,
 ): number {
   let count = 0;
   const terms = new Set<string>();
 
   // camelCase: e.g. fetchData, getElementById
   const camelCase = text.match(/\b[a-z]+[A-Z][a-zA-Z]+\b/g);
-  if (camelCase) camelCase.forEach(t => terms.add(t));
+  if (camelCase) camelCase.forEach((t) => terms.add(t));
 
   // kebab-case: e.g. my-component, vue-router, better-sqlite3
   const kebab = text.match(/\b[a-z]+-[a-z0-9]+(?:-[a-z0-9]+)*\b/g);
-  if (kebab) kebab.forEach(t => terms.add(t));
+  if (kebab) kebab.forEach((t) => terms.add(t));
 
   // dotted paths: e.g. process.env, console.log, @xenova/transformers
   const dotted = text.match(/\b[A-Za-z][\w]*\.[A-Za-z][\w.]*\b/g);
-  if (dotted) dotted.forEach(t => terms.add(t));
+  if (dotted) dotted.forEach((t) => terms.add(t));
 
   // version strings: e.g. v1.2.3, 3.11
   const versions = text.match(/\bv?\d+\.\d+(?:\.\d+)?\b/g);
-  if (versions) versions.forEach(t => terms.add(t));
+  if (versions) versions.forEach((t) => terms.add(t));
 
   for (const term of terms) {
     if (term.length < 3) continue;
@@ -283,18 +358,42 @@ interface RelationTemplate {
 }
 
 const RELATION_TEMPLATES: RelationTemplate[] = [
-  { pattern: /([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+(?:uses|using)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/g, relationType: 'uses' },
-  { pattern: /([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+(?:prefers?)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/g, relationType: 'prefers' },
-  { pattern: /([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+(?:owns)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/g, relationType: 'owns' },
-  { pattern: /([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+(?:switched\s+to)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/g, relationType: 'prefers' },
-  { pattern: /([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+(?:depends\s+on|built\s+on|runs\s+on)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/g, relationType: 'depends_on' },
-  { pattern: /([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+(?:is\s+an?)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/g, relationType: 'related_to' },
+  {
+    pattern:
+      /([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+(?:uses|using)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/g,
+    relationType: 'uses',
+  },
+  {
+    pattern:
+      /([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+(?:prefers?)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/g,
+    relationType: 'prefers',
+  },
+  {
+    pattern:
+      /([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+(?:owns)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/g,
+    relationType: 'owns',
+  },
+  {
+    pattern:
+      /([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+(?:switched\s+to)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/g,
+    relationType: 'prefers',
+  },
+  {
+    pattern:
+      /([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+(?:depends\s+on|built\s+on|runs\s+on)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/g,
+    relationType: 'depends_on',
+  },
+  {
+    pattern:
+      /([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+(?:is\s+an?)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/g,
+    relationType: 'related_to',
+  },
 ];
 
 function strategyRelationTemplates(
   db: Database.Database,
   chunkId: string,
-  text: string
+  text: string,
 ): number {
   let count = 0;
 
@@ -346,7 +445,7 @@ function strategyRelationTemplates(
 export function extractEntitiesCpu(
   db: Database.Database,
   chunkId: string,
-  text: string
+  text: string,
 ): { entitiesLinked: number; relationsCreated: number } {
   const linked = new Set<string>();
 

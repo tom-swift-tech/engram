@@ -20,7 +20,11 @@ describe('Engram', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
-    try { engram?.close(); } catch { /* already closed */ }
+    try {
+      engram?.close();
+    } catch {
+      /* already closed */
+    }
     engram = undefined;
     cleanupDb(dbPath);
   });
@@ -78,10 +82,13 @@ describe('Engram', () => {
     dbPath = tmpDbPath();
     engram = await Engram.create(dbPath, { embedder: new MockEmbedder() });
 
-    const r = await engram.retain('Alice prefers Rust for systems programming', {
-      memoryType: 'world',
-      trustScore: 0.9,
-    });
+    const r = await engram.retain(
+      'Alice prefers Rust for systems programming',
+      {
+        memoryType: 'world',
+        trustScore: 0.9,
+      },
+    );
     expect(r.chunkId).toMatch(/^chk-/);
 
     const response = await engram.recall('Alice Rust', {
@@ -114,9 +121,16 @@ describe('Engram', () => {
     vi.stubGlobal('fetch', async (url: string | URL | Request) => {
       const urlStr = url.toString();
       if (urlStr.includes('/api/embed')) {
-        return { ok: true, json: async () => ({ embeddings: [new Array(768).fill(0.1)] }) } as unknown as Response;
+        return {
+          ok: true,
+          json: async () => ({ embeddings: [new Array(768).fill(0.1)] }),
+        } as unknown as Response;
       }
-      return { ok: true, json: async () => ({ response: EXTRACTION_RESPONSE }), text: async () => '' } as unknown as Response;
+      return {
+        ok: true,
+        json: async () => ({ response: EXTRACTION_RESPONSE }),
+        text: async () => '',
+      } as unknown as Response;
     });
 
     await engram.retain('Alice prefers Rust', { memoryType: 'world' });
@@ -136,7 +150,9 @@ describe('Engram', () => {
     // Add enough facts to cross the minFactsThreshold (default: 5)
     for (let i = 0; i < 5; i++) {
       await engram.retain(`Alice prefers Rust — fact ${i}`, {
-        memoryType: 'world', sourceType: 'user_stated', trustScore: 0.8,
+        memoryType: 'world',
+        sourceType: 'user_stated',
+        trustScore: 0.8,
       });
     }
 
@@ -169,21 +185,26 @@ describe('Engram', () => {
     engram = await Engram.create(dbPath, { embedder: new MockEmbedder() });
 
     const r = await engram.retain('Tom prefers Terraform for homelab', {
-      memoryType: 'world', trustScore: 0.9,
+      memoryType: 'world',
+      trustScore: 0.9,
     });
 
     const forgotten = await engram.forget(r.chunkId);
     expect(forgotten).toBe(true);
 
     const db = new Database(dbPath);
-    const queueRow = db.prepare('SELECT status, error FROM extraction_queue WHERE chunk_id = ?').get(r.chunkId) as any;
+    const queueRow = db
+      .prepare('SELECT status, error FROM extraction_queue WHERE chunk_id = ?')
+      .get(r.chunkId) as any;
     db.close();
     expect(queueRow.status).toBe('completed');
     expect(queueRow.error).toContain('deactivated');
 
     // Should not appear in recall
-    const response = await engram.recall('Terraform homelab', { strategies: ['keyword'] });
-    expect(response.results.some(res => res.id === r.chunkId)).toBe(false);
+    const response = await engram.recall('Terraform homelab', {
+      strategies: ['keyword'],
+    });
+    expect(response.results.some((res) => res.id === r.chunkId)).toBe(false);
   });
 
   it('forget() returns false for a non-existent chunk ID', async () => {
@@ -198,20 +219,30 @@ describe('Engram', () => {
     dbPath = tmpDbPath();
     engram = await Engram.create(dbPath, { embedder: new MockEmbedder() });
 
-    const old = await engram.retain('Tom prefers Terraform', { memoryType: 'world', trustScore: 0.9 });
-    const newResult = await engram.supersede(old.chunkId, 'Tom switched to Pulumi', {
-      memoryType: 'world', trustScore: 0.9,
+    const old = await engram.retain('Tom prefers Terraform', {
+      memoryType: 'world',
+      trustScore: 0.9,
     });
+    const newResult = await engram.supersede(
+      old.chunkId,
+      'Tom switched to Pulumi',
+      {
+        memoryType: 'world',
+        trustScore: 0.9,
+      },
+    );
 
     expect(newResult.chunkId).not.toBe(old.chunkId);
 
     // New chunk is findable; old chunk (is_active=FALSE) does not appear
     const pulumi = await engram.recall('Pulumi', { strategies: ['keyword'] });
-    expect(pulumi.results.some(r => r.id === newResult.chunkId)).toBe(true);
+    expect(pulumi.results.some((r) => r.id === newResult.chunkId)).toBe(true);
 
     // Old chunk is excluded even when searching for its exact content
-    const terraform = await engram.recall('Terraform', { strategies: ['keyword'] });
-    expect(terraform.results.some(r => r.id === old.chunkId)).toBe(false);
+    const terraform = await engram.recall('Terraform', {
+      strategies: ['keyword'],
+    });
+    expect(terraform.results.some((r) => r.id === old.chunkId)).toBe(false);
   });
 
   it('forgetBySource() deactivates all matching chunks', async () => {
@@ -227,20 +258,28 @@ describe('Engram', () => {
     expect(count).toBe(2);
 
     const db = new Database(dbPath);
-    const queueRows = db.prepare(`
+    const queueRows = db
+      .prepare(
+        `
       SELECT status, error
       FROM extraction_queue eq
       JOIN chunks c ON c.id = eq.chunk_id
       WHERE c.source = 'session:aaa'
-    `).all() as any[];
+    `,
+      )
+      .all() as any[];
     db.close();
     expect(queueRows).toHaveLength(2);
-    expect(queueRows.every(row => row.status === 'completed')).toBe(true);
-    expect(queueRows.every(row => String(row.error).includes('deactivated'))).toBe(true);
+    expect(queueRows.every((row) => row.status === 'completed')).toBe(true);
+    expect(
+      queueRows.every((row) => String(row.error).includes('deactivated')),
+    ).toBe(true);
 
     // Session B chunk should still appear in recall
-    const response = await engram.recall('session', { strategies: ['keyword'] });
-    expect(response.results.some(r => r.source?.includes('bbb'))).toBe(true);
-    expect(response.results.some(r => r.source?.includes('aaa'))).toBe(false);
+    const response = await engram.recall('session', {
+      strategies: ['keyword'],
+    });
+    expect(response.results.some((r) => r.source?.includes('bbb'))).toBe(true);
+    expect(response.results.some((r) => r.source?.includes('aaa'))).toBe(false);
   });
 });

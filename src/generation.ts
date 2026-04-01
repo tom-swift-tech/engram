@@ -80,7 +80,7 @@ export class OllamaGeneration implements GenerationProvider {
       throw new Error(`Ollama generation failed (${res.status}): ${text}`);
     }
 
-    const data = await res.json() as { response: string };
+    const data = (await res.json()) as { response: string };
     return data.response;
   }
 }
@@ -133,10 +133,12 @@ export class OpenAICompatibleGeneration implements GenerationProvider {
 
     if (!res.ok) {
       const text = await res.text();
-      throw new Error(`OpenAI-compatible generation failed (${res.status}): ${text}`);
+      throw new Error(
+        `OpenAI-compatible generation failed (${res.status}): ${text}`,
+      );
     }
 
-    const data = await res.json() as {
+    const data = (await res.json()) as {
       choices: Array<{ message: { content: string } }>;
     };
     return data.choices[0]?.message?.content ?? '';
@@ -184,7 +186,7 @@ export class AnthropicGeneration implements GenerationProvider {
       throw new Error(`Anthropic generation failed (${res.status}): ${text}`);
     }
 
-    const data = await res.json() as {
+    const data = (await res.json()) as {
       content?: Array<{ text: string }>;
     };
     return data.content?.[0]?.text ?? '';
