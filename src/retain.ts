@@ -442,9 +442,14 @@ export async function processExtractionQueue(
       processed++;
 
     } catch (error: any) {
-      db.prepare(`
-        UPDATE extraction_queue SET status = 'failed', error = ? WHERE chunk_id = ?
-      `).run(error.message, item.chunk_id);
+      // attempts was already incremented above; read it back to decide whether to retry
+      const row = db.prepare(
+        `SELECT attempts FROM extraction_queue WHERE chunk_id = ?`
+      ).get(item.chunk_id) as { attempts: number } | undefined;
+      const status = (row?.attempts ?? 3) >= 3 ? 'failed' : 'pending';
+      db.prepare(
+        `UPDATE extraction_queue SET status = ?, error = ? WHERE chunk_id = ?`
+      ).run(status, error.message, item.chunk_id);
       failed++;
     }
   }

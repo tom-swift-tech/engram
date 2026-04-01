@@ -253,7 +253,7 @@ describe('processExtractionQueue()', () => {
     db.close();
   });
 
-  it('marks queue item as failed on generation error', async () => {
+  it('sets status to pending (not failed) after first extraction failure', async () => {
     const db = createTestDb();
     const embedder = new MockEmbedder();
     const failGen: import('../src/generation.js').GenerationProvider = {
@@ -265,7 +265,31 @@ describe('processExtractionQueue()', () => {
     const result = await processExtractionQueue(db, failGen);
 
     expect(result.failed).toBe(1);
-    const queued = db.prepare("SELECT status FROM extraction_queue LIMIT 1").get() as any;
+    const queued = db.prepare("SELECT status, attempts FROM extraction_queue LIMIT 1").get() as any;
+    // First failure: status back to 'pending' so it can be retried
+    expect(queued.status).toBe('pending');
+    expect(queued.attempts).toBe(1);
+    db.close();
+  });
+
+  it('sets status to failed after 3 extraction failures', async () => {
+    const db = createTestDb();
+    const embedder = new MockEmbedder();
+    const failGen: import('../src/generation.js').GenerationProvider = {
+      name: 'mock/fail',
+      generate: async () => { throw new Error('generation error'); },
+    };
+
+    await retain(db, 'retry exhaustion text', embedder, { memoryType: 'world' });
+
+    // Run 3 times — each should pick it up and fail, incrementing attempts
+    await processExtractionQueue(db, failGen);
+    await processExtractionQueue(db, failGen);
+    const thirdResult = await processExtractionQueue(db, failGen);
+
+    expect(thirdResult.failed).toBe(1);
+    const queued = db.prepare("SELECT status, attempts FROM extraction_queue LIMIT 1").get() as any;
+    expect(queued.attempts).toBe(3);
     expect(queued.status).toBe('failed');
     db.close();
   });
