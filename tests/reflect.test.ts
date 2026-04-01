@@ -256,4 +256,45 @@ describe('reflect()', () => {
     expect(opinions.find(op => op.id === 'op-1')?.confidence).toBe(0.7);
     expect(opinions.find(op => op.id === 'op-2')?.confidence).toBeGreaterThan(0.7);
   });
+
+  it('reinforces via fuzzy match when belief text differs slightly', async () => {
+    dbPath = tmpDbPath();
+    await setupDb(dbPath, 5);
+
+    const db = new Database(dbPath);
+    // Stored belief has slightly different wording than what the LLM will output
+    db.prepare(`
+      INSERT INTO opinions (id, belief, confidence, domain, supporting_chunks, related_entities)
+      VALUES ('op-fuzzy', 'Alice strongly prefers Rust over other systems languages for performance work', 0.6, 'preferences', '[]', '[]')
+    `).run();
+    db.close();
+
+    // LLM outputs a belief that is similar but not identical (triggers beliefSimilarity >= 0.85)
+    vi.stubGlobal('fetch', mockOllamaFetch(JSON.stringify({
+      observations: [],
+      opinion_updates: [
+        {
+          belief: 'Alice strongly prefers Rust over other systems languages for performance tasks',
+          direction: 'reinforce',
+          confidence_delta: 0.1,
+          domain: 'preferences',
+          evidence_chunk_ids: ['chk-fuzzy'],
+          entity_names: [],
+        },
+      ],
+      observation_refreshes: [],
+    })));
+
+    const result = await reflect({ dbPath });
+    expect(result.opinionsReinforced).toBe(1);
+
+    const verify = new Database(dbPath);
+    const op = verify.prepare(
+      `SELECT confidence FROM opinions WHERE id = 'op-fuzzy'`
+    ).get() as { confidence: number };
+    verify.close();
+
+    // With row-ID-based UPDATE, fuzzy match successfully updates the opinion
+    expect(op.confidence).toBeGreaterThan(0.6);
+  });
 });

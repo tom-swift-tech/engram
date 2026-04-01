@@ -505,7 +505,7 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
             evidence_count = evidence_count + 1,
             last_reinforced = ?,
             updated_at = ?
-        WHERE belief = ? AND domain = ? AND is_active = TRUE
+        WHERE id = ?
       `);
       const challengeOpinion = db.prepare(`
         UPDATE opinions
@@ -514,7 +514,7 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
             evidence_count = evidence_count + 1,
             last_challenged = ?,
             updated_at = ?
-        WHERE belief = ? AND domain = ? AND is_active = TRUE
+        WHERE id = ?
       `);
 
       for (const opUpdate of output.opinion_updates) {
@@ -547,8 +547,7 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
               clampedDelta,
               JSON.stringify(mergedSupporting),
               now, now,
-              existing.belief,
-              existing.domain
+              existing.id
             );
             result.opinionsReinforced++;
           }
@@ -565,8 +564,7 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
               clampedDelta,
               JSON.stringify(mergedContradicting),
               now, now,
-              existing.belief,
-              existing.domain
+              existing.id
             );
             result.opinionsChallenged++;
           }
