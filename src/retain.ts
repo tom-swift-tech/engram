@@ -13,7 +13,7 @@
 // =============================================================================
 
 import Database from 'better-sqlite3';
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
 import { extractEntitiesCpu } from './extract-cpu.js';
 import { DEFAULT_OLLAMA_URL, type GenerationProvider } from './generation.js';
 
@@ -109,17 +109,21 @@ function normalizeForDedup(text: string): string {
   return text.toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
+export function computeTextHash(text: string): string {
+  return createHash('sha256')
+    .update(normalizeForDedup(text))
+    .digest('hex')
+    .slice(0, 32); // 128-bit prefix is sufficient for dedup
+}
+
 function findNormalizedDuplicate(
   db: Database.Database,
-  normalizedText: string
+  text: string
 ): { id: string; trust_score: number } | undefined {
-  const activeChunks = db.prepare(`
-    SELECT id, text, trust_score
-    FROM chunks
-    WHERE is_active = TRUE
-  `).all() as Array<{ id: string; text: string; trust_score: number }>;
-
-  return activeChunks.find(chunk => normalizeForDedup(chunk.text) === normalizedText);
+  const hash = computeTextHash(text);
+  return db.prepare(
+    `SELECT id, trust_score FROM chunks WHERE is_active = TRUE AND text_hash = ? LIMIT 1`
+  ).get(hash) as { id: string; trust_score: number } | undefined;
 }
 
 // =============================================================================
@@ -149,7 +153,7 @@ export async function retain(
   // Dedup check — runs before embed to avoid unnecessary Ollama calls
   if (dedupMode !== 'none') {
     const existing = (dedupMode === 'normalized'
-      ? findNormalizedDuplicate(db, normalizeForDedup(text))
+      ? findNormalizedDuplicate(db, text)
       : db.prepare(
           `SELECT id, trust_score FROM chunks WHERE is_active = TRUE AND text = ? LIMIT 1`
         ).get(text)
@@ -181,13 +185,15 @@ export async function retain(
         id, text, embedding, memory_type,
         source, source_uri, context,
         source_type, trust_score,
-        event_time, event_time_end, temporal_label
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        event_time, event_time_end, temporal_label,
+        text_hash
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       chunkId, text, embeddingBuffer, memoryType,
       source, sourceUri, context,
       sourceType, trustScore,
-      eventTime, eventTimeEnd, temporalLabel
+      eventTime, eventTimeEnd, temporalLabel,
+      computeTextHash(text)
     );
 
     // Tier 1: CPU extraction (instant, inline, no LLM)

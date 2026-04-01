@@ -34,6 +34,7 @@ import {
   OllamaEmbeddings,
   LocalEmbedder,
   shouldRetain,
+  computeTextHash,
   type RetainOptions,
   type RetainResult,
   type EmbeddingProvider,
@@ -186,6 +187,30 @@ export class Engram {
     const schemaPath = join(__dirname, 'schema.sql');
     const schema = readFileSync(schemaPath, 'utf8');
     db.exec(schema);
+
+    // Migration: add text_hash column to existing .engram files (pre-F4)
+    const columns = db.pragma('table_info(chunks)') as Array<{ name: string }>;
+    if (!columns.some(c => c.name === 'text_hash')) {
+      db.exec('ALTER TABLE chunks ADD COLUMN text_hash TEXT');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_chunks_text_hash ON chunks(text_hash) WHERE is_active = TRUE');
+    }
+
+    // Backfill text_hash for any existing chunks that predate this migration
+    const missing = db.prepare(
+      `SELECT COUNT(*) as c FROM chunks WHERE text_hash IS NULL AND is_active = TRUE`
+    ).get() as { c: number };
+    if (missing.c > 0) {
+      const rows = db.prepare(
+        `SELECT id, text FROM chunks WHERE text_hash IS NULL AND is_active = TRUE`
+      ).all() as Array<{ id: string; text: string }>;
+      const updateHash = db.prepare(`UPDATE chunks SET text_hash = ? WHERE id = ?`);
+      const backfill = db.transaction(() => {
+        for (const row of rows) {
+          updateHash.run(computeTextHash(row.text), row.id);
+        }
+      });
+      backfill();
+    }
 
     // Embedding provider selection (priority order):
     // 1. Injected embedder — caller controls everything (used in tests)

@@ -66,6 +66,9 @@ CREATE TABLE IF NOT EXISTS chunks (
     event_time_end TIMESTAMP,          -- for facts with temporal ranges ("worked there 2020-2023")
     temporal_label TEXT,               -- human-readable: 'last spring', 'Q4 2025', etc.
     
+    -- Dedup
+    text_hash TEXT,                     -- SHA-256 prefix of normalized text (for indexed dedup)
+
     -- Lifecycle
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -103,6 +106,7 @@ CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
 END;
 
 -- Indexes for common query patterns
+CREATE INDEX IF NOT EXISTS idx_chunks_text_hash ON chunks(text_hash) WHERE is_active = TRUE;
 CREATE INDEX IF NOT EXISTS idx_chunks_memory_type ON chunks(memory_type) WHERE is_active = TRUE;
 CREATE INDEX IF NOT EXISTS idx_chunks_source_type ON chunks(source_type);
 CREATE INDEX IF NOT EXISTS idx_chunks_event_time ON chunks(event_time) WHERE event_time IS NOT NULL;

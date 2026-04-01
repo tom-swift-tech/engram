@@ -148,38 +148,30 @@ function strategyGraphMatching(
   let count = 0;
   const textLower = text.toLowerCase();
 
-  const entities = db.prepare(
-    `SELECT id, canonical_name, aliases FROM entities WHERE is_active = TRUE`
-  ).all() as { id: string; canonical_name: string; aliases: string }[];
+  // Canonical name matching — push substring search into SQLite
+  const byName = db.prepare(`
+    SELECT id FROM entities
+    WHERE is_active = TRUE
+      AND LENGTH(canonical_name) > 2
+      AND INSTR(?, canonical_name) > 0
+  `).all(textLower) as { id: string }[];
 
-  for (const entity of entities) {
-    if (linked.has(entity.id)) continue;
+  // Alias matching — json_each unpacks the aliases array in SQL
+  const byAlias = db.prepare(`
+    SELECT DISTINCT e.id
+    FROM entities e, json_each(e.aliases) AS a
+    WHERE e.is_active = TRUE
+      AND LENGTH(a.value) > 2
+      AND INSTR(?, LOWER(a.value)) > 0
+  `).all(textLower) as { id: string }[];
 
-    // Check canonical name
-    if (entity.canonical_name.length <= 2) continue;
-    let found = textLower.includes(entity.canonical_name);
-
-    // Check aliases
-    if (!found) {
-      try {
-        const aliases: string[] = JSON.parse(entity.aliases || '[]');
-        for (const alias of aliases) {
-          if (alias.length > 2 && textLower.includes(alias.toLowerCase())) {
-            found = true;
-            break;
-          }
-        }
-      } catch {
-        // Malformed aliases JSON — skip
-      }
-    }
-
-    if (found) {
-      linkChunkEntity(db, chunkId, entity.id);
-      bumpEntityMention(db, entity.id);
-      linked.add(entity.id);
-      count++;
-    }
+  const matched = new Set([...byName, ...byAlias].map(r => r.id));
+  for (const id of matched) {
+    if (linked.has(id)) continue;
+    linkChunkEntity(db, chunkId, id);
+    bumpEntityMention(db, id);
+    linked.add(id);
+    count++;
   }
 
   return count;
