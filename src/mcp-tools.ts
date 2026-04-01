@@ -229,6 +229,35 @@ export interface McpToolResult {
 }
 
 // =============================================================================
+// Input Validation
+// =============================================================================
+
+const VALID_MEMORY_TYPES = new Set(['world', 'experience', 'observation', 'opinion']);
+const VALID_SOURCE_TYPES = new Set(['user_stated', 'inferred', 'external_doc', 'tool_result', 'agent_generated']);
+const VALID_STRATEGIES = new Set(['semantic', 'keyword', 'graph', 'temporal']);
+
+/** Clamp a numeric trust value to [0, 1]. Returns undefined if not a number. */
+function clampTrust(v: unknown): number | undefined {
+  if (typeof v !== 'number' || isNaN(v)) return undefined;
+  return Math.max(0, Math.min(1, v));
+}
+
+/** Filter an array to only values present in a valid set. Returns undefined if result is empty or input is not an array. */
+function filterEnums<T extends string>(arr: unknown, valid: Set<string>): T[] | undefined {
+  if (!Array.isArray(arr)) return undefined;
+  const filtered = arr.filter(v => typeof v === 'string' && valid.has(v)) as T[];
+  return filtered.length > 0 ? filtered : undefined;
+}
+
+/** Assert a required string field is a non-empty string. Returns error result if invalid. */
+function requireString(v: unknown, fieldName: string): { error: McpToolResult } | { value: string } {
+  if (typeof v !== 'string' || v.trim() === '') {
+    return { error: { content: [{ type: 'text', text: `engram tool error: ${fieldName} must be a non-empty string` }], isError: true } };
+  }
+  return { value: v };
+}
+
+// =============================================================================
 // Handler Factory
 // =============================================================================
 
@@ -244,14 +273,35 @@ export function createEngramToolHandler(engram: Engram) {
     try {
       switch (name) {
         case 'engram_retain': {
-          const { text, ...opts } = input as unknown as { text: string } & RetainOptions;
-          const result = await engram.retain(text, opts);
+          const textCheck = requireString(input.text, 'text');
+          if ('error' in textCheck) return textCheck.error;
+          const opts: RetainOptions = {
+            memoryType: VALID_MEMORY_TYPES.has(input.memoryType as string) ? input.memoryType as RetainOptions['memoryType'] : undefined,
+            sourceType: VALID_SOURCE_TYPES.has(input.sourceType as string) ? input.sourceType as RetainOptions['sourceType'] : undefined,
+            trustScore: clampTrust(input.trustScore),
+            source: typeof input.source === 'string' ? input.source : undefined,
+            context: typeof input.context === 'string' ? input.context : undefined,
+            eventTime: typeof input.eventTime === 'string' ? input.eventTime : undefined,
+            temporalLabel: typeof input.temporalLabel === 'string' ? input.temporalLabel : undefined,
+          };
+          const result = await engram.retain(textCheck.value, opts);
           return { content: [{ type: 'text', text: JSON.stringify(result) }] };
         }
 
         case 'engram_recall': {
-          const { query, ...opts } = input as unknown as { query: string } & RecallOptions;
-          const result = await engram.recall(query, opts);
+          const queryCheck = requireString(input.query, 'query');
+          if ('error' in queryCheck) return queryCheck.error;
+          const opts: RecallOptions = {
+            topK: typeof input.topK === 'number' ? Math.max(1, Math.floor(input.topK)) : undefined,
+            strategies: filterEnums<'semantic' | 'keyword' | 'graph' | 'temporal'>(input.strategies, VALID_STRATEGIES),
+            memoryTypes: filterEnums<'world' | 'experience' | 'observation' | 'opinion'>(input.memoryTypes, VALID_MEMORY_TYPES),
+            minTrust: clampTrust(input.minTrust),
+            after: typeof input.after === 'string' ? input.after : undefined,
+            before: typeof input.before === 'string' ? input.before : undefined,
+            includeOpinions: typeof input.includeOpinions === 'boolean' ? input.includeOpinions : undefined,
+            includeObservations: typeof input.includeObservations === 'boolean' ? input.includeObservations : undefined,
+          };
+          const result = await engram.recall(queryCheck.value, opts);
           return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         }
 
@@ -267,24 +317,36 @@ export function createEngramToolHandler(engram: Engram) {
         }
 
         case 'engram_forget': {
-          const chunkId = input.chunkId as string;
-          const forgotten = await engram.forget(chunkId);
+          const chunkIdCheck = requireString(input.chunkId, 'chunkId');
+          if ('error' in chunkIdCheck) return chunkIdCheck.error;
+          const forgotten = await engram.forget(chunkIdCheck.value);
           return { content: [{ type: 'text', text: JSON.stringify({ forgotten }) }] };
         }
 
         case 'engram_supersede': {
-          const { oldChunkId, newText, ...opts } = input as unknown as { oldChunkId: string; newText: string } & RetainOptions;
-          const result = await engram.supersede(oldChunkId, newText, opts);
+          const oldChunkIdCheck = requireString(input.oldChunkId, 'oldChunkId');
+          if ('error' in oldChunkIdCheck) return oldChunkIdCheck.error;
+          const newTextCheck = requireString(input.newText, 'newText');
+          if ('error' in newTextCheck) return newTextCheck.error;
+          const opts: RetainOptions = {
+            memoryType: VALID_MEMORY_TYPES.has(input.memoryType as string) ? input.memoryType as RetainOptions['memoryType'] : undefined,
+            sourceType: VALID_SOURCE_TYPES.has(input.sourceType as string) ? input.sourceType as RetainOptions['sourceType'] : undefined,
+            trustScore: clampTrust(input.trustScore),
+            source: typeof input.source === 'string' ? input.source : undefined,
+            context: typeof input.context === 'string' ? input.context : undefined,
+          };
+          const result = await engram.supersede(oldChunkIdCheck.value, newTextCheck.value, opts);
           return { content: [{ type: 'text', text: JSON.stringify(result) }] };
         }
 
         case 'engram_session': {
-          const msg = input.message as string;
+          const msgCheck = requireString(input.message, 'message');
+          if ('error' in msgCheck) return msgCheck.error;
           const opts = {
             maxActive: typeof input.maxActive === 'number' ? input.maxActive : undefined,
             threshold: typeof input.threshold === 'number' ? input.threshold : undefined,
           };
-          const result = await engram.inferWorkingSession(msg, opts);
+          const result = await engram.inferWorkingSession(msgCheck.value, opts);
           return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         }
       }

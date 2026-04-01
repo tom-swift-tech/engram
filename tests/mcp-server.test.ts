@@ -177,4 +177,51 @@ describe('MCP Server', () => {
     // forget returns {forgotten: false} for missing chunks, not an error
     expect(parsed.forgotten).toBe(false);
   });
+
+  it('engram_recall strips invalid memoryTypes values and still returns results', async () => {
+    // Store a known chunk first
+    await client.callTool({
+      name: 'engram_retain',
+      arguments: { text: 'TypeFilter safety test chunk', memoryType: 'world' },
+    });
+
+    // Pass a mix of valid and invalid enum values — invalid ones should be stripped
+    const result = await client.callTool({
+      name: 'engram_recall',
+      arguments: {
+        query: 'TypeFilter safety test',
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        memoryTypes: ['world', "world'; DROP TABLE chunks;--", 'invalid'] as any,
+        topK: 5,
+      },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const content = result.content as Array<{ type: string; text: string }>;
+    const parsed = JSON.parse(content[0].text);
+    // Only 'world' was valid — query ran without SQL error
+    expect(Array.isArray(parsed.results)).toBe(true);
+  });
+
+  it('engram_retain returns isError when text is missing', async () => {
+    const result = await client.callTool({
+      name: 'engram_retain',
+      arguments: { memoryType: 'world' }, // no text
+    });
+
+    expect(result.isError).toBe(true);
+    const content = result.content as Array<{ type: string; text: string }>;
+    expect(content[0].text).toContain('text');
+  });
+
+  it('engram_recall returns isError when query is missing', async () => {
+    const result = await client.callTool({
+      name: 'engram_recall',
+      arguments: { topK: 5 }, // no query
+    });
+
+    expect(result.isError).toBe(true);
+    const content = result.content as Array<{ type: string; text: string }>;
+    expect(content[0].text).toContain('query');
+  });
 });

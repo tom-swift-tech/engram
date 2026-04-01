@@ -98,6 +98,14 @@ interface QueryFilters {
 }
 
 // =============================================================================
+// Helpers
+// =============================================================================
+
+function inClausePlaceholders(values: string[]): string {
+  return values.map(() => '?').join(',');
+}
+
+// =============================================================================
 // Retrieval Strategies
 // =============================================================================
 
@@ -114,8 +122,8 @@ function semanticSearch(
   const embeddingBuffer = Buffer.from(queryEmbedding.buffer);
 
   // Build optional memory_type filter
-  const typeFilter = memoryTypes
-    ? `AND c.memory_type IN (${memoryTypes.map(t => `'${t}'`).join(',')})`
+  const typeFilter = memoryTypes?.length
+    ? `AND c.memory_type IN (${inClausePlaceholders(memoryTypes)})`
     : '';
 
   try {
@@ -137,6 +145,7 @@ function semanticSearch(
       minTrust,
       sourceFilter ?? null, sourceFilter ?? null,
       contextFilter ?? null, contextFilter ?? null,
+      ...(memoryTypes ?? []),
       limit
     ) as any[];
 
@@ -163,8 +172,8 @@ function keywordSearch(
   const { memoryTypes, minTrust = 0, sourceFilter, contextFilter } = filters;
 
   // FTS5 with BM25 ranking
-  const typeFilter = memoryTypes
-    ? `AND c.memory_type IN (${memoryTypes.map(t => `'${t}'`).join(',')})`
+  const typeFilter = memoryTypes?.length
+    ? `AND c.memory_type IN (${inClausePlaceholders(memoryTypes)})`
     : '';
 
   try {
@@ -187,6 +196,7 @@ function keywordSearch(
       minTrust,
       sourceFilter ?? null, sourceFilter ?? null,
       contextFilter ?? null, contextFilter ?? null,
+      ...(memoryTypes ?? []),
       limit
     ) as any[];
 
@@ -239,8 +249,8 @@ function graphSearch(
 
     // 1-hop: chunks directly mentioning these entities
     const placeholders = entityIds.map(() => '?').join(',');
-    const typeFilter = memoryTypes
-      ? `AND c.memory_type IN (${memoryTypes.map(t => `'${t}'`).join(',')})`
+    const typeFilter = memoryTypes?.length
+      ? `AND c.memory_type IN (${inClausePlaceholders(memoryTypes)})`
       : '';
 
     const directChunks = db.prepare(`
@@ -261,6 +271,7 @@ function graphSearch(
       minTrust,
       sourceFilter ?? null, sourceFilter ?? null,
       contextFilter ?? null, contextFilter ?? null,
+      ...(memoryTypes ?? []),
       limit
     ) as any[];
 
@@ -289,6 +300,7 @@ function graphSearch(
       ...directChunks.map((c: any) => c.id),
       sourceFilter ?? null, sourceFilter ?? null,
       contextFilter ?? null, contextFilter ?? null,
+      ...(memoryTypes ?? []),
       Math.max(0, limit - directChunks.length)
     ) as any[];
 
@@ -322,12 +334,13 @@ function temporalSearch(
   if (!filters.after && !filters.before) return [];
 
   const { sourceFilter, contextFilter } = filters;
+  const minTrustVal = typeof filters.minTrust === 'number' ? filters.minTrust : 0;
 
   const conditions: string[] = [
     'c.is_active = TRUE',
-    `c.trust_score >= ${filters.minTrust || 0}`,
+    'c.trust_score >= ?',
   ];
-  const params: any[] = [];
+  const params: any[] = [minTrustVal];
 
   if (filters.after) {
     conditions.push('(datetime(c.event_time) >= datetime(?) OR (c.event_time IS NULL AND datetime(c.created_at) >= datetime(?)))');
@@ -337,8 +350,9 @@ function temporalSearch(
     conditions.push('(datetime(c.event_time) <= datetime(?) OR (c.event_time IS NULL AND datetime(c.created_at) <= datetime(?)))');
     params.push(filters.before, filters.before);
   }
-  if (filters.memoryTypes) {
-    conditions.push(`c.memory_type IN (${filters.memoryTypes.map(t => `'${t}'`).join(',')})`);
+  if (filters.memoryTypes?.length) {
+    conditions.push(`c.memory_type IN (${inClausePlaceholders(filters.memoryTypes)})`);
+    params.push(...filters.memoryTypes);
   }
 
   conditions.push(`(? IS NULL OR c.source LIKE '%' || ? || '%')`);
