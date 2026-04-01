@@ -467,6 +467,59 @@ describe('processExtractionQueue()', () => {
 
     db.close();
   });
+
+  it('getQueueStats returns zeros on empty queue', () => {
+    const db = createTestDb();
+    const stats = getQueueStats(db);
+    expect(stats.pending).toBe(0);
+    expect(stats.processing).toBe(0);
+    expect(stats.completed).toBe(0);
+    expect(stats.failed).toBe(0);
+    expect(stats.oldest_pending).toBeNull();
+    db.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// retainBatch dedup
+// ---------------------------------------------------------------------------
+
+describe('retainBatch() intra-batch dedup', () => {
+  let db: Database.Database;
+  const embedder = new MockEmbedder();
+
+  beforeEach(() => {
+    db = createTestDb();
+  });
+  afterEach(() => db.close());
+
+  it('deduplicates identical items within a batch', async () => {
+    const items = [
+      { text: 'Tom uses Terraform' },
+      { text: 'Tom uses Terraform' },
+      { text: 'Tom uses Terraform' },
+    ];
+    const results = await retainBatch(db, items, embedder);
+
+    // All should resolve to the same chunkId
+    expect(results[0].chunkId).toBe(results[1].chunkId);
+    expect(results[0].chunkId).toBe(results[2].chunkId);
+
+    // Only one chunk should exist in the DB
+    const count = db.prepare(`SELECT COUNT(*) as cnt FROM chunks`).get() as any;
+    expect(count.cnt).toBe(1);
+  });
+
+  it('deduplicates case/whitespace-normalized duplicates', async () => {
+    const items = [
+      { text: 'Tom uses Terraform' },
+      { text: 'tom  uses  terraform' },
+    ];
+    const results = await retainBatch(db, items, embedder);
+
+    expect(results[1].deduplicated).toBe(true);
+    expect(results[0].chunkId).toBe(results[1].chunkId);
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -260,7 +260,10 @@ export class Engram {
       );
     }
 
-    // Migration: re-key entity IDs to collision-resistant format (slug + hash)
+    // Migration: re-key entity IDs to collision-resistant format (slug + hash).
+    // Disables FK checks during the transaction because child rows (chunk_entities,
+    // relations) reference entities.id — updating the parent first would violate
+    // FK constraints. All rows are updated atomically within the transaction.
     const entityIdV2 = db
       .prepare(
         `SELECT value FROM bank_config WHERE key = 'entity_id_v2_migrated'`,
@@ -271,6 +274,7 @@ export class Engram {
         .prepare(`SELECT id, canonical_name FROM entities`)
         .all() as Array<{ id: string; canonical_name: string }>;
       if (entities.length > 0) {
+        db.pragma('foreign_keys = OFF');
         const updateEntity = db.prepare(
           `UPDATE entities SET id = ? WHERE id = ?`,
         );
@@ -287,14 +291,15 @@ export class Engram {
           for (const ent of entities) {
             const newId = buildEntityId(ent.canonical_name);
             if (newId !== ent.id) {
-              updateEntity.run(newId, ent.id);
               updateChunkEntity.run(newId, ent.id);
               updateRelSrc.run(newId, ent.id);
               updateRelTgt.run(newId, ent.id);
+              updateEntity.run(newId, ent.id);
             }
           }
         });
         migrate();
+        db.pragma('foreign_keys = ON');
       }
       db.prepare(
         `INSERT OR REPLACE INTO bank_config (key, value) VALUES ('entity_id_v2_migrated', 'true')`,

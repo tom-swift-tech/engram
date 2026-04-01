@@ -143,6 +143,22 @@ describe('reflect()', () => {
     expect(result.opinionsFormed).toBe(0);
   });
 
+  it('does not mark facts as reflected when parse produces no insights', async () => {
+    dbPath = tmpDbPath();
+    await setupDb(dbPath, 3);
+    vi.stubGlobal('fetch', mockOllamaFetch('this is not json at all'));
+
+    await reflect({ dbPath });
+
+    // Facts should still be unreflected so the next cycle can retry them
+    const db = new Database(dbPath);
+    const unreflected = db
+      .prepare(`SELECT COUNT(*) as cnt FROM chunks WHERE reflected_at IS NULL`)
+      .get() as any;
+    expect(unreflected.cnt).toBe(3);
+    db.close();
+  });
+
   it('sets status to failed when Ollama is unreachable', async () => {
     dbPath = tmpDbPath();
     await setupDb(dbPath, 5);

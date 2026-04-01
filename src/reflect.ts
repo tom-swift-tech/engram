@@ -633,14 +633,27 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
         }
       }
 
-      // -- Mark facts as reflected --
-      const markReflected = db.prepare(`
-        UPDATE chunks SET reflected_at = ? WHERE id = ?
-      `);
-      for (const fact of unreflected) {
-        markReflected.run(now, fact.id);
+      // -- Mark facts as reflected only if insights were produced --
+      // If parse failed (empty arrays), leave facts unreflected so the next
+      // reflect cycle can retry them instead of silently consuming them.
+      const insightsProduced =
+        result.observationsCreated +
+        result.observationsUpdated +
+        result.opinionsFormed +
+        result.opinionsReinforced +
+        result.opinionsChallenged;
+
+      if (insightsProduced > 0) {
+        const markReflected = db.prepare(`
+          UPDATE chunks SET reflected_at = ? WHERE id = ?
+        `);
+        for (const fact of unreflected) {
+          markReflected.run(now, fact.id);
+        }
+        result.factsProcessed = unreflected.length;
+      } else {
+        result.factsProcessed = 0;
       }
-      result.factsProcessed = unreflected.length;
     });
 
     applyTransaction();
