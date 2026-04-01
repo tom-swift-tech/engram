@@ -19,6 +19,56 @@ import type { EmbeddingProvider } from './retain.js';
 import { parseTemporalQuery } from './temporal-parser.js';
 
 // =============================================================================
+// Constants
+// =============================================================================
+
+/** Stop words filtered from graph search tokenization to avoid false positives */
+const GRAPH_STOP_WORDS = new Set([
+  'what',
+  'who',
+  'where',
+  'when',
+  'why',
+  'how',
+  'which',
+  'the',
+  'and',
+  'for',
+  'with',
+  'not',
+  'but',
+  'this',
+  'that',
+  'are',
+  'was',
+  'were',
+  'been',
+  'has',
+  'have',
+  'had',
+  'does',
+  'did',
+  'can',
+  'could',
+  'would',
+  'should',
+  'will',
+  'about',
+  'from',
+  'into',
+  'than',
+  'then',
+  'them',
+  'they',
+  'its',
+  'our',
+  'your',
+  'use',
+  'used',
+  'using',
+]);
+
+// =============================================================================
 // Types
 // =============================================================================
 
@@ -243,20 +293,38 @@ function graphSearch(
 ): ScoredChunk[] {
   const { memoryTypes, minTrust = 0, sourceFilter, contextFilter } = filters;
 
-  // Simple approach: tokenize query, match against entity names/aliases
+  // Tokenize query, filtering stop words that cause false positives
   const queryTokens = query
     .toLowerCase()
     .split(/\s+/)
-    .filter((t) => t.length > 2);
+    .filter((t) => t.length > 2 && !GRAPH_STOP_WORDS.has(t));
 
   if (queryTokens.length === 0) return [];
 
   try {
+    // Expand tokens via known entity aliases (e.g., "IaC" → "infrastructure-as-code")
+    const expandedTokens = [...queryTokens];
+    for (const token of queryTokens) {
+      const aliasMatches = db
+        .prepare(
+          `SELECT DISTINCT e.canonical_name
+           FROM entities e, json_each(e.aliases) AS a
+           WHERE e.is_active = TRUE AND LOWER(a.value) = ?`,
+        )
+        .all(token) as Array<{ canonical_name: string }>;
+      for (const m of aliasMatches) {
+        const name = m.canonical_name.toLowerCase();
+        if (!expandedTokens.includes(name)) {
+          expandedTokens.push(name);
+        }
+      }
+    }
+
     // Find matching entities
-    const likeClauses = queryTokens
+    const likeClauses = expandedTokens
       .map(() => `(e.canonical_name LIKE ? OR e.aliases LIKE ?)`)
       .join(' OR ');
-    const likeParams = queryTokens.flatMap((t) => [`%${t}%`, `%${t}%`]);
+    const likeParams = expandedTokens.flatMap((t) => [`%${t}%`, `%${t}%`]);
 
     const matchedEntities = db
       .prepare(

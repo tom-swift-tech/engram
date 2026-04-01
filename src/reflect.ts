@@ -234,10 +234,19 @@ If you find no meaningful patterns, return empty arrays. Do not force observatio
 
 function parseReflectOutput(raw: string): LLMReflectOutput {
   // Strip any markdown fencing the model might add despite instructions
-  const cleaned = raw
+  let cleaned = raw
     .replace(/```json\s*/g, '')
     .replace(/```\s*/g, '')
     .trim();
+
+  // Truncate after the last top-level closing brace (strip trailing LLM commentary)
+  const lastBrace = cleaned.lastIndexOf('}');
+  if (lastBrace !== -1 && lastBrace < cleaned.length - 1) {
+    cleaned = cleaned.substring(0, lastBrace + 1);
+  }
+
+  // Fix trailing commas — common LLM mistake
+  cleaned = cleaned.replace(/,\s*([}\]])/g, '$1');
 
   try {
     const parsed = JSON.parse(cleaned);
@@ -246,11 +255,9 @@ function parseReflectOutput(raw: string): LLMReflectOutput {
       opinion_updates: parsed.opinion_updates || [],
       observation_refreshes: parsed.observation_refreshes || [],
     };
-  } catch (e) {
-    throw new Error(
-      `Failed to parse reflect output: ${e}\nRaw: ${cleaned.substring(0, 500)}`,
-      { cause: e },
-    );
+  } catch {
+    // Graceful degradation: empty cycle is better than a failed cycle
+    return { observations: [], opinion_updates: [], observation_refreshes: [] };
   }
 }
 
@@ -409,6 +416,10 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
     config.generator ??
     new OllamaGeneration({ url: ollamaUrl, model: reflectModel });
 
+  // Separate connection from the main Engram instance so reflect's long-running
+  // read doesn't hold the instance's connection busy. Writes (updating reflected_at,
+  // inserting observations/opinions) will serialize with any concurrent retain() calls
+  // via SQLite's single-writer lock — safe but not parallel.
   const db = new Database(dbPath);
   const startTime = Date.now();
   const logId = randomUUID();

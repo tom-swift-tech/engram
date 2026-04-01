@@ -15,7 +15,19 @@
 // =============================================================================
 
 import Database from 'better-sqlite3';
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
+
+// =============================================================================
+// Helpers
+// =============================================================================
+
+/** Build a collision-resistant entity ID from a canonical name.
+ *  24 chars of human-readable slug + 6 hex chars of SHA-256 hash. */
+export function entityId(canonical: string): string {
+  const slug = canonical.replace(/[^a-z0-9]/g, '-').substring(0, 24);
+  const hash = createHash('sha256').update(canonical).digest('hex').slice(0, 6);
+  return `ent-${slug}-${hash}`;
+}
 
 // =============================================================================
 // Constants
@@ -276,19 +288,19 @@ function strategyProperNouns(
     if (COMMON_WORDS.has(lower)) continue;
 
     const canonical = lower;
-    const entityId = `ent-${canonical.replace(/[^a-z0-9]/g, '-').substring(0, 30)}`;
+    const eid = entityId(canonical);
 
-    if (linked.has(entityId)) continue;
+    if (linked.has(eid)) continue;
 
     upsertEntity(db, {
-      id: entityId,
+      id: eid,
       name: word,
       canonical_name: canonical,
       entity_type: 'concept',
     });
 
-    linkChunkEntity(db, chunkId, entityId);
-    linked.add(entityId);
+    linkChunkEntity(db, chunkId, eid);
+    linked.add(eid);
     count++;
   }
 
@@ -329,19 +341,19 @@ function strategyTechnicalTerms(
     if (STOP_WORDS.has(term.toLowerCase())) continue;
 
     const canonical = term.toLowerCase();
-    const entityId = `ent-${canonical.replace(/[^a-z0-9]/g, '-').substring(0, 30)}`;
+    const eid = entityId(canonical);
 
-    if (linked.has(entityId)) continue;
+    if (linked.has(eid)) continue;
 
     upsertEntity(db, {
-      id: entityId,
+      id: eid,
       name: term,
       canonical_name: canonical,
       entity_type: 'technology',
     });
 
-    linkChunkEntity(db, chunkId, entityId);
-    linked.add(entityId);
+    linkChunkEntity(db, chunkId, eid);
+    linked.add(eid);
     count++;
   }
 

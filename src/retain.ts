@@ -14,7 +14,10 @@
 
 import Database from 'better-sqlite3';
 import { randomUUID, createHash } from 'crypto';
-import { extractEntitiesCpu } from './extract-cpu.js';
+import {
+  extractEntitiesCpu,
+  entityId as buildEntityId,
+} from './extract-cpu.js';
 import { DEFAULT_OLLAMA_URL, type GenerationProvider } from './generation.js';
 
 // =============================================================================
@@ -156,7 +159,7 @@ export async function retain(
     eventTimeEnd = null,
     temporalLabel = null,
     skipExtraction = false,
-    dedupMode = 'exact',
+    dedupMode = 'normalized', // uses indexed text_hash column; 'exact' scans unindexed text
   } = options;
 
   // Dedup check — runs before embed to avoid unnecessary Ollama calls
@@ -253,17 +256,24 @@ export async function retainBatch(
   items: Array<{ text: string; options?: RetainOptions }>,
   embedder: EmbeddingProvider,
   onProgress?: (current: number, total: number) => void,
+  concurrency: number = 8,
 ): Promise<RetainResult[]> {
   const results: RetainResult[] = [];
+  const batchSize = Math.max(1, concurrency);
 
-  for (let i = 0; i < items.length; i++) {
-    const { text, options } = items[i];
-    const result = await retain(db, text, embedder, {
-      ...options,
-      skipExtraction: options?.skipExtraction ?? true, // Default skip for batch
-    });
-    results.push(result);
-    onProgress?.(i + 1, items.length);
+  // Chunked parallelism: embed N items concurrently, writes serialize at SQLite level
+  for (let start = 0; start < items.length; start += batchSize) {
+    const batch = items.slice(start, start + batchSize);
+    const batchResults = await Promise.all(
+      batch.map(({ text, options }) =>
+        retain(db, text, embedder, {
+          ...options,
+          skipExtraction: options?.skipExtraction ?? true,
+        }),
+      ),
+    );
+    results.push(...batchResults);
+    onProgress?.(Math.min(start + batchSize, items.length), items.length);
   }
 
   // Queue world/experience items that weren't already queued during retain.
@@ -440,8 +450,7 @@ export async function processExtractionQueue(
         const entityIdMap: Record<string, string> = {};
 
         for (const ent of extracted.entities) {
-          // Use canonical_name as the stable entity ID basis
-          const entityId = `ent-${ent.canonical_name.replace(/[^a-z0-9]/g, '-').substring(0, 30)}`;
+          const entityId = buildEntityId(ent.canonical_name);
           entityIdMap[ent.canonical_name] = entityId;
 
           upsertEntity.run(
@@ -549,6 +558,86 @@ export function getQueueStats(db: Database.Database): QueueStats {
 }
 
 // =============================================================================
+// Document Chunking
+// =============================================================================
+
+export interface ChunkOptions {
+  /** Maximum characters per chunk (default: 1000) */
+  maxChunkChars?: number;
+  /** Overlap characters prepended from the previous chunk (default: 100) */
+  overlapChars?: number;
+  /** Regex to split on before merging (default: paragraph/heading boundaries) */
+  separator?: RegExp;
+}
+
+/**
+ * Split long text into chunks suitable for retainBatch(). Each chunk gets its
+ * own embedding, so splitting improves retrieval quality for long documents.
+ *
+ * Usage:
+ *   const chunks = chunkText(longDocument, { maxChunkChars: 800 });
+ *   await engram.retainBatch(chunks.map(text => ({ text, options: { source: 'doc.md' } })));
+ */
+export function chunkText(text: string, options?: ChunkOptions): string[] {
+  const maxChars = options?.maxChunkChars ?? 1000;
+  const overlap = options?.overlapChars ?? 100;
+  const separator = options?.separator ?? /\n\n|\n(?=[A-Z#\-*])/;
+
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+  if (trimmed.length <= maxChars) return [trimmed];
+
+  // Split on separator first
+  const segments = trimmed.split(separator).filter((s) => s.trim().length > 0);
+
+  const chunks: string[] = [];
+  let current = '';
+
+  for (const segment of segments) {
+    const seg = segment.trim();
+    if (!seg) continue;
+
+    // If adding this segment would exceed max, flush current
+    if (current && current.length + seg.length + 1 > maxChars) {
+      chunks.push(current.trim());
+      // Apply overlap from end of previous chunk
+      const overlapText = overlap > 0 ? current.slice(-overlap).trim() : '';
+      current = overlapText ? overlapText + '\n' + seg : seg;
+    } else {
+      current = current ? current + '\n' + seg : seg;
+    }
+  }
+
+  if (current.trim()) {
+    chunks.push(current.trim());
+  }
+
+  // Handle case where a single segment exceeds maxChars — split on sentences
+  const result: string[] = [];
+  for (const chunk of chunks) {
+    if (chunk.length <= maxChars) {
+      result.push(chunk);
+    } else {
+      // Split oversized chunk on sentence boundaries
+      const sentences = chunk.split(/(?<=\.)\s+/);
+      let buf = '';
+      for (const sentence of sentences) {
+        if (buf && buf.length + sentence.length + 1 > maxChars) {
+          result.push(buf.trim());
+          const overlapText = overlap > 0 ? buf.slice(-overlap).trim() : '';
+          buf = overlapText ? overlapText + ' ' + sentence : sentence;
+        } else {
+          buf = buf ? buf + ' ' + sentence : sentence;
+        }
+      }
+      if (buf.trim()) result.push(buf.trim());
+    }
+  }
+
+  return result;
+}
+
+// =============================================================================
 // Retain Gate — Lightweight Conversation Screening
 // =============================================================================
 
@@ -556,6 +645,11 @@ export function getQueueStats(db: Database.Database): QueueStats {
  * Lightweight heuristic to determine if text is worth retaining.
  * No LLM call — pure pattern matching. Returns a score 0.0–1.0
  * where higher = more worth retaining.
+ *
+ * Intentionally heuristic — designed to filter phatic/trivial messages, not
+ * judge semantic importance. Known blind spots include short factual corrections
+ * and terse technical observations. For edge cases, prefer false positives
+ * (retaining too much) over false negatives.
  *
  * Intended use: agent's pre-retain filter. Score below threshold → skip.
  * Recommended threshold: 0.3.
@@ -595,6 +689,16 @@ export function shouldRetain(text: string): { score: number; reason: string } {
   ) {
     score += 0.2;
     reasons.push('decision language');
+  }
+
+  // --- Opinion/belief language ---
+  if (
+    /\b(I think|I believe|in my (experience|opinion)|my preference|I've found|I've noticed|we decided|we agreed|our approach)\b/i.test(
+      text,
+    )
+  ) {
+    score += 0.15;
+    reasons.push('opinion/belief language');
   }
 
   // --- Technical terms (camelCase, paths, mixed alphanumeric) ---

@@ -5,6 +5,7 @@ import {
   retainBatch,
   processExtractionQueue,
   getQueueStats,
+  chunkText,
 } from '../src/retain.js';
 import {
   createTestDb,
@@ -251,16 +252,18 @@ describe('retainBatch()', () => {
     db.close();
   });
 
-  it('reports progress for each item', async () => {
+  it('reports progress per concurrency chunk', async () => {
     const db = createTestDb();
     const embedder = new MockEmbedder();
     const progress: Array<[number, number]> = [];
 
+    // With concurrency=1, reports per-item like the old sequential behavior
     await retainBatch(
       db,
       [{ text: 'a' }, { text: 'b' }, { text: 'c' }],
       embedder,
       (current, total) => progress.push([current, total]),
+      1, // concurrency=1 forces sequential
     );
 
     expect(progress).toEqual([
@@ -463,5 +466,53 @@ describe('processExtractionQueue()', () => {
     expect(stats.oldest_pending).toBeTruthy();
 
     db.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// chunkText()
+// ---------------------------------------------------------------------------
+
+describe('chunkText()', () => {
+  it('returns single chunk for short text', () => {
+    const result = chunkText('Short text here.', { maxChunkChars: 1000 });
+    expect(result).toEqual(['Short text here.']);
+  });
+
+  it('returns empty array for empty text', () => {
+    expect(chunkText('')).toEqual([]);
+    expect(chunkText('   ')).toEqual([]);
+  });
+
+  it('splits long text at paragraph boundaries', () => {
+    const text =
+      'Paragraph one about Terraform.\n\nParagraph two about Kubernetes.\n\nParagraph three about SQLite.';
+    const chunks = chunkText(text, { maxChunkChars: 50, overlapChars: 0 });
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks[0]).toContain('Terraform');
+  });
+
+  it('no chunk exceeds maxChunkChars', () => {
+    const paragraphs = Array.from(
+      { length: 20 },
+      (_, i) =>
+        `This is paragraph ${i} with enough words to be meaningful content.`,
+    ).join('\n\n');
+    const chunks = chunkText(paragraphs, {
+      maxChunkChars: 200,
+      overlapChars: 0,
+    });
+    const withinLimit = chunks.filter((c) => c.length <= 200);
+    expect(withinLimit.length).toBe(chunks.length);
+  });
+
+  it('applies overlap from previous chunk', () => {
+    const text =
+      'AAAA first section content.\n\nBBBB second section content.\n\nCCCC third section content.';
+    const chunks = chunkText(text, { maxChunkChars: 50, overlapChars: 10 });
+    if (chunks.length >= 2) {
+      const tail = chunks[0].slice(-10).trim();
+      expect(chunks[1].startsWith(tail)).toBe(true);
+    }
   });
 });

@@ -18,7 +18,11 @@
 // Connection model:
 //   Engram holds one persistent connection for retain/recall (low-latency).
 //   reflect() opens a separate connection internally (reflect.ts pattern).
-//   SQLite WAL mode supports concurrent readers + one writer — both are safe.
+//   SQLite WAL mode allows concurrent readers alongside a single writer.
+//   If both connections write simultaneously, the second blocks until the
+//   first commits — writes serialize, they do not run in parallel.
+//   reflect() is safe to call while retain/recall are active, but its
+//   write transaction will wait for any in-progress retain() to finish.
 // =============================================================================
 
 import Database from 'better-sqlite3';
@@ -35,8 +39,10 @@ import {
   OllamaEmbeddings,
   LocalEmbedder,
   shouldRetain,
+  chunkText,
   computeTextHash,
   type RetainOptions,
+  type ChunkOptions,
   type RetainResult,
   type EmbeddingProvider,
   type QueueStats,
@@ -51,6 +57,7 @@ import {
   type FormatForPromptOptions,
 } from './recall.js';
 import { parseTemporalQuery, type TemporalRange } from './temporal-parser.js';
+import { entityId as buildEntityId } from './extract-cpu.js';
 
 import {
   reflect,
@@ -105,6 +112,7 @@ export {
   LocalEmbedder,
   ReflectScheduler,
   shouldRetain,
+  chunkText,
   formatForPrompt,
   OllamaGeneration,
   OpenAICompatibleGeneration,
@@ -112,7 +120,7 @@ export {
   parseTemporalQuery,
   DEFAULT_OLLAMA_URL,
 };
-export type { TemporalRange };
+export type { TemporalRange, ChunkOptions };
 
 export interface EngramOptions {
   /** Mission for the reflection engine: what to focus on during synthesis */
@@ -250,6 +258,47 @@ export class Engram {
       db.exec(
         'ALTER TABLE extraction_queue ADD COLUMN next_retry_after TIMESTAMP',
       );
+    }
+
+    // Migration: re-key entity IDs to collision-resistant format (slug + hash)
+    const entityIdV2 = db
+      .prepare(
+        `SELECT value FROM bank_config WHERE key = 'entity_id_v2_migrated'`,
+      )
+      .get() as { value: string } | undefined;
+    if (!entityIdV2) {
+      const entities = db
+        .prepare(`SELECT id, canonical_name FROM entities`)
+        .all() as Array<{ id: string; canonical_name: string }>;
+      if (entities.length > 0) {
+        const updateEntity = db.prepare(
+          `UPDATE entities SET id = ? WHERE id = ?`,
+        );
+        const updateChunkEntity = db.prepare(
+          `UPDATE chunk_entities SET entity_id = ? WHERE entity_id = ?`,
+        );
+        const updateRelSrc = db.prepare(
+          `UPDATE relations SET source_entity_id = ? WHERE source_entity_id = ?`,
+        );
+        const updateRelTgt = db.prepare(
+          `UPDATE relations SET target_entity_id = ? WHERE target_entity_id = ?`,
+        );
+        const migrate = db.transaction(() => {
+          for (const ent of entities) {
+            const newId = buildEntityId(ent.canonical_name);
+            if (newId !== ent.id) {
+              updateEntity.run(newId, ent.id);
+              updateChunkEntity.run(newId, ent.id);
+              updateRelSrc.run(newId, ent.id);
+              updateRelTgt.run(newId, ent.id);
+            }
+          }
+        });
+        migrate();
+      }
+      db.prepare(
+        `INSERT OR REPLACE INTO bank_config (key, value) VALUES ('entity_id_v2_migrated', 'true')`,
+      ).run();
     }
 
     // Embedding provider selection (priority order):

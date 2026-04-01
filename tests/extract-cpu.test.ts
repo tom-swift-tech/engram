@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
-import { extractEntitiesCpu } from '../src/extract-cpu.js';
+import { extractEntitiesCpu, entityId } from '../src/extract-cpu.js';
 import { createTestDb } from './helpers.js';
 
 describe('extractEntitiesCpu', () => {
@@ -296,5 +296,26 @@ describe('extractEntitiesCpu', () => {
     expect(result.entitiesLinked).toBeGreaterThanOrEqual(0);
     // Sanity: should finish well within vitest's default timeout
     expect(elapsed).toBeLessThan(5000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// entityId()
+// ---------------------------------------------------------------------------
+
+describe('entityId()', () => {
+  it('produces deterministic IDs', () => {
+    expect(entityId('terraform')).toBe(entityId('terraform'));
+  });
+
+  it('avoids collisions for names with shared 30-char prefixes', () => {
+    const a = entityId('microsoft-azure-storage-blob-service');
+    const b = entityId('microsoft-azure-storage-queue-service');
+    expect(a).not.toBe(b);
+  });
+
+  it('produces human-readable prefix plus hash suffix', () => {
+    const id = entityId('terraform');
+    expect(id).toMatch(/^ent-terraform-[a-f0-9]{6}$/);
   });
 });

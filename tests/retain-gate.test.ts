@@ -104,4 +104,24 @@ describe('shouldRetain()', () => {
     );
     expect(result.score).toBeLessThanOrEqual(1);
   });
+
+  it('boosts opinion/belief language', () => {
+    const r1 = shouldRetain(
+      'I believe the microservice approach is wrong for this project',
+    );
+    expect(r1.reason).toContain('opinion/belief language');
+    expect(r1.score).toBeGreaterThan(0.5);
+  });
+
+  it('boosts "in my experience" phrasing', () => {
+    const r1 = shouldRetain(
+      'In my experience, SQLite handles this workload fine',
+    );
+    expect(r1.reason).toContain('opinion/belief language');
+  });
+
+  it('boosts "we agreed" phrasing', () => {
+    const r1 = shouldRetain('We agreed to migrate the auth system to JWT');
+    expect(r1.reason).toContain('opinion/belief language');
+  });
 });

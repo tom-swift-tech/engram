@@ -131,22 +131,16 @@ describe('reflect()', () => {
     expect(log.completed_at).toBeTruthy();
   });
 
-  it('sets status to failed and logs error when LLM returns unparseable output', async () => {
+  it('completes with zero observations when LLM returns unparseable output', async () => {
     dbPath = tmpDbPath();
     await setupDb(dbPath, 5);
     vi.stubGlobal('fetch', mockOllamaFetch('this is not json at all'));
 
     const result = await reflect({ dbPath });
-    expect(result.status).toBe('failed');
-    expect(result.error).toBeDefined();
-
-    const db = new Database(dbPath);
-    const log = db
-      .prepare('SELECT * FROM reflect_log WHERE id = ?')
-      .get(result.logId) as any;
-    db.close();
-    expect(log.status).toBe('failed');
-    expect(log.error).toBeTruthy();
+    // Graceful recovery: unparseable JSON → empty arrays, not failure
+    expect(result.status).toBe('completed');
+    expect(result.observationsCreated).toBe(0);
+    expect(result.opinionsFormed).toBe(0);
   });
 
   it('sets status to failed when Ollama is unreachable', async () => {
