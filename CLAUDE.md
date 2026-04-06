@@ -140,7 +140,7 @@ engram/
 │   ├── working-memory-types.ts  ← types for working memory session management
 │   ├── mcp-tools.ts             ← MCP tool definitions (8 tools: retain/recall/reflect/extract/forget/supersede/session/queue_stats)
 │   └── mcp-server.ts            ← standalone MCP stdio server (engram-mcp CLI)
-├── tests/                        ← 184 tests across 11 files
+├── tests/                        ← 234 tests across 12 files
 │   ├── helpers.ts
 │   ├── retain.test.ts
 │   ├── retain-gate.test.ts
@@ -202,7 +202,7 @@ const response = await myAgent.recall('What IaC tools does Tom use?', { topK: 5 
 ### Run reflection
 ```bash
 # CLI
-npx engram reflect ./myAgent.engram
+npx tsx src/reflect.ts ./myAgent.engram
 
 # Or programmatically
 const result = await myAgent.reflect();

@@ -50,7 +50,7 @@ export interface RetainOptions {
   temporalLabel?: string;
   /** Skip entity extraction queue (for bulk imports) */
   skipExtraction?: boolean;
-  /** Dedup mode: 'exact' (default) skips if identical text exists, 'normalized' ignores case/whitespace, 'none' always creates new chunk */
+  /** Dedup mode: 'normalized' (default) ignores case/whitespace, 'exact' skips if identical text exists, 'none' always creates new chunk */
   dedupMode?: 'exact' | 'normalized' | 'none';
 }
 

@@ -136,7 +136,7 @@ export interface EngramOptions {
   };
   /** Ollama endpoint (default: http://localhost:11434) */
   ollamaUrl?: string;
-  /** Embedding model (default: nomic-embed-text) */
+  /** Embedding model (default: 'Xenova/nomic-embed-text-v1.5' local, 'nomic-embed-text' Ollama) */
   embedModel?: string;
   /** Embedding dimensions (default: 768 for nomic-embed-text) */
   embedDimensions?: number;

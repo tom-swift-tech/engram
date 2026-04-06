@@ -190,7 +190,7 @@ await myAgent.retain('Tom prefers Terraform with the bpg provider for Proxmox Ia
   memoryType?: string,    // 'world' | 'experience' | 'observation' | 'opinion' (default: 'world')
   source?: string,        // e.g. 'conversation:session-123'
   sourceType?: string,    // 'user_stated' | 'inferred' | 'external_doc' | 'tool_result' | 'agent_generated'
-  trustScore?: number,    // 0.0–1.0 (default: 0.7)
+  trustScore?: number,    // 0.0–1.0 (default: 0.5)
   context?: string,       // freeform context tag (e.g. 'infrastructure', 'project:valor')
   dedupMode?: string,     // 'exact' | 'normalized' | 'none' (default: 'normalized')
 });
@@ -469,10 +469,11 @@ Tools exposed:
 | `engram_forget` | Soft-delete a memory chunk by ID |
 | `engram_supersede` | Replace an outdated fact with corrected text |
 | `engram_session` | Infer or resume a working memory session; returns session state + related context |
+| `engram_queue_stats` | Return extraction queue depth and processing metrics |
 
 ## MCP Stdio Server
 
-Engram ships a standalone MCP server that exposes all 7 tools over stdio. Use it with any MCP-compatible client (Claude Code, Claude Desktop, Cursor, mcporter, etc.).
+Engram ships a standalone MCP server that exposes all 8 tools over stdio. Use it with any MCP-compatible client (Claude Code, Claude Desktop, Cursor, mcporter, etc.).
 
 ```bash
 # Basic usage
@@ -536,7 +537,7 @@ See **[docs/OPENCLAW-INTEGRATION.md](docs/OPENCLAW-INTEGRATION.md)** for the ful
 
 Portable skill files for agents that use Engram via mcporter:
 
-- **[skills/engram.md](skills/engram.md)** — Complete tool reference with all 7 MCP tools, mcporter syntax, usage patterns, and common mistakes.
+- **[skills/engram.md](skills/engram.md)** — Complete tool reference with all 8 MCP tools, mcporter syntax, usage patterns, and common mistakes.
 - **[skills/engram-session.md](skills/engram-session.md)** — Working memory session lifecycle: when to use `engram_session` vs `engram_recall`, threshold tuning, cleanup patterns.
 
 Copy these into your agent's skill directory for in-context tool guidance.
@@ -758,7 +759,7 @@ memory.close();
 ```bash
 npm install
 npm run build        # compile TypeScript → dist/
-npm test             # run test suite (184 tests)
+npm test             # run test suite (234 tests)
 npm run typecheck    # TypeScript check without emit
 npm run example      # run examples/basic-usage.ts (requires Ollama)
 ```
