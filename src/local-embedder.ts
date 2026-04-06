@@ -24,16 +24,18 @@ async function getPipeline(
 ): Promise<unknown> {
   const cacheKey = `${modelName}:${quantized}`;
   if (!pipelineCache.has(cacheKey)) {
-    const { pipeline } = await import('@xenova/transformers');
-    const p = pipeline('feature-extraction', modelName, { quantized }).catch(
-      (err: unknown) => {
-        // Self-healing: evict failed initialization so the next call can retry
-        // instead of permanently caching a rejected promise.
-        pipelineCache.delete(cacheKey);
-        throw err;
-      },
-    );
-    pipelineCache.set(cacheKey, p);
+    // Store the promise *before* the first await so concurrent callers
+    // share one in-flight initialization instead of racing.
+    const initPromise = (async () => {
+      const { pipeline } = await import('@xenova/transformers');
+      return pipeline('feature-extraction', modelName, { quantized });
+    })().catch((err: unknown) => {
+      // Self-healing: evict failed initialization so the next call can retry
+      // instead of permanently caching a rejected promise.
+      pipelineCache.delete(cacheKey);
+      throw err;
+    });
+    pipelineCache.set(cacheKey, initPromise);
   }
   return pipelineCache.get(cacheKey)!;
 }
@@ -93,17 +95,29 @@ export class LocalEmbedder implements EmbeddingProvider {
 
   constructor(
     model: string = 'Xenova/nomic-embed-text-v1.5',
-    options?: { quantized?: boolean },
+    options?: { quantized?: boolean; dimensions?: number },
   ) {
     this.modelName = model;
     this.quantized = options?.quantized ?? true;
-    this.modelInfo = MODEL_REGISTRY[model] ?? {
-      dimensions: 768,
-      usePrefixes: false,
-      queryPrefix: '',
-      documentPrefix: '',
-    };
-    this.dimensions = this.modelInfo.dimensions;
+
+    const registered = MODEL_REGISTRY[model];
+    if (registered) {
+      this.modelInfo = registered;
+      this.dimensions = registered.dimensions;
+    } else if (options?.dimensions) {
+      this.modelInfo = {
+        dimensions: options.dimensions,
+        usePrefixes: false,
+        queryPrefix: '',
+        documentPrefix: '',
+      };
+      this.dimensions = options.dimensions;
+    } else {
+      throw new Error(
+        `Unknown embedding model "${model}". ` +
+          `Provide an explicit dimensions option so Engram records the correct vector size.`,
+      );
+    }
   }
 
   /**

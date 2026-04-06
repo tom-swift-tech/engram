@@ -133,8 +133,15 @@ describe('LocalEmbedder', () => {
     expect(new LocalEmbedder('Xenova/all-MiniLM-L6-v2').dimensions).toBe(384);
   });
 
-  it('defaults to 768 dimensions for unknown models', () => {
-    expect(new LocalEmbedder('unknown/model').dimensions).toBe(768);
+  it('throws for unknown models without explicit dimensions', () => {
+    expect(() => new LocalEmbedder('unknown/model')).toThrow(
+      'Unknown embedding model "unknown/model"',
+    );
+  });
+
+  it('accepts unknown models when dimensions are provided', () => {
+    const embedder = new LocalEmbedder('unknown/model', { dimensions: 1024 });
+    expect(embedder.dimensions).toBe(1024);
   });
 
   // -------------------------------------------------------------------------
@@ -163,6 +170,31 @@ describe('LocalEmbedder', () => {
     const vec = await embedder2.embed('test');
     expect(vec).toBeInstanceOf(Float32Array);
     expect(vec.length).toBe(768);
+  });
+
+  it('concurrent init() calls share a single pipeline initialization', async () => {
+    const embedder1 = new LocalEmbedder('Xenova/nomic-embed-text-v1.5');
+    const embedder2 = new LocalEmbedder('Xenova/nomic-embed-text-v1.5');
+
+    // Both init concurrently on a cold cache
+    await Promise.all([embedder1.init(), embedder2.init()]);
+
+    // pipeline() must be called exactly once — not twice
+    expect(mockPipelineFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('concurrent embed() calls on cold cache share one initialization', async () => {
+    const embedder1 = new LocalEmbedder('Xenova/nomic-embed-text-v1.5');
+    const embedder2 = new LocalEmbedder('Xenova/nomic-embed-text-v1.5');
+
+    const [vec1, vec2] = await Promise.all([
+      embedder1.embed('hello'),
+      embedder2.embed('world'),
+    ]);
+
+    expect(mockPipelineFn).toHaveBeenCalledTimes(1);
+    expect(vec1).toBeInstanceOf(Float32Array);
+    expect(vec2).toBeInstanceOf(Float32Array);
   });
 
   it('does not retry when pipeline succeeds — uses cache', async () => {
