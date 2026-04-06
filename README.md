@@ -598,9 +598,46 @@ Agent memory files use the `.engram` extension. They are standard SQLite databas
 | better-sqlite3 | SQLite driver for Node.js | Yes |
 | sqlite-vec | Vector similarity search extension | Yes (for semantic recall) |
 | @xenova/transformers | In-process embeddings (retain + recall) | Yes (default embedding path) |
+| @huggingface/transformers | Official HF alternative (see note below) | Optional (replaces @xenova/transformers) |
 | Ollama | Local LLM for extraction + reflection | Yes (for extract + reflect) |
 | llama3.1:8b | Fast model for extraction + reflection | Recommended |
 | nomic-embed-text (Ollama) | Ollama embedding model | Only when `useOllamaEmbeddings: true` |
+
+### Using `@huggingface/transformers` instead of `@xenova/transformers`
+
+Engram defaults to `@xenova/transformers` (v2) because it works without authentication — new users can `npm install` and go. The official `@huggingface/transformers` (v3+) is actively maintained and supports newer models, but **requires a Hugging Face token** for many model downloads.
+
+To switch:
+
+1. Swap the package:
+   ```bash
+   npm uninstall @xenova/transformers
+   npm install @huggingface/transformers
+   ```
+
+2. Set a Hugging Face token (create one at [hf.co/settings/tokens](https://huggingface.co/settings/tokens)):
+   ```bash
+   export HF_TOKEN=hf_...
+   ```
+
+3. Update the import in `src/local-embedder.ts`:
+   ```typescript
+   // Change this:
+   const { pipeline } = await import('@xenova/transformers');
+   // To this:
+   const { pipeline } = await import('@huggingface/transformers');
+   ```
+
+4. Use the official model IDs (no `Xenova/` prefix):
+   ```typescript
+   const embedder = new LocalEmbedder('nomic-ai/nomic-embed-text-v1.5', {
+     dimensions: 768,
+   });
+   ```
+
+   Since these models are not in the built-in `MODEL_REGISTRY`, you must pass `dimensions` explicitly. The registry knows `Xenova/*` model IDs only.
+
+> **Note:** The embedding vectors are compatible between the two packages for the same underlying model weights. Existing `.engram` files do not need re-embedding.
 
 ## Integration with valor-engine
 
