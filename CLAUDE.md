@@ -154,11 +154,6 @@ engram/
 │   ├── agent-integration.test.ts
 │   └── mcp-server.test.ts
 ├── docs/
-│   ├── CPU-EXTRACTION-TIER1-SPEC.md
-│   ├── FIX-MCP-TOOL-DISCOVERABILITY.md
-│   ├── GENERATION-PROVIDER-SPEC.md
-│   ├── MCP-SERVER-SPEC.md
-│   ├── REFACTOR-WORKING-MEMORY-PRIMITIVES.md
 │   └── OPENCLAW-INTEGRATION.md   ← OpenClaw memory plugin setup guide
 ├── skills/
 │   ├── engram.md                  ← portable agent skill (all 7 MCP tools)
