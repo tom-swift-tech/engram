@@ -3,6 +3,7 @@ import Database from 'better-sqlite3';
 import { Engram } from '../src/engram.js';
 import {
   MockEmbedder,
+  loadSchema,
   tmpDbPath,
   cleanupDb,
   mockOllamaFetch,
@@ -281,6 +282,51 @@ describe('Engram', () => {
     });
     expect(response.results.some((r) => r.source?.includes('bbb'))).toBe(true);
     expect(response.results.some((r) => r.source?.includes('aaa'))).toBe(false);
+  });
+
+  // ---- Embedding dimension validation ----
+
+  it('detects dimension mismatch on legacy bank without embed_dimensions key', async () => {
+    dbPath = tmpDbPath();
+
+    // Simulate a legacy .engram file: schema + embeddings but no embed_dimensions key
+    const legacyDb = new Database(dbPath);
+    loadSchema(legacyDb);
+    // Insert a chunk with a 768d embedding (768 * 4 = 3072 bytes)
+    legacyDb
+      .prepare(
+        `INSERT INTO chunks (id, text, embedding, memory_type, trust_score)
+         VALUES ('chk-legacy', 'legacy data', zeroblob(3072), 'world', 0.8)`,
+      )
+      .run();
+    legacyDb.close();
+
+    // Now open with a 384d embedder — should throw dimension mismatch
+    await expect(
+      Engram.create(dbPath, { embedder: new MockEmbedder(384) }),
+    ).rejects.toThrow(/dimension mismatch/i);
+  });
+
+  it('allows dimension change on legacy bank with no embeddings', async () => {
+    dbPath = tmpDbPath();
+
+    // Create a legacy .engram file with schema but no chunks
+    const legacyDb = new Database(dbPath);
+    loadSchema(legacyDb);
+    legacyDb.close();
+
+    // Opening with any dimension should work
+    engram = await Engram.create(dbPath, { embedder: new MockEmbedder(384) });
+    engram.close();
+    engram = undefined;
+
+    // Verify stored dimension was recorded
+    const verifyDb = new Database(dbPath);
+    const row = verifyDb
+      .prepare(`SELECT value FROM bank_config WHERE key = 'embed_dimensions'`)
+      .get() as { value: string };
+    verifyDb.close();
+    expect(row.value).toBe('384');
   });
 
   // ---- Failure cleanup ----

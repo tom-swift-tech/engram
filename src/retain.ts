@@ -422,22 +422,45 @@ async function extractEntities(
 
 /**
  * Recover extraction queue items stuck in 'processing' state (e.g. after a crash).
- * Resets them to 'pending' so they'll be retried on the next processExtractionQueue call.
+ * Items with attempts < 3 are reset to 'pending' for retry.
+ * Items with attempts >= 3 are moved to 'failed' (max retries exhausted).
  *
  * @param stallTimeoutMinutes — items in 'processing' longer than this are considered stalled (default: 5)
- * @returns number of items recovered
+ * @returns number of items recovered (reset to pending + moved to failed)
  */
 export function recoverStalledExtractions(
   db: Database.Database,
   stallTimeoutMinutes: number = 5,
 ): number {
-  const stmt = db.prepare(`
+  const timeout = String(stallTimeoutMinutes);
+
+  // Retryable items: reset to pending
+  const retried = db
+    .prepare(
+      `
     UPDATE extraction_queue
     SET status = 'pending', next_retry_after = CURRENT_TIMESTAMP
     WHERE status = 'processing'
+      AND attempts < 3
       AND last_attempt < datetime('now', '-' || ? || ' minutes')
-  `);
-  return stmt.run(String(stallTimeoutMinutes)).changes;
+  `,
+    )
+    .run(timeout).changes;
+
+  // Max-attempt items: move to failed so they don't sit as zombie pending rows
+  const failed = db
+    .prepare(
+      `
+    UPDATE extraction_queue
+    SET status = 'failed'
+    WHERE status = 'processing'
+      AND attempts >= 3
+      AND last_attempt < datetime('now', '-' || ? || ' minutes')
+  `,
+    )
+    .run(timeout).changes;
+
+  return retried + failed;
 }
 
 /**
@@ -472,14 +495,18 @@ export async function processExtractionQueue(
     .all(batchSize) as Array<{ chunk_id: string; text: string }>;
 
   for (const item of pending) {
-    // Mark as processing
-    db.prepare(
-      `
+    // Claim via compare-and-set: only transition if still pending.
+    // Prevents double-execution if another worker or recovery reclaimed the item.
+    const claimed = db
+      .prepare(
+        `
       UPDATE extraction_queue
       SET status = 'processing', last_attempt = CURRENT_TIMESTAMP, attempts = attempts + 1
-      WHERE chunk_id = ?
+      WHERE chunk_id = ? AND status = 'pending'
     `,
-    ).run(item.chunk_id);
+      )
+      .run(item.chunk_id);
+    if (claimed.changes === 0) continue; // another worker claimed it
 
     try {
       const extracted = await extractEntities(item.text, generator);

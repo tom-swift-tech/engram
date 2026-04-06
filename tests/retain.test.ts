@@ -529,6 +529,38 @@ describe('recoverStalledExtractions()', () => {
       .get() as any;
     expect(row.status).toBe('processing');
   });
+
+  it('moves stalled items with attempts >= 3 to failed instead of pending', async () => {
+    await retain(db, 'max attempts test', embedder, {
+      memoryType: 'world',
+    });
+    // Simulate crash on 3rd attempt
+    db.prepare(
+      `UPDATE extraction_queue SET status = 'processing', attempts = 3, last_attempt = datetime('now', '-10 minutes')`,
+    ).run();
+
+    const recovered = recoverStalledExtractions(db, 5);
+    expect(recovered).toBe(1);
+
+    const row = db
+      .prepare('SELECT status FROM extraction_queue LIMIT 1')
+      .get() as any;
+    expect(row.status).toBe('failed');
+  });
+
+  it('claim uses compare-and-set — skips already-claimed items', async () => {
+    await retain(db, 'cas test item', embedder, { memoryType: 'world' });
+
+    // Manually set to processing (simulating another worker claimed it)
+    db.prepare(
+      `UPDATE extraction_queue SET status = 'processing', last_attempt = CURRENT_TIMESTAMP`,
+    ).run();
+
+    const generator = new MockGenerator(EXTRACTION_RESPONSE);
+    const result = await processExtractionQueue(db, generator);
+    // Should skip the item because CAS fails (status is not 'pending')
+    expect(result.processed).toBe(0);
+  });
 });
 
 // ---------------------------------------------------------------------------

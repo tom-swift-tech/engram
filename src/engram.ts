@@ -355,40 +355,54 @@ export class Engram {
       generator = new OllamaGeneration({ url: ollamaUrl, model: reflectModel });
     }
 
-    // Validate embedding dimensions against existing data
+    // Validate embedding dimensions against existing data.
+    // Legacy .engram files won't have embed_dimensions in bank_config,
+    // so we derive it from existing embeddings before recording.
     const currentDim = embedder.dimensions;
     const storedDim = db
       .prepare(`SELECT value FROM bank_config WHERE key = 'embed_dimensions'`)
       .get() as { value: string } | undefined;
 
-    if (storedDim) {
-      const existing = parseInt(storedDim.value, 10);
-      if (existing !== currentDim) {
-        const hasEmbeddings = (
-          db
-            .prepare(
-              `SELECT COUNT(*) as cnt FROM chunks WHERE embedding IS NOT NULL`,
-            )
-            .get() as { cnt: number }
-        ).cnt;
-        if (hasEmbeddings > 0) {
-          db.close();
-          throw new Error(
-            `Embedding dimension mismatch: database contains ${hasEmbeddings} chunks with ${existing}d embeddings, ` +
-              `but the current embedder produces ${currentDim}d vectors. ` +
-              `Cosine similarity will be invalid. Use the same model or re-embed existing chunks.`,
-          );
-        }
-        // No embeddings yet — safe to update stored dimensions
-        db.prepare(
-          `UPDATE bank_config SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = 'embed_dimensions'`,
-        ).run(String(currentDim));
+    let knownDim: number | null = storedDim
+      ? parseInt(storedDim.value, 10)
+      : null;
+
+    // Legacy migration: no stored dimension — derive from existing embeddings
+    if (knownDim === null) {
+      const sample = db
+        .prepare(
+          `SELECT length(embedding) as len FROM chunks WHERE embedding IS NOT NULL LIMIT 1`,
+        )
+        .get() as { len: number } | undefined;
+      if (sample && sample.len > 0) {
+        // Float32 = 4 bytes per dimension
+        knownDim = sample.len / 4;
       }
-    } else {
-      db.prepare(
-        `INSERT OR IGNORE INTO bank_config (key, value) VALUES ('embed_dimensions', ?)`,
-      ).run(String(currentDim));
     }
+
+    if (knownDim !== null && knownDim !== currentDim) {
+      const hasEmbeddings = (
+        db
+          .prepare(
+            `SELECT COUNT(*) as cnt FROM chunks WHERE embedding IS NOT NULL`,
+          )
+          .get() as { cnt: number }
+      ).cnt;
+      if (hasEmbeddings > 0) {
+        db.close();
+        throw new Error(
+          `Embedding dimension mismatch: database contains ${hasEmbeddings} chunks with ${knownDim}d embeddings, ` +
+            `but the current embedder produces ${currentDim}d vectors. ` +
+            `Cosine similarity will be invalid. Use the same model or re-embed existing chunks.`,
+        );
+      }
+    }
+
+    // Record (or update) the current dimension
+    db.prepare(
+      `INSERT INTO bank_config (key, value) VALUES ('embed_dimensions', ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
+    ).run(String(currentDim));
 
     return new Engram(db, path, embedder, generator);
   }
