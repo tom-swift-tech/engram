@@ -662,6 +662,36 @@ describe('formatForPrompt()', () => {
     // Should at least have the header
     expect(output).toContain('## Relevant Memory Context');
   });
+
+  it('includes disclaimer in beliefs heading to prevent feedback loops', async () => {
+    const { formatForPrompt } = await import('../src/recall.js');
+    const output = formatForPrompt({
+      results: [],
+      opinions: [
+        { belief: 'Test belief', confidence: 0.9, domain: 'test' },
+      ],
+      observations: [],
+      totalCandidates: 0,
+      strategiesUsed: [],
+    });
+    expect(output).toContain('agent-synthesized, not ground truth');
+    expect(output).not.toContain('### Beliefs\n');
+  });
+
+  it('caps displayed opinion confidence at 85%', async () => {
+    const { formatForPrompt } = await import('../src/recall.js');
+    const output = formatForPrompt({
+      results: [],
+      opinions: [
+        { belief: 'Very confident belief', confidence: 0.99, domain: null },
+      ],
+      observations: [],
+      totalCandidates: 0,
+      strategiesUsed: [],
+    });
+    expect(output).toContain('[85%]');
+    expect(output).not.toContain('[99%]');
+  });
 });
 
 // ---------------------------------------------------------------------------

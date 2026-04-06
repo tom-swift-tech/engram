@@ -265,6 +265,13 @@ function parseReflectOutput(raw: string): LLMReflectOutput {
 // Database Helpers
 // =============================================================================
 
+/**
+ * Fetch chunks that haven't been reflected on yet.
+ *
+ * Only 'world' and 'experience' memory types are included.
+ * 'observation' and 'opinion' types are excluded because they are *outputs*
+ * of reflection — feeding them back in would create circular synthesis.
+ */
 function getUnreflectedFacts(db: Database.Database, limit: number): Chunk[] {
   return db
     .prepare(
@@ -445,6 +452,20 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
   };
 
   try {
+    // 0. Decay stale opinions — prevents beliefs from staying at max confidence
+    // when they haven't been reinforced or challenged recently.
+    // Reduces by 2% per cycle, floored at 0.1, at most once per 7 days.
+    db.prepare(`
+      UPDATE opinions
+      SET confidence = MAX(0.1, confidence - 0.02),
+          updated_at = CURRENT_TIMESTAMP
+      WHERE is_active = TRUE
+        AND confidence > 0.1
+        AND (last_reinforced IS NULL OR last_reinforced < datetime('now', '-30 days'))
+        AND (last_challenged IS NULL OR last_challenged < datetime('now', '-30 days'))
+        AND updated_at < datetime('now', '-7 days')
+    `).run();
+
     // 1. Gather unreflected facts
     const unreflected = getUnreflectedFacts(db, batchSize);
 
@@ -585,10 +606,30 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
             opUpdate.domain,
           );
           if (existing) {
-            const clampedDelta = Math.min(
+            let clampedDelta = Math.min(
               0.15,
               Math.max(0, opUpdate.confidence_delta),
             );
+
+            // Dampen self-reinforcement: if >50% of evidence is agent-generated,
+            // halve the delta to break opinion feedback loops
+            const evidenceIds = opUpdate.evidence_chunk_ids.filter(
+              (id: string) => id,
+            );
+            if (evidenceIds.length > 0) {
+              const placeholders = evidenceIds.map(() => '?').join(',');
+              const agentCount = (
+                db
+                  .prepare(
+                    `SELECT COUNT(*) as cnt FROM chunks WHERE id IN (${placeholders}) AND source_type = 'agent_generated'`,
+                  )
+                  .get(...evidenceIds) as { cnt: number }
+              ).cnt;
+              if (agentCount / evidenceIds.length > 0.5) {
+                clampedDelta = clampedDelta * 0.5;
+              }
+            }
+
             const mergedSupporting = [
               ...new Set([
                 ...existing.supporting_chunks,

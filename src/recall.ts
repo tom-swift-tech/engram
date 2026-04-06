@@ -861,12 +861,16 @@ export function formatForPrompt(
   tryAdd('');
 
   // 1. Opinions — highest signal, most condensed
+  // Disclaimer + confidence cap prevent opinion feedback loops:
+  // without these, opinions injected into LLM prompts get reinforced to max confidence
   if (response.opinions.length > 0) {
-    if (!tryAdd('### Beliefs')) return lines.join('\n');
+    if (!tryAdd('### Beliefs (agent-synthesized, not ground truth)'))
+      return lines.join('\n');
     tryAdd('');
     let omitted = 0;
     for (const o of response.opinions) {
-      const conf = `${(o.confidence * 100).toFixed(0)}%`;
+      const displayConf = Math.min(o.confidence, 0.85);
+      const conf = `${(displayConf * 100).toFixed(0)}%`;
       const domain = o.domain ? ` (${o.domain})` : '';
       if (!tryAdd(`- [${conf}] ${o.belief}${domain}`)) {
         omitted++;

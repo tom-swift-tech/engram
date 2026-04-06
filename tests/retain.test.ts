@@ -4,6 +4,7 @@ import {
   retain,
   retainBatch,
   processExtractionQueue,
+  recoverStalledExtractions,
   getQueueStats,
   chunkText,
 } from '../src/retain.js';
@@ -477,6 +478,56 @@ describe('processExtractionQueue()', () => {
     expect(stats.failed).toBe(0);
     expect(stats.oldest_pending).toBeNull();
     db.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// recoverStalledExtractions
+// ---------------------------------------------------------------------------
+
+describe('recoverStalledExtractions()', () => {
+  let db: Database.Database;
+  const embedder = new MockEmbedder();
+
+  beforeEach(() => {
+    db = createTestDb();
+  });
+  afterEach(() => db.close());
+
+  it('recovers items stuck in processing longer than stallTimeout', async () => {
+    await retain(db, 'stalled extraction test', embedder, {
+      memoryType: 'world',
+    });
+    // Simulate a crash: manually set status to processing with old last_attempt
+    db.prepare(
+      `UPDATE extraction_queue SET status = 'processing', last_attempt = datetime('now', '-10 minutes')`,
+    ).run();
+
+    const recovered = recoverStalledExtractions(db, 5);
+    expect(recovered).toBe(1);
+
+    const row = db
+      .prepare('SELECT status FROM extraction_queue LIMIT 1')
+      .get() as any;
+    expect(row.status).toBe('pending');
+  });
+
+  it('does not recover recently-started processing items', async () => {
+    await retain(db, 'recent processing test', embedder, {
+      memoryType: 'world',
+    });
+    // Set status to processing with recent last_attempt
+    db.prepare(
+      `UPDATE extraction_queue SET status = 'processing', last_attempt = datetime('now', '-1 minutes')`,
+    ).run();
+
+    const recovered = recoverStalledExtractions(db, 5);
+    expect(recovered).toBe(0);
+
+    const row = db
+      .prepare('SELECT status FROM extraction_queue LIMIT 1')
+      .get() as any;
+    expect(row.status).toBe('processing');
   });
 });
 

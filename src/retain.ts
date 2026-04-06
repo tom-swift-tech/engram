@@ -421,6 +421,26 @@ async function extractEntities(
 }
 
 /**
+ * Recover extraction queue items stuck in 'processing' state (e.g. after a crash).
+ * Resets them to 'pending' so they'll be retried on the next processExtractionQueue call.
+ *
+ * @param stallTimeoutMinutes — items in 'processing' longer than this are considered stalled (default: 5)
+ * @returns number of items recovered
+ */
+export function recoverStalledExtractions(
+  db: Database.Database,
+  stallTimeoutMinutes: number = 5,
+): number {
+  const stmt = db.prepare(`
+    UPDATE extraction_queue
+    SET status = 'pending', next_retry_after = CURRENT_TIMESTAMP
+    WHERE status = 'processing'
+      AND last_attempt < datetime('now', '-' || ? || ' minutes')
+  `);
+  return stmt.run(String(stallTimeoutMinutes)).changes;
+}
+
+/**
  * Process the extraction queue — call this from a background worker or cron
  */
 export async function processExtractionQueue(
@@ -428,6 +448,9 @@ export async function processExtractionQueue(
   generator: GenerationProvider,
   batchSize: number = 10,
 ): Promise<{ processed: number; failed: number }> {
+  // Auto-recover items stuck in 'processing' from prior crashes
+  recoverStalledExtractions(db);
+
   let processed = 0;
   let failed = 0;
 

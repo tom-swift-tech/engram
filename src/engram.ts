@@ -35,6 +35,7 @@ import {
   retain,
   retainBatch,
   processExtractionQueue,
+  recoverStalledExtractions,
   getQueueStats,
   OllamaEmbeddings,
   LocalEmbedder,
@@ -354,6 +355,41 @@ export class Engram {
       generator = new OllamaGeneration({ url: ollamaUrl, model: reflectModel });
     }
 
+    // Validate embedding dimensions against existing data
+    const currentDim = embedder.dimensions;
+    const storedDim = db
+      .prepare(`SELECT value FROM bank_config WHERE key = 'embed_dimensions'`)
+      .get() as { value: string } | undefined;
+
+    if (storedDim) {
+      const existing = parseInt(storedDim.value, 10);
+      if (existing !== currentDim) {
+        const hasEmbeddings = (
+          db
+            .prepare(
+              `SELECT COUNT(*) as cnt FROM chunks WHERE embedding IS NOT NULL`,
+            )
+            .get() as { cnt: number }
+        ).cnt;
+        if (hasEmbeddings > 0) {
+          db.close();
+          throw new Error(
+            `Embedding dimension mismatch: database contains ${hasEmbeddings} chunks with ${existing}d embeddings, ` +
+              `but the current embedder produces ${currentDim}d vectors. ` +
+              `Cosine similarity will be invalid. Use the same model or re-embed existing chunks.`,
+          );
+        }
+        // No embeddings yet — safe to update stored dimensions
+        db.prepare(
+          `UPDATE bank_config SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = 'embed_dimensions'`,
+        ).run(String(currentDim));
+      }
+    } else {
+      db.prepare(
+        `INSERT OR IGNORE INTO bank_config (key, value) VALUES ('embed_dimensions', ?)`,
+      ).run(String(currentDim));
+    }
+
     return new Engram(db, path, embedder, generator);
   }
 
@@ -447,11 +483,17 @@ export class Engram {
    *
    * Opens a separate DB connection internally (WAL mode: safe alongside
    * idle retain/recall connections).
+   *
+   * @remarks Only chunks with memoryType 'world' or 'experience' are processed.
+   * Observations and opinions are outputs of reflection, not inputs.
    */
-  async reflect(): Promise<ReflectResult> {
+  async reflect(
+    options?: Pick<ReflectConfig, 'batchSize' | 'minFactsThreshold'>,
+  ): Promise<ReflectResult> {
     return reflect({
       dbPath: this.dbPath,
       generator: this.generator,
+      ...options,
     });
   }
 
@@ -463,6 +505,17 @@ export class Engram {
     batchSize: number = 10,
   ): Promise<{ processed: number; failed: number }> {
     return processExtractionQueue(this.db, this.generator, batchSize);
+  }
+
+  /**
+   * Recover extraction queue items stuck in 'processing' state after a crash.
+   * Called automatically by processExtractions(), but can be invoked manually.
+   *
+   * @param stallTimeoutMinutes — items processing longer than this are reset (default: 5)
+   * @returns number of recovered items
+   */
+  recoverExtractions(stallTimeoutMinutes?: number): number {
+    return recoverStalledExtractions(this.db, stallTimeoutMinutes);
   }
 
   /** Get extraction queue health stats (pending, completed, failed counts). */

@@ -355,4 +355,79 @@ describe('reflect()', () => {
     // With row-ID-based UPDATE, fuzzy match successfully updates the opinion
     expect(op.confidence).toBeGreaterThan(0.6);
   });
+
+  it('decays stale opinions not reinforced in 30+ days', async () => {
+    dbPath = tmpDbPath();
+    await setupDb(dbPath, 5);
+
+    const db = new Database(dbPath);
+    // Insert an opinion that hasn't been reinforced in 60 days and not updated in 8 days
+    db.prepare(`
+      INSERT INTO opinions (id, belief, confidence, domain, supporting_chunks, related_entities,
+        last_reinforced, updated_at)
+      VALUES ('op-stale', 'Stale opinion', 0.8, 'test', '[]', '[]',
+        datetime('now', '-60 days'), datetime('now', '-8 days'))
+    `).run();
+    db.close();
+
+    // Reflect will apply decay before gathering facts
+    vi.stubGlobal('fetch', mockOllamaFetch(JSON.stringify({
+      observations: [],
+      opinion_updates: [],
+      observation_refreshes: [],
+    })));
+
+    await reflect({ dbPath });
+
+    const verify = new Database(dbPath);
+    const op = verify.prepare(`SELECT confidence FROM opinions WHERE id = 'op-stale'`).get() as { confidence: number };
+    verify.close();
+
+    expect(op.confidence).toBeCloseTo(0.78, 2);
+  });
+
+  it('dampens reinforcement when evidence is agent-generated', async () => {
+    dbPath = tmpDbPath();
+    await setupDb(dbPath, 5);
+
+    const db = new Database(dbPath);
+    // Insert an existing opinion to be reinforced
+    db.prepare(`
+      INSERT INTO opinions (id, belief, confidence, domain, supporting_chunks, related_entities)
+      VALUES ('op-agent', 'Agent-reinforced belief', 0.6, 'test', '[]', '[]')
+    `).run();
+
+    // Insert agent-generated chunks as evidence
+    const chunkIds = ['chk-ag1', 'chk-ag2'];
+    for (const id of chunkIds) {
+      db.prepare(`
+        INSERT INTO chunks (id, text, embedding, memory_type, source_type, trust_score)
+        VALUES (?, 'agent output', zeroblob(32), 'world', 'agent_generated', 0.5)
+      `).run(id);
+    }
+    db.close();
+
+    vi.stubGlobal('fetch', mockOllamaFetch(JSON.stringify({
+      observations: [],
+      opinion_updates: [{
+        belief: 'Agent-reinforced belief',
+        direction: 'reinforce',
+        confidence_delta: 0.10,
+        domain: 'test',
+        evidence_chunk_ids: chunkIds,
+        entity_names: [],
+      }],
+      observation_refreshes: [],
+    })));
+
+    const result = await reflect({ dbPath });
+    expect(result.opinionsReinforced).toBe(1);
+
+    const verify = new Database(dbPath);
+    const op = verify.prepare(`SELECT confidence FROM opinions WHERE id = 'op-agent'`).get() as { confidence: number };
+    verify.close();
+
+    // With dampening (0.5x), delta of 0.10 becomes 0.05, so 0.6 + 0.05 = 0.65
+    expect(op.confidence).toBeCloseTo(0.65, 2);
+  });
 });

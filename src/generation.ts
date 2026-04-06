@@ -89,6 +89,18 @@ export class OllamaGeneration implements GenerationProvider {
 // OpenAICompatibleGeneration
 // =============================================================================
 
+/**
+ * Generation provider for any OpenAI-compatible chat completions API.
+ *
+ * Tested with: Ollama (localhost), xAI / Grok (api.x.ai, grok-3-mini),
+ * OpenRouter, LM Studio, and vLLM.
+ *
+ * @example
+ * ```ts
+ * const gen = new OpenAICompatibleGeneration('https://api.x.ai', 'grok-3-mini', process.env.XAI_API_KEY);
+ * const engram = await Engram.create('./agent.engram', { generator: gen });
+ * ```
+ */
 export class OpenAICompatibleGeneration implements GenerationProvider {
   readonly name: string;
   private baseUrl: string;
