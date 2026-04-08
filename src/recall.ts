@@ -166,6 +166,14 @@ function inClausePlaceholders(values: string[]): string {
 }
 
 /**
+ * Strip characters that break FTS5 MATCH syntax and graph tokenization.
+ * Preserves words and whitespace only.
+ */
+function sanitizeQuery(query: string): string {
+  return query.replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/**
  * Build SQL conditions and params for temporal filtering.
  * Uses event_time when set, falls back to created_at.
  * Same logic as temporalSearch — shared so all strategies filter consistently.
@@ -710,16 +718,20 @@ export async function recall(
     }
   }
 
-  if (strategies.includes('keyword')) {
-    const results = keywordSearch(db, query, perStrategyLimit, filters);
+  // Sanitize for strategies that use raw text (FTS5 MATCH and graph tokenizer
+  // choke on punctuation like '?', '*', '"' etc.)
+  const sanitized = sanitizeQuery(query);
+
+  if (strategies.includes('keyword') && sanitized) {
+    const results = keywordSearch(db, sanitized, perStrategyLimit, filters);
     if (results.length > 0) {
       strategyResults.push(results);
       strategiesUsed.push('keyword');
     }
   }
 
-  if (strategies.includes('graph')) {
-    const results = graphSearch(db, query, perStrategyLimit, filters);
+  if (strategies.includes('graph') && sanitized) {
+    const results = graphSearch(db, sanitized, perStrategyLimit, filters);
     if (results.length > 0) {
       strategyResults.push(results);
       strategiesUsed.push('graph');
