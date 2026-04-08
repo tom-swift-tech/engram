@@ -153,6 +153,8 @@ interface QueryFilters {
   minTrust?: number;
   sourceFilter?: string;
   contextFilter?: string;
+  after?: string;
+  before?: string;
 }
 
 // =============================================================================
@@ -161,6 +163,34 @@ interface QueryFilters {
 
 function inClausePlaceholders(values: string[]): string {
   return values.map(() => '?').join(',');
+}
+
+/**
+ * Build SQL conditions and params for temporal filtering.
+ * Uses event_time when set, falls back to created_at.
+ * Same logic as temporalSearch — shared so all strategies filter consistently.
+ */
+function buildTemporalFilter(
+  filters: QueryFilters,
+  tableAlias: string = 'c',
+): { conditions: string[]; params: any[] } {
+  const conditions: string[] = [];
+  const params: any[] = [];
+
+  if (filters.after) {
+    conditions.push(
+      `(datetime(${tableAlias}.event_time) >= datetime(?) OR (${tableAlias}.event_time IS NULL AND datetime(${tableAlias}.created_at) >= datetime(?)))`,
+    );
+    params.push(filters.after, filters.after);
+  }
+  if (filters.before) {
+    conditions.push(
+      `(datetime(${tableAlias}.event_time) <= datetime(?) OR (${tableAlias}.event_time IS NULL AND datetime(${tableAlias}.created_at) <= datetime(?)))`,
+    );
+    params.push(filters.before, filters.before);
+  }
+
+  return { conditions, params };
 }
 
 // =============================================================================
@@ -184,6 +214,12 @@ function semanticSearch(
     ? `AND c.memory_type IN (${inClausePlaceholders(memoryTypes)})`
     : '';
 
+  // Build optional temporal filter
+  const temporal = buildTemporalFilter(filters);
+  const temporalSQL = temporal.conditions.length
+    ? 'AND ' + temporal.conditions.join(' AND ')
+    : '';
+
   try {
     const rows = db
       .prepare(
@@ -198,6 +234,7 @@ function semanticSearch(
         AND (? IS NULL OR c.source LIKE '%' || ? || '%')
         AND (? IS NULL OR c.context LIKE '%' || ? || '%')
         ${typeFilter}
+        ${temporalSQL}
       ORDER BY distance ASC
       LIMIT ?
     `,
@@ -210,6 +247,7 @@ function semanticSearch(
         contextFilter ?? null,
         contextFilter ?? null,
         ...(memoryTypes ?? []),
+        ...temporal.params,
         limit,
       ) as any[];
 
@@ -240,6 +278,12 @@ function keywordSearch(
     ? `AND c.memory_type IN (${inClausePlaceholders(memoryTypes)})`
     : '';
 
+  // Build optional temporal filter
+  const temporal = buildTemporalFilter(filters);
+  const temporalSQL = temporal.conditions.length
+    ? 'AND ' + temporal.conditions.join(' AND ')
+    : '';
+
   try {
     const rows = db
       .prepare(
@@ -255,6 +299,7 @@ function keywordSearch(
         AND (? IS NULL OR c.source LIKE '%' || ? || '%')
         AND (? IS NULL OR c.context LIKE '%' || ? || '%')
         ${typeFilter}
+        ${temporalSQL}
       ORDER BY rank
       LIMIT ?
     `,
@@ -267,6 +312,7 @@ function keywordSearch(
         contextFilter ?? null,
         contextFilter ?? null,
         ...(memoryTypes ?? []),
+        ...temporal.params,
         limit,
       ) as any[];
 
@@ -352,6 +398,12 @@ function graphSearch(
       ? `AND c.memory_type IN (${inClausePlaceholders(memoryTypes)})`
       : '';
 
+    // Build optional temporal filter
+    const temporal = buildTemporalFilter(filters);
+    const temporalSQL = temporal.conditions.length
+      ? 'AND ' + temporal.conditions.join(' AND ')
+      : '';
+
     const directChunks = db
       .prepare(
         `
@@ -365,6 +417,7 @@ function graphSearch(
         AND (? IS NULL OR c.source LIKE '%' || ? || '%')
         AND (? IS NULL OR c.context LIKE '%' || ? || '%')
         ${typeFilter}
+        ${temporalSQL}
       ORDER BY c.trust_score DESC, c.created_at DESC
       LIMIT ?
     `,
@@ -377,6 +430,7 @@ function graphSearch(
         contextFilter ?? null,
         contextFilter ?? null,
         ...(memoryTypes ?? []),
+        ...temporal.params,
         limit,
       ) as any[];
 
@@ -399,6 +453,7 @@ function graphSearch(
         AND (? IS NULL OR c.source LIKE '%' || ? || '%')
         AND (? IS NULL OR c.context LIKE '%' || ? || '%')
         ${typeFilter}
+        ${temporalSQL}
       ORDER BY r.confidence DESC, c.trust_score DESC
       LIMIT ?
     `,
@@ -413,6 +468,7 @@ function graphSearch(
         contextFilter ?? null,
         contextFilter ?? null,
         ...(memoryTypes ?? []),
+        ...temporal.params,
         Math.max(0, limit - directChunks.length),
       ) as any[];
 
@@ -626,6 +682,8 @@ export async function recall(
     minTrust,
     sourceFilter,
     contextFilter,
+    after: effectiveAfter,
+    before: effectiveBefore,
   };
   const strategyResults: ScoredChunk[][] = [];
   const strategiesUsed: string[] = [];
