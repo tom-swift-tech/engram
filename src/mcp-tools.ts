@@ -86,13 +86,14 @@ export const ENGRAM_TOOLS = [
   {
     name: 'engram_recall' as const,
     description:
-      'Retrieve relevant memories via four-strategy search (semantic, keyword, graph, temporal) fused with Reciprocal Rank Fusion. Temporal expressions in queries are auto-parsed — "last week", "yesterday", "March 15th", "past 30 days", "Q1 2026" all work without explicit after/before. Example: {query: "What happened last week?", topK: 5}. Returns results[], opinions[], observations[].',
+      'Retrieve relevant memories via four-strategy search (semantic, keyword, graph, temporal) fused with Reciprocal Rank Fusion. Temporal expressions in queries are auto-parsed — "last week", "yesterday", "March 15th", "past 30 days", "Q1 2026" all work without explicit after/before. QUERY BEST PRACTICES: Use keywords and proper nouns, not full questions. "Tom Swift role background" retrieves better than "Who is Tom?" because BM25 keyword search weights every word equally — question words like "who/what/how" match irrelevant content. For people: use their name + key attributes. For topics: use specific terms, not conversational phrasing. For dates: natural language works ("last March", "in 2023"). Returns results[], opinions[], observations[].',
     inputSchema: {
       type: 'object' as const,
       properties: {
         query: {
           type: 'string',
-          description: 'Natural language query',
+          description:
+            'Search query — use keywords and proper nouns, not full questions. Good: "Tom Swift role background". Bad: "Who is Tom Swift?". Temporal expressions are auto-parsed: "last week", "March 2025", "in 2023".',
         },
         topK: {
           type: 'number',

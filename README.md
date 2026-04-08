@@ -219,6 +219,8 @@ Retrieve memories using four parallel strategies fused via Reciprocal Rank Fusio
 
 Temporal expressions are auto-parsed from the query — `"last week"`, `"yesterday"`, `"March 15th"`, `"past 30 days"`, `"Q1 2026"` all activate the temporal strategy without explicit parameters.
 
+**Query best practices:** Use keywords and proper nouns, not full questions. BM25 keyword search weights every word equally — question words like "who/what/how" dilute the signal and match irrelevant content. For people: `"Tom Swift role background"` not `"Who is Tom?"`. For topics: `"Herd router deployment"` not `"What is the Herd router?"`. Temporal expressions work naturally: `"projects in 2023"`.
+
 ```typescript
 const response = await agent.recall('What IaC tools does Tom use?', {
   topK?: number,                    // max results (default: 10)
