@@ -450,6 +450,18 @@ Engram can replace OpenClaw's built-in flat-file FTS memory system with semantic
 
 Production-verified with the Tracer agent. See **[docs/OPENCLAW-INTEGRATION.md](docs/OPENCLAW-INTEGRATION.md)** for the full setup guide.
 
+### Migrating Existing Memory
+
+A CLI tool ships in `tools/openclaw-import/` to import existing OpenClaw `memory/` directories into `.engram` files. Deterministic classification — no LLM calls during import:
+
+```bash
+cd tools/openclaw-import && npm install
+npx tsx src/index.ts -i /path/to/memory -o ./agent.engram --dry-run  # preview
+npx tsx src/index.ts -i /path/to/memory -o ./agent.engram            # import
+```
+
+See **[tools/openclaw-import/README.md](tools/openclaw-import/README.md)** for the full category mapping and CLI options.
+
 ## Agent Skills
 
 Portable skill files for agents using Engram via mcporter:

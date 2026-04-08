@@ -1,0 +1,25 @@
+{
+  "name": "@engram/openclaw-import",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Import OpenClaw memory files into Engram",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "import": "tsx src/index.ts",
+    "import:dry": "tsx src/index.ts --dry-run"
+  },
+  "dependencies": {
+    "commander": "^12.0.0",
+    "engram": "file:../../",
+    "glob": "^10.3.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

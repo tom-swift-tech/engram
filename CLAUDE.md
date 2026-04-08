@@ -158,6 +158,19 @@ engram/
 ├── skills/
 │   ├── engram.md                  ← portable agent skill (all 7 MCP tools)
 │   └── engram-session.md          ← working memory session skill
+├── tools/
+│   └── openclaw-import/           ← CLI to import OpenClaw memory files into .engram
+│       ├── README.md
+│       ├── package.json
+│       ├── tsconfig.json
+│       └── src/
+│           ├── index.ts           ← CLI entry point (commander)
+│           ├── import.ts          ← orchestrator: classify → parse → map → retainBatch
+│           ├── classify.ts        ← path-based file classification + skip patterns
+│           ├── dates.ts           ← date extraction from filenames and content
+│           ├── parser.ts          ← H2-split markdown chunker with size limits
+│           ├── mapping.ts         ← category → memory type + trust score mapping
+│           └── types.ts           ← shared interfaces
 └── examples/
     └── basic-usage.ts
 ```

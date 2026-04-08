@@ -265,3 +265,58 @@ This is the production mcporter config used by the Tracer agent:
 ```
 
 The Ollama URL points to a Tailscale-accessible homelab node running Herd (Ollama-compatible API on port 40114).
+
+## Migrating OpenClaw Memory to Engram
+
+Engram ships with a CLI tool for importing existing OpenClaw memory directories into `.engram` files. This is a one-time migration — it reads your `memory/` directory, classifies files by path pattern, parses markdown into chunks, and batch-retains everything with appropriate trust scores.
+
+### Quick Start
+
+```bash
+cd tools/openclaw-import
+npm install
+
+# Preview what would be imported
+npx tsx src/index.ts -i /path/to/openclaw/memory -o ./agent.engram --dry-run
+
+# Run the import (local embeddings, no Ollama needed)
+npx tsx src/index.ts -i /path/to/openclaw/memory -o ./agent.engram
+
+# With Ollama embeddings
+npx tsx src/index.ts -i /path/to/openclaw/memory -o ./agent.engram \
+  --use-ollama-embeddings --ollama-url http://localhost:11434
+```
+
+### How It Works
+
+1. **Discover** — walks the memory directory for `.md` files, skips non-importable files (logs, JSON, backups)
+2. **Classify** — assigns each file a category based on its path (`core/`, `daily/`, `decisions/`, etc.)
+3. **Parse** — splits markdown on H2 headings into chunks (50–4000 chars)
+4. **Map** — assigns memory type, trust score, and source type per category
+5. **Retain** — batch-writes to Engram with deduplication (safe to re-run)
+
+### Category Mapping
+
+| Path Pattern | Category | Memory Type | Trust Score |
+|-------------|----------|-------------|-------------|
+| `core/*` | core | world | 0.90 |
+| `daily/*` | daily | experience | 0.70 |
+| `decisions/*` | decision | world | 0.85 |
+| `dreams/*-creative.md` | dream | experience | 0.60 |
+| `projects/*` | project | world | 0.80 |
+| Root `YYYY-MM-DD*.md` | daily | experience | 0.75 |
+| Everything else | memo | world | 0.75 |
+
+### Post-Migration
+
+After import, run extraction and reflection to build the knowledge graph:
+
+```bash
+# From engram root — process entity extraction queue
+npx tsx -e "const {Engram}=await import('./dist/engram.js'); const e=await Engram.open('./agent.engram'); await e.processExtractions(100); e.close()"
+
+# Run reflection to synthesize observations
+npx tsx src/reflect.ts ./agent.engram
+```
+
+See [`tools/openclaw-import/README.md`](../tools/openclaw-import/README.md) for full CLI options and architecture details.
