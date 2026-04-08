@@ -68,7 +68,7 @@ The system mirrors how biological memory works:
 
 3. **Reconsolidation** (reflect) — Periodic review of accumulated traces produces higher-order understanding. Observations emerge from patterns. Beliefs form and update with confidence. Old observations get refined as new evidence arrives. This is the learning loop.
 
-4. **Retrieval** (recall) — Multi-pathway access to stored traces. Semantic similarity (pattern matching), keyword (direct access), graph traversal (associative recall), temporal (episodic memory). Results are fused and weighted by trace strength (trust score).
+4. **Retrieval** (recall) — Multi-pathway access to stored traces. Semantic similarity (pattern matching), keyword (direct access), graph traversal (associative recall), temporal (episodic memory). Results are fused via RRF and weighted by trace strength (trust score). When temporal bounds are detected (auto-parsed or explicit), ALL strategies filter by date — not just the temporal strategy. Queries are sanitized (punctuation stripped) before keyword/graph to prevent FTS5 syntax errors.
 
 ## Key Design Decisions
 
