@@ -69,11 +69,7 @@ impl Executor {
             | Statement::Link(_)
             | Statement::Reflect(_) => Ok(statements::write_reject::reject(stmt)),
 
-            // Pipeline implemented in Task 11
-            Statement::Pipeline(_) => Ok(QueryResult::error(
-                "Pipeline",
-                "PIPELINE not yet implemented",
-            )),
+            Statement::Pipeline(p) => statements::pipeline::execute(&self.conn, p),
         }
     }
 }
