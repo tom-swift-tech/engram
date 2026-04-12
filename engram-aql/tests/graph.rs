@@ -32,11 +32,14 @@ fn with_links_type_filter_limits_to_matching_type() {
         .query(r#"RECALL FROM EPISODIC KEY id = "e-001" WITH LINKS TYPE "uses_pattern""#)
         .unwrap();
     assert!(result.success, "error: {:?}", result.error);
-    if let Some(links) = &result.links {
-        // All returned links should be of type uses_pattern
-        for link in links {
-            assert_eq!(link.link_type, "uses_pattern");
-        }
+    assert!(
+        result.links.is_some(),
+        "WITH LINKS TYPE should populate links field (even if empty)"
+    );
+    let links = result.links.as_ref().unwrap();
+    // All returned links should match the requested type
+    for link in links {
+        assert_eq!(link.link_type, "uses_pattern");
     }
 }
 

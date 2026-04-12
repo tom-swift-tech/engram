@@ -132,6 +132,12 @@ pub fn follow_links_expand(
 fn validate_identifier(ident: &str, context: &str) -> AqlResult<()> {
     // Allow alphanumerics, underscore, hyphen, and dot — matches AQL relation
     // type naming conventions. Rejects quotes, semicolons, SQL keywords, etc.
+    if ident.is_empty() {
+        return Err(crate::error::AqlError::InvalidQuery(format!(
+            "{} link type cannot be empty",
+            context
+        )));
+    }
     let safe = ident
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.');
