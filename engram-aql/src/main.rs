@@ -47,8 +47,7 @@ fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Command::Query { db_path, query } => {
-            eprintln!("TODO: query subcommand — db={:?} query={}", db_path, query);
-            Ok(())
+            engram_aql::subcommand::query::run(&db_path, &query)
         }
         Command::Repl { db_path } => {
             eprintln!("TODO: repl subcommand — db={:?}", db_path);

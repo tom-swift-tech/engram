@@ -7,6 +7,7 @@ pub mod result;
 pub mod schema;
 pub mod sql;
 pub mod statements;
+pub mod subcommand;
 
 pub use error::{AqlError, AqlResult, SchemaError};
 pub use executor::Executor;
