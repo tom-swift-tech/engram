@@ -27,6 +27,13 @@ VALUES
     ('o-001', 'Blue-green deployment reduces rollback risk', 'ops', 'deployment', '["e-001","e-004"]'),
     ('o-002', 'Failed deploys correlate with Friday pushes', 'ops', 'deployment', '["e-002"]');
 
+-- Opinions (confidence-scored beliefs formed from experience)
+INSERT INTO opinions (id, belief, confidence, domain, evidence_count, supporting_chunks, related_entities)
+VALUES
+    ('op-001', 'Blue-green deployment is safer than rolling restart', 0.85, 'ops', 2, '["e-001","e-004"]', '["ent-deploy","ent-bluegreen"]'),
+    ('op-002', 'Friday deploys are riskier than weekday deploys',    0.70, 'ops', 1, '["e-002"]',          '["ent-deploy"]'),
+    ('op-003', 'CI smoke tests catch most deployment failures',     0.60, 'ci',  1, '["e-003"]',          '[]');
+
 -- Tools registry
 INSERT INTO tools (id, name, description, api_url, ranking, tags)
 VALUES

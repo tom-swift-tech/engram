@@ -46,7 +46,7 @@ fn missing_chunks_table_errors() {
 #[test]
 fn missing_tools_table_errors_with_hint() {
     let conn = Connection::open_in_memory().unwrap();
-    conn.execute_batch(include_str!("../../src/schema.sql")).unwrap();
+    conn.execute_batch(common::SCHEMA_SQL).unwrap();
     conn.execute_batch("DROP TABLE tools").unwrap();
 
     match verify_schema(&conn) {

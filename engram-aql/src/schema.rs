@@ -63,13 +63,17 @@ fn table_exists(conn: &Connection, table: &str) -> AqlResult<bool> {
 }
 
 fn column_exists(conn: &Connection, table: &str, column: &str) -> AqlResult<bool> {
-    // Use SQLite's pragma table_info. The pragma_table_info function is only
-    // available in newer SQLite builds (3.16+), so we fall back to a query
-    // on the pragma table.
-    let mut stmt = conn.prepare(&format!("PRAGMA table_info({})", table))?;
-    let names: Vec<String> = stmt
-        .query_map([], |row| row.get::<_, String>(1))?
-        .filter_map(Result::ok)
-        .collect();
+    // Double-quote the identifier so callers with less-trusted table names
+    // can't inject PRAGMA arguments. Escape any embedded double quotes.
+    let quoted = format!("\"{}\"", table.replace('"', "\"\""));
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({})", quoted))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+
+    // Propagate row errors rather than silently dropping them — a row error
+    // here would indicate a real SQLite problem that we want surfaced.
+    let mut names = Vec::new();
+    for row in rows {
+        names.push(row?);
+    }
     Ok(names.iter().any(|n| n == column))
 }
