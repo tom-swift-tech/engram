@@ -1,5 +1,6 @@
 //! Statement handlers — one module per AQL statement type.
 
+pub mod graph;
 pub mod load;
 pub mod lookup;
 pub mod recall;

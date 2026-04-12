@@ -145,6 +145,73 @@ pub fn execute(conn: &Connection, stmt: &RecallStmt) -> AqlResult<QueryResult> {
         data.push(r?);
     }
 
+    // Extract chunk IDs for graph operations (requires id column)
+    let chunk_ids: Vec<String> = data
+        .iter()
+        .filter_map(|row| {
+            row.get("id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+        .collect();
+
+    let mut links: Option<Vec<crate::result::AqlLink>> = None;
+
+    // WITH LINKS — attach metadata to the result
+    if let Some(with) = &stmt.modifiers.with_links {
+        let fetched = crate::statements::graph::fetch_links_for(conn, &chunk_ids, with)?;
+        // Always populate the field (even if empty) when WITH LINKS was requested
+        links = Some(fetched);
+    }
+
+    // FOLLOW LINKS — expand the result with related chunks
+    if let Some(follow) = &stmt.modifiers.follow_links {
+        let expanded_ids =
+            crate::statements::graph::follow_links_expand(conn, &chunk_ids, follow)?;
+        if !expanded_ids.is_empty() {
+            // Fetch the expanded rows from chunks (limit the parameter list for safety)
+            let safe_ids: Vec<String> = expanded_ids.into_iter().take(1000).collect();
+            let placeholders: Vec<&str> = safe_ids.iter().map(|_| "?").collect();
+            let sql = format!(
+                "SELECT * FROM chunks WHERE id IN ({}) AND is_active = 1",
+                placeholders.join(", ")
+            );
+            let mut prep = conn.prepare(&sql)?;
+            let column_names: Vec<String> = prep
+                .column_names()
+                .into_iter()
+                .map(String::from)
+                .collect();
+            let rows = prep.query_map(
+                rusqlite::params_from_iter(safe_ids.iter()),
+                |row| {
+                    let mut map = Map::new();
+                    for (i, name) in column_names.iter().enumerate() {
+                        let v: RusqValue = row.get(i)?;
+                        map.insert(name.clone(), rusqlite_to_json(v));
+                    }
+                    Ok(JsonValue::Object(map))
+                },
+            )?;
+            let mut seen: std::collections::HashSet<String> = data
+                .iter()
+                .filter_map(|r| {
+                    r.get("id")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                })
+                .collect();
+            for r in rows {
+                let row = r?;
+                if let Some(id) = row.get("id").and_then(|v| v.as_str()) {
+                    if seen.insert(id.to_string()) {
+                        data.push(row);
+                    }
+                }
+            }
+        }
+    }
+
     // Apply RETURN field selection post-query
     if let Some(fields) = &stmt.modifiers.return_fields {
         if !fields.iter().any(|f| f == "*") {
@@ -157,6 +224,7 @@ pub fn execute(conn: &Connection, stmt: &RecallStmt) -> AqlResult<QueryResult> {
 
     let mut result = QueryResult::success("Recall", data);
     result.warnings = warnings;
+    result.links = links;
     Ok(result)
 }
 
