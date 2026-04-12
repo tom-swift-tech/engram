@@ -36,19 +36,30 @@ fn pipeline_single_stage_runs() {
 fn pipeline_fails_fast_on_write_stage() {
     let conn = common::seeded_db();
     let exec = Executor::from_connection(conn).unwrap();
+    // 3 stages: RECALL (works), REFLECT (grammar-valid but execution-rejected as
+    // a write in Phase 1), RECALL (must not run — verifies fail-fast).
+    // Note: STORE is rejected at parse time by the grammar (not a valid
+    // pipeline_stage), so we use REFLECT which IS grammar-valid but is
+    // rejected by write_reject at execution time.
     let result = exec
         .query(
-            r#"PIPELINE test TIMEOUT 5s RECALL FROM EPISODIC ALL LIMIT 1 | STORE INTO EPISODIC (foo = "bar")"#,
+            "PIPELINE test TIMEOUT 5s RECALL FROM EPISODIC ALL LIMIT 1 | REFLECT FROM EPISODIC ALL | RECALL FROM SEMANTIC ALL LIMIT 1",
         )
         .unwrap();
-    // STORE is rejected in Phase 1, so stage 2 fails, the pipeline should fail fast
     assert!(!result.success);
     assert!(result.error.is_some());
     let err = result.error.unwrap();
     assert!(
-        err.contains("stage") || err.contains("STORE") || err.contains("Store"),
+        err.contains("stage 2") || err.contains("REFLECT") || err.contains("Reflect"),
         "unexpected error: {}",
         err
+    );
+    // Verify fail-fast: stage 1 ran, stage 2 failed, stage 3 did NOT run
+    assert_eq!(
+        result.pipeline_stages,
+        Some(1),
+        "expected 1 stage completed before failure, got {:?}",
+        result.pipeline_stages
     );
 }
 

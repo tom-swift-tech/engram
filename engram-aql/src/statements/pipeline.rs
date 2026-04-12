@@ -1,12 +1,4 @@
 //! PIPELINE statement handler — sequential stage execution with timeout enforcement.
-//!
-//! Phase 1 semantics:
-//! - Stages execute in order
-//! - Stage results are concatenated into the pipeline's `data` vector
-//! - Any stage error causes fail-fast with the stage index in the message
-//! - TIMEOUT applies to the entire pipeline execution (cumulative)
-//! - Write statements (STORE/UPDATE/FORGET/LINK/REFLECT) are rejected at each stage
-//! - Nested PIPELINE is not supported — dispatch rejects it
 
 use std::time::Instant;
 
@@ -28,8 +20,8 @@ pub fn execute(conn: &Connection, stmt: &PipelineStmt) -> AqlResult<QueryResult>
     for (i, stage_stmt) in stmt.stages.iter().enumerate() {
         // Timeout check before each stage
         if let Some(budget_ms) = timeout_ms {
-            if start.elapsed().as_millis() > budget_ms {
-                let mut result = QueryResult::error(
+            if start.elapsed().as_millis() >= budget_ms {
+                return Ok(build_failure(
                     "Pipeline",
                     format!(
                         "pipeline '{}' timed out after {:?} at stage {}",
@@ -37,31 +29,36 @@ pub fn execute(conn: &Connection, stmt: &PipelineStmt) -> AqlResult<QueryResult>
                         stmt.timeout,
                         i + 1
                     ),
-                );
-                result.pipeline_stages = Some(stages_completed);
-                result.data = collected_data;
-                result.count = result.data.len();
-                return Ok(result);
+                    stages_completed,
+                ));
             }
         }
 
-        // Dispatch the stage using our in-module dispatcher (avoids a circular
-        // dependency with Executor::dispatch)
-        let stage_result = dispatch_stage(conn, stage_stmt)?;
+        // Reject nested PIPELINE before it would recurse via the shared
+        // dispatcher (which delegates Pipeline back to this handler).
+        if matches!(stage_stmt, Statement::Pipeline(_)) {
+            return Ok(build_failure(
+                "Pipeline",
+                format!(
+                    "pipeline failed at stage {}: nested PIPELINE is not supported",
+                    i + 1
+                ),
+                stages_completed,
+            ));
+        }
+
+        let stage_result = crate::statements::dispatch(conn, stage_stmt)?;
 
         if !stage_result.success {
-            let mut result = QueryResult::error(
+            return Ok(build_failure(
                 "Pipeline",
                 format!(
                     "pipeline failed at stage {}: {}",
                     i + 1,
                     stage_result.error.as_deref().unwrap_or("unknown error")
                 ),
-            );
-            result.pipeline_stages = Some(stages_completed);
-            result.data = collected_data;
-            result.count = result.data.len();
-            return Ok(result);
+                stages_completed,
+            ));
         }
 
         collected_data.extend(stage_result.data);
@@ -75,23 +72,13 @@ pub fn execute(conn: &Connection, stmt: &PipelineStmt) -> AqlResult<QueryResult>
     Ok(result)
 }
 
-/// In-module dispatch that mirrors `Executor::dispatch`. Kept separate to avoid
-/// a circular dependency between `executor.rs` and `statements/pipeline.rs`.
-/// Must be kept in sync with Executor::dispatch when new statement types are added.
-fn dispatch_stage(conn: &Connection, stmt: &Statement) -> AqlResult<QueryResult> {
-    match stmt {
-        Statement::Recall(r) => crate::statements::recall::execute(conn, r),
-        Statement::Lookup(l) => crate::statements::lookup::execute(conn, l),
-        Statement::Scan(s) => crate::statements::scan::execute(conn, s),
-        Statement::Load(l) => crate::statements::load::execute(conn, l),
-        Statement::Store(_)
-        | Statement::Update(_)
-        | Statement::Forget(_)
-        | Statement::Link(_)
-        | Statement::Reflect(_) => Ok(crate::statements::write_reject::reject(stmt)),
-        Statement::Pipeline(_) => Ok(QueryResult::error(
-            "Pipeline",
-            "nested PIPELINE is not supported",
-        )),
-    }
+/// Build a failed pipeline result with partial data CLEARED.
+///
+/// Fix 3: do not leak partial data on failure — consumers checking
+/// `result.data.len() > 0` would otherwise be misled. The success flag is
+/// the single source of truth, and data is empty on failure.
+fn build_failure(statement: &str, message: String, stages_completed: usize) -> QueryResult {
+    let mut result = QueryResult::error(statement, message);
+    result.pipeline_stages = Some(stages_completed);
+    result
 }

@@ -3,7 +3,6 @@
 use std::path::Path;
 use std::time::Instant;
 
-use aql_parser::ast::Statement;
 use rusqlite::Connection;
 
 use crate::error::AqlResult;
@@ -41,35 +40,18 @@ impl Executor {
             }
         };
 
-        let mut result = match self.dispatch(&stmt) {
+        // Route through the shared dispatcher
+        let mut result = match statements::dispatch(&self.conn, &stmt) {
             Ok(r) => r,
             Err(crate::error::AqlError::InvalidQuery(msg)) => {
                 // InvalidQuery errors are user-facing validation failures (e.g. injection
                 // guards, unsupported operators). Surface them as a result rather than
                 // propagating as a hard Err so callers can inspect result.error.
-                QueryResult::error("Recall", msg)
+                QueryResult::error("Unknown", msg)
             }
             Err(e) => return Err(e),
         };
         result.timing_ms = start.elapsed().as_millis() as u64;
         Ok(result)
-    }
-
-    fn dispatch(&self, stmt: &Statement) -> AqlResult<QueryResult> {
-        match stmt {
-            Statement::Recall(r) => statements::recall::execute(&self.conn, r),
-            Statement::Lookup(l) => statements::lookup::execute(&self.conn, l),
-            Statement::Scan(s) => statements::scan::execute(&self.conn, s),
-            Statement::Load(l) => statements::load::execute(&self.conn, l),
-
-            // Writes — rejected at dispatch time
-            Statement::Store(_)
-            | Statement::Update(_)
-            | Statement::Forget(_)
-            | Statement::Link(_)
-            | Statement::Reflect(_) => Ok(statements::write_reject::reject(stmt)),
-
-            Statement::Pipeline(p) => statements::pipeline::execute(&self.conn, p),
-        }
     }
 }
