@@ -23,7 +23,20 @@ impl Executor {
 
     /// Open a `.engram` SQLite file and build an Executor.
     pub fn open(path: &Path) -> AqlResult<Self> {
-        let conn = Connection::open(path)?;
+        use rusqlite::OpenFlags;
+        // Phase 1 is read-only. Opening with SQLITE_OPEN_READ_ONLY enforces this
+        // at the SQLite layer — even a bug that routes a write statement through
+        // `dispatch` will fail at the SQLite call rather than silently modifying
+        // the shared `.engram` file. NO_MUTEX is safe because the MCP stdio loop
+        // is single-threaded and uses the connection sequentially.
+        let conn = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        // 5-second busy timeout matches the TypeScript side. If TS Engram is
+        // holding a write transaction, this gives it time to commit before we
+        // surface a SQLITE_BUSY error.
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
         Self::from_connection(conn)
     }
 

@@ -203,6 +203,17 @@ export class Engram {
 
     const db = new Database(path);
 
+    // Enable WAL mode for concurrent read-while-write access from the
+    // engram-aql Rust binary (or any second process). The TypeScript write
+    // path runs one transaction at a time; WAL lets readers see the
+    // committed state without blocking on the writer.
+    //
+    // busy_timeout gives SQLite a 5-second window to wait for a held
+    // lock before returning SQLITE_BUSY — enough for short writes but
+    // short enough to surface genuine deadlocks quickly.
+    db.pragma('journal_mode = WAL');
+    db.pragma('busy_timeout = 5000');
+
     // Load sqlite-vec for vector search. Graceful fallback: semantic strategy
     // is simply skipped (recall.ts catches the error) if the extension is absent.
     try {

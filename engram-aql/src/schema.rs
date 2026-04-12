@@ -31,8 +31,15 @@ const REQUIRED_CHUNK_COLUMNS: &[&str] = &[
     "created_at",
 ];
 
-/// Verify the database has the schema shape engram-aql expects. Returns the
-/// first missing table or column encountered, if any.
+/// Check that the database contains all the tables and chunk columns
+/// engram-aql needs. This is a **presence probe**, not a structural drift
+/// detector: it verifies required tables exist and the `chunks` table has
+/// the required columns, but does not detect column rename, type changes,
+/// or trigger changes. Schema drift beyond column presence is out of scope
+/// for Phase 1.
+///
+/// Returns `SchemaError::MissingTable` or `SchemaError::MissingColumn` on
+/// the first gap encountered.
 pub fn verify_schema(conn: &Connection) -> AqlResult<()> {
     for table in REQUIRED_TABLES {
         if !table_exists(conn, table)? {

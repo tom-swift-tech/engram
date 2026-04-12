@@ -28,7 +28,11 @@ pub enum AqlError {
 
 #[derive(Debug, Error)]
 pub enum SchemaError {
-    #[error("database is missing required table: {0}")]
+    #[error(
+        "database is missing required table '{0}'. \
+         This may be an older .engram file — open it once with TypeScript \
+         Engram (e.g., `npx engram-mcp <path>`) to upgrade the schema."
+    )]
     MissingTable(String),
 
     #[error("table {table} is missing required column: {column}")]
