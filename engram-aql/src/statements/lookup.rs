@@ -64,10 +64,12 @@ pub fn execute(conn: &Connection, stmt: &LookupStmt) -> AqlResult<QueryResult> {
         format!("WHERE {}", where_parts.join(" AND "))
     };
 
+    let limit = stmt.modifiers.limit.unwrap_or(100).min(1000);
     let sql = format!(
-        "SELECT * FROM {} {} LIMIT 100",
+        "SELECT * FROM {} {} LIMIT {}",
         table.as_sql_name(),
-        where_clause
+        where_clause,
+        limit
     );
 
     let mut prepared = conn.prepare(&sql)?;
@@ -89,6 +91,27 @@ pub fn execute(conn: &Connection, stmt: &LookupStmt) -> AqlResult<QueryResult> {
     let mut data = Vec::new();
     for r in rows {
         data.push(r?);
+    }
+
+    // Apply RETURN field selection post-query
+    if let Some(fields) = &stmt.modifiers.return_fields {
+        if !fields.iter().any(|f| f == "*") {
+            data = data
+                .into_iter()
+                .map(|row| {
+                    let JsonValue::Object(obj) = row else {
+                        return row;
+                    };
+                    let mut filtered = Map::new();
+                    for field in fields {
+                        if let Some(v) = obj.get(field) {
+                            filtered.insert(field.clone(), v.clone());
+                        }
+                    }
+                    JsonValue::Object(filtered)
+                })
+                .collect();
+        }
     }
 
     Ok(QueryResult::success("Lookup", data))

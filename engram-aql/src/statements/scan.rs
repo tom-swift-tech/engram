@@ -15,19 +15,18 @@ pub fn execute(conn: &Connection, stmt: &ScanStmt) -> AqlResult<QueryResult> {
     if let Some(w) = &stmt.window {
         match w {
             Window::LastN { count } => {
-                limit = *count;
+                limit = (*count).min(1000);
             }
             Window::LastDuration { duration } => {
-                // Convert to 'N seconds' modifier for SQLite datetime()
                 let secs = duration.as_secs();
                 after_datetime = Some(format!("datetime('now', '-{} seconds')", secs));
             }
             Window::TopBy { count, field: _ } => {
-                // working_memory has no arbitrary fields — fall back to last-N
-                limit = *count;
+                limit = (*count).min(1000);
             }
             Window::Since { .. } => {
-                // SINCE with condition — Phase 1 treats as "not expired" (default filter)
+                // SINCE with condition — Phase 1 treats as default active-sessions filter.
+                // A future phase could translate the condition to a SQL WHERE predicate.
             }
         }
     }
