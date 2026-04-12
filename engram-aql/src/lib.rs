@@ -2,6 +2,7 @@
 
 pub mod error;
 pub mod executor;
+pub mod mcp;
 pub mod memory_map;
 pub mod result;
 pub mod schema;
