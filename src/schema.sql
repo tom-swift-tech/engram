@@ -324,7 +324,8 @@ CREATE TABLE IF NOT EXISTS tools (
         CHECK (ranking >= 0.0 AND ranking <= 1.0),
     tags TEXT DEFAULT '[]',              -- JSON array of string tags
     namespace TEXT DEFAULT 'default',
-    scope TEXT DEFAULT 'private',
+    scope TEXT DEFAULT 'private'
+        CHECK (scope IN ('private', 'shared', 'cluster')),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     is_active BOOLEAN DEFAULT TRUE

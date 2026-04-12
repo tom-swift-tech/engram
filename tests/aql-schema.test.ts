@@ -41,13 +41,14 @@ describe('AQL schema additions', () => {
     db.close();
   });
 
-  it('tools table has ranking index for LOAD queries', () => {
+  it('tools table has ranking and namespace indexes for LOAD queries', () => {
     const db = createTestDb();
     const indexes = db
       .prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'tools'`)
       .all() as Array<{ name: string }>;
     const names = indexes.map((i) => i.name);
     expect(names).toContain('idx_tools_ranking');
+    expect(names).toContain('idx_tools_namespace');
     db.close();
   });
 });
