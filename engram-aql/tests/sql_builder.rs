@@ -57,7 +57,7 @@ fn contains_becomes_like_wrapped() {
     };
     let mut params = Vec::new();
     let sql = condition_to_sql(&cond, EngramTable::Chunks, &mut params);
-    assert_eq!(sql, "text LIKE ?");
+    assert_eq!(sql, "text LIKE ? ESCAPE '\\'");
     assert!(matches!(params[0], RusqValue::Text(ref s) if s == "%deploy%"));
 }
 
@@ -71,7 +71,7 @@ fn starts_with_anchors_at_start() {
     };
     let mut params = Vec::new();
     let sql = condition_to_sql(&cond, EngramTable::Tools, &mut params);
-    assert_eq!(sql, "name LIKE ?");
+    assert_eq!(sql, "name LIKE ? ESCAPE '\\'");
     assert!(matches!(params[0], RusqValue::Text(ref s) if s == "k8s%"));
 }
 
@@ -150,6 +150,24 @@ fn ends_with_anchors_at_end() {
     };
     let mut params = Vec::new();
     let sql = condition_to_sql(&cond, EngramTable::Tools, &mut params);
-    assert_eq!(sql, "name LIKE ?");
-    assert!(matches!(params[0], RusqValue::Text(ref s) if s == "%_prod"));
+    assert_eq!(sql, "name LIKE ? ESCAPE '\\'");
+    assert!(matches!(params[0], RusqValue::Text(ref s) if s == r"%\_prod"));
+}
+
+#[test]
+fn contains_escapes_percent_and_underscore() {
+    let cond = Condition::Simple {
+        field: "text".into(),
+        operator: Operator::Contains,
+        value: Value::String("100% progress_bar".into()),
+        logical_op: None,
+    };
+    let mut params = Vec::new();
+    let sql = condition_to_sql(&cond, EngramTable::Chunks, &mut params);
+    assert_eq!(sql, "text LIKE ? ESCAPE '\\'");
+    // The param should have escaped % and _
+    assert!(
+        matches!(params[0], RusqValue::Text(ref s) if s == r"%100\% progress\_bar%"),
+        "unexpected param: {:?}", params[0]
+    );
 }

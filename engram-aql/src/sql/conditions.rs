@@ -67,18 +67,18 @@ fn simple_to_sql(
         }
         Operator::Contains => {
             let s = string_or_empty(value);
-            params.push(RusqValue::Text(format!("%{}%", s)));
-            format!("{} LIKE ?", field_sql)
+            params.push(RusqValue::Text(format!("%{}%", escape_like(&s))));
+            format!("{} LIKE ? ESCAPE '\\'", field_sql)
         }
         Operator::StartsWith => {
             let s = string_or_empty(value);
-            params.push(RusqValue::Text(format!("{}%", s)));
-            format!("{} LIKE ?", field_sql)
+            params.push(RusqValue::Text(format!("{}%", escape_like(&s))));
+            format!("{} LIKE ? ESCAPE '\\'", field_sql)
         }
         Operator::EndsWith => {
             let s = string_or_empty(value);
-            params.push(RusqValue::Text(format!("%{}", s)));
-            format!("{} LIKE ?", field_sql)
+            params.push(RusqValue::Text(format!("%{}", escape_like(&s))));
+            format!("{} LIKE ? ESCAPE '\\'", field_sql)
         }
         Operator::In => {
             if let Value::Array(items) = value {
@@ -126,4 +126,20 @@ fn string_or_empty(value: &Value) -> String {
         Value::String(s) => s.clone(),
         _ => String::new(),
     }
+}
+
+/// Escape LIKE metacharacters so `%` and `_` in user input don't behave as
+/// wildcards. Paired with `ESCAPE '\'` on the LIKE clause.
+fn escape_like(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\\' | '%' | '_' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            other => out.push(other),
+        }
+    }
+    out
 }
