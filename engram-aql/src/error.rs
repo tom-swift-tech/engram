@@ -5,7 +5,7 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum AqlError {
     #[error("parse error: {0}")]
-    Parse(String),
+    Parse(#[from] aql_parser::error::ParseError),
 
     #[error("schema error: {0}")]
     Schema(#[from] SchemaError),

@@ -47,15 +47,15 @@ fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Command::Query { db_path, query } => {
-            println!("TODO: query subcommand — db={:?} query={}", db_path, query);
+            eprintln!("TODO: query subcommand — db={:?} query={}", db_path, query);
             Ok(())
         }
         Command::Repl { db_path } => {
-            println!("TODO: repl subcommand — db={:?}", db_path);
+            eprintln!("TODO: repl subcommand — db={:?}", db_path);
             Ok(())
         }
         Command::Mcp { db_path } => {
-            println!("TODO: mcp subcommand — db={:?}", db_path);
+            eprintln!("TODO: mcp subcommand — db={:?}", db_path);
             Ok(())
         }
     }

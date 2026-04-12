@@ -41,7 +41,7 @@ Prints structured JSON to stdout.
 engram-aql repl ./agent.engram
 ```
 
-Opens a prompt with pretty-printed tables. `\help` shows commands.
+Opens an interactive prompt for running AQL queries and inspecting results.
 
 ### MCP stdio server
 
