@@ -47,7 +47,11 @@ fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Command::Query { db_path, query } => {
-            engram_aql::subcommand::query::run(&db_path, &query)
+            let success = engram_aql::subcommand::query::run(&db_path, &query)?;
+            if !success {
+                std::process::exit(1);
+            }
+            Ok(())
         }
         Command::Repl { db_path } => {
             eprintln!("TODO: repl subcommand — db={:?}", db_path);

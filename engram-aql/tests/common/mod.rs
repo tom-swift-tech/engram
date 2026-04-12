@@ -10,6 +10,7 @@ use rusqlite::Connection;
 pub const SCHEMA_SQL: &str = include_str!("../../../src/schema.sql");
 
 /// Build an in-memory database pre-loaded with the engram schema.
+#[allow(dead_code)]
 pub fn fresh_db() -> Connection {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(SCHEMA_SQL).unwrap();
@@ -17,6 +18,7 @@ pub fn fresh_db() -> Connection {
 }
 
 /// Load the deterministic test seed data into a fresh database.
+#[allow(dead_code)]
 pub fn seeded_db() -> Connection {
     let conn = fresh_db();
     let seed = include_str!("../fixtures/seed.sql");
