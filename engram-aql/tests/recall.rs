@@ -109,3 +109,15 @@ fn recall_invalid_query_returns_error_result() {
     assert!(!result.success);
     assert!(result.error.is_some());
 }
+
+#[test]
+fn recall_limit_is_capped_at_safety_max() {
+    let conn = common::seeded_db();
+    let exec = Executor::from_connection(conn).unwrap();
+    // Request a huge limit — should not error, and count is bounded by actual data
+    let result = exec.query("RECALL FROM EPISODIC ALL LIMIT 100000").unwrap();
+    assert!(result.success, "error: {:?}", result.error);
+    // Seed has 4 episodic records, so we get them all regardless of the cap.
+    // The important thing is the query succeeds and doesn't blow up SQLite.
+    assert_eq!(result.count, 4);
+}

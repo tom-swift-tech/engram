@@ -10,6 +10,7 @@ use crate::memory_map::{aql_to_chunk_memory_type, aql_to_table, EngramTable};
 use crate::result::QueryResult;
 use crate::sql::conditions::condition_to_sql;
 use crate::sql::fields::resolve_field;
+use crate::sql::serialize::rusqlite_to_json;
 use crate::sql::values::value_to_rusqlite;
 
 pub fn execute(conn: &Connection, stmt: &RecallStmt) -> AqlResult<QueryResult> {
@@ -139,9 +140,11 @@ fn order_by_clause(order: &Option<OrderBy>, table: EngramTable) -> String {
 }
 
 fn limit_clause(modifiers: &Modifiers) -> String {
+    // 1000-row safety cap — applies whether or not the user specified LIMIT.
+    // This protects against runaway queries and matches the spec.
     match modifiers.limit {
-        Some(n) => format!("LIMIT {}", n),
-        None => "LIMIT 1000".into(), // safety cap
+        Some(n) => format!("LIMIT {}", n.min(1000)),
+        None => "LIMIT 1000".into(),
     }
 }
 
@@ -180,14 +183,3 @@ fn filter_fields(row: JsonValue, fields: &[String]) -> JsonValue {
     JsonValue::Object(filtered)
 }
 
-pub(crate) fn rusqlite_to_json(value: RusqValue) -> JsonValue {
-    match value {
-        RusqValue::Null => JsonValue::Null,
-        RusqValue::Integer(n) => JsonValue::Number(n.into()),
-        RusqValue::Real(f) => serde_json::Number::from_f64(f)
-            .map(JsonValue::Number)
-            .unwrap_or(JsonValue::Null),
-        RusqValue::Text(s) => JsonValue::String(s),
-        RusqValue::Blob(_) => JsonValue::Null, // don't serialize binary
-    }
-}

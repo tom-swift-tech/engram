@@ -5,4 +5,5 @@
 
 pub mod conditions;
 pub mod fields;
+pub mod serialize;
 pub mod values;
