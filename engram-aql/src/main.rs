@@ -53,10 +53,7 @@ fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Command::Repl { db_path } => {
-            eprintln!("TODO: repl subcommand — db={:?}", db_path);
-            Ok(())
-        }
+        Command::Repl { db_path } => engram_aql::subcommand::repl::run(&db_path),
         Command::Mcp { db_path } => {
             eprintln!("TODO: mcp subcommand — db={:?}", db_path);
             Ok(())
