@@ -1,7 +1,17 @@
-# AQL-Engram Integration Design
+# AQL-Engram Integration Design (SUPERSEDED)
+
+> **Status: Superseded 2026-04-12.** See `2026-04-12-engram-aql-rust-binary-design.md` for the current approach.
+>
+> **Why:** Implementation attempted the WASM-bridge approach described here and hit a significant serde format mismatch between the Rust `aql-parser` output and the TypeScript AST types. During investigation we also discovered the actual AQL grammar's `LINK` statement is set-based (`LINK FROM mem WHERE... TO mem WHERE... TYPE...`), not record-ID-based as this spec assumed. Rather than fight the bridge, we pivoted to a hybrid architecture: a native Rust `engram-aql` binary that shares the SQLite `.engram` file with TypeScript Engram.
+>
+> **What's still valid from this document:** The cognitive mapping between AQL memory types and Engram storage (EPISODIC→experience, SEMANTIC→world, PROCEDURAL→observations, WORKING→working_memory, TOOLS→new table), the two-path execution model (simple filters + direct SQL for structured queries), and the analysis of which AQL features are agentic vs analytical. These carry over to the new design.
+
+---
+
+# Original Design (WASM Bridge Approach)
 
 **Date:** 2026-04-11
-**Status:** Approved
+**Status:** Superseded
 **Repo:** swift-innovate/engram
 **AQL Source:** srirammails/AQL (v0.5)
 

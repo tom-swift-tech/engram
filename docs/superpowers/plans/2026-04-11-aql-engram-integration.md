@@ -1,4 +1,12 @@
-# AQL-Engram Integration — Phase 1 Implementation Plan
+# AQL-Engram Integration — Phase 1 Implementation Plan (SUPERSEDED)
+
+> **Status: Superseded 2026-04-12.** See `2026-04-12-engram-aql-rust-binary.md` for the current plan.
+>
+> **What happened:** Task 1 (TypeScript AST types) was implemented successfully (commits 5499479, a910a14 on branch `feat/aql-integration`), but during Task 2 preparation we discovered the Rust `aql-parser` serde output format doesn't match our TypeScript types, and the AQL grammar's LINK statement is fundamentally different from what this plan assumed. We pivoted from a WASM-bridge TypeScript approach to a native Rust binary sharing the SQLite file with TypeScript Engram.
+
+---
+
+# Original Plan (WASM Bridge Approach)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
