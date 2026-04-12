@@ -41,7 +41,16 @@ impl Executor {
             }
         };
 
-        let mut result = self.dispatch(&stmt)?;
+        let mut result = match self.dispatch(&stmt) {
+            Ok(r) => r,
+            Err(crate::error::AqlError::InvalidQuery(msg)) => {
+                // InvalidQuery errors are user-facing validation failures (e.g. injection
+                // guards, unsupported operators). Surface them as a result rather than
+                // propagating as a hard Err so callers can inspect result.error.
+                QueryResult::error("Recall", msg)
+            }
+            Err(e) => return Err(e),
+        };
         result.timing_ms = start.elapsed().as_millis() as u64;
         Ok(result)
     }

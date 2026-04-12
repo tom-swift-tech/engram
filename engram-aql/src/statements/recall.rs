@@ -1,11 +1,11 @@
 //! RECALL statement handler.
 
-use aql_parser::ast::{Modifiers, OrderBy, Predicate, RecallStmt};
+use aql_parser::ast::{Modifiers, OrderBy, RecallStmt};
 use rusqlite::types::Value as RusqValue;
 use rusqlite::Connection;
 use serde_json::{Map, Value as JsonValue};
 
-use crate::error::AqlResult;
+use crate::error::{AqlError, AqlResult};
 use crate::memory_map::{aql_to_chunk_memory_type, aql_to_table, EngramTable};
 use crate::result::QueryResult;
 use crate::sql::conditions::condition_to_sql;
@@ -13,21 +13,23 @@ use crate::sql::fields::resolve_field;
 use crate::sql::serialize::rusqlite_to_json;
 use crate::sql::values::value_to_rusqlite;
 
-pub fn execute(conn: &Connection, stmt: &RecallStmt) -> AqlResult<QueryResult> {
-    let table = aql_to_table(stmt.memory_type);
-    let chunk_type = aql_to_chunk_memory_type(stmt.memory_type);
+/// Result of building a WHERE clause. Callers use the deferred variant to
+/// return a graceful empty result with a warning.
+enum WhereResult {
+    Built(Vec<String>),
+    VectorSearchDeferred,
+}
 
-    // AGGREGATE path — if modifiers have aggregate functions, build a
-    // SELECT <aggs> FROM ... WHERE ... HAVING ... query instead of SELECT *.
-    if let Some(aggs) = &stmt.modifiers.aggregate {
-        if !aggs.is_empty() {
-            return execute_aggregate(conn, stmt, table, chunk_type, aggs);
-        }
-    }
-
+/// Build the WHERE clause parts (as a list of SQL fragments) and populate
+/// the bind parameters. Shared between `execute` and `execute_aggregate`.
+/// Returns an error if a Like/Pattern predicate is encountered.
+fn build_where_clause(
+    stmt: &RecallStmt,
+    table: EngramTable,
+    chunk_type: Option<&'static str>,
+    params: &mut Vec<RusqValue>,
+) -> AqlResult<WhereResult> {
     let mut where_parts: Vec<String> = Vec::new();
-    let mut params: Vec<RusqValue> = Vec::new();
-    let mut warnings: Vec<String> = Vec::new();
 
     // Base conditions per table
     match table {
@@ -48,32 +50,54 @@ pub fn execute(conn: &Connection, stmt: &RecallStmt) -> AqlResult<QueryResult> {
 
     // Predicate conditions
     match &stmt.predicate {
-        Predicate::All => {}
-        Predicate::Where { conditions } => {
+        aql_parser::ast::Predicate::All => {}
+        aql_parser::ast::Predicate::Where { conditions } => {
             for cond in conditions {
-                where_parts.push(condition_to_sql(cond, table, &mut params));
+                where_parts.push(condition_to_sql(cond, table, params));
             }
         }
-        Predicate::Key { field, value } => {
-            // KEY is more of a LOOKUP feature, but RECALL allows it per grammar.
-            // Treat KEY exactly like a simple WHERE field = value.
+        aql_parser::ast::Predicate::Key { field, value } => {
             let field_sql = resolve_field(field, table).to_sql();
             params.push(value_to_rusqlite(value));
             where_parts.push(format!("{} = ?", field_sql));
         }
-        Predicate::Like { .. } | Predicate::Pattern { .. } => {
+        aql_parser::ast::Predicate::Like { .. } | aql_parser::ast::Predicate::Pattern { .. } => {
+            return Ok(WhereResult::VectorSearchDeferred);
+        }
+    }
+
+    Ok(WhereResult::Built(where_parts))
+}
+
+pub fn execute(conn: &Connection, stmt: &RecallStmt) -> AqlResult<QueryResult> {
+    let table = aql_to_table(stmt.memory_type);
+    let chunk_type = aql_to_chunk_memory_type(stmt.memory_type);
+
+    // AGGREGATE path — if modifiers have aggregate functions, build a
+    // SELECT <aggs> FROM ... WHERE ... HAVING ... query instead of SELECT *.
+    if let Some(aggs) = &stmt.modifiers.aggregate {
+        if !aggs.is_empty() {
+            return execute_aggregate(conn, stmt, table, chunk_type, aggs);
+        }
+    }
+
+    let mut params: Vec<RusqValue> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+
+    let where_parts = match build_where_clause(stmt, table, chunk_type, &mut params)? {
+        WhereResult::Built(parts) => parts,
+        WhereResult::VectorSearchDeferred => {
             warnings.push(
-                "LIKE and PATTERN predicates require vector search — deferred to Phase 2"
-                    .into(),
+                "LIKE and PATTERN predicates require vector search — deferred to Phase 2".into(),
             );
-            // Return early with a graceful empty result
             let mut result = QueryResult::success("Recall", Vec::new());
             result.warnings = warnings;
             return Ok(result);
         }
-    }
+    };
 
     // MIN_CONFIDENCE modifier maps to trust_score filter
+    let mut where_parts = where_parts;
     if let Some(min_conf) = stmt.modifiers.min_confidence {
         where_parts.push("trust_score >= ?".into());
         params.push(RusqValue::Real(min_conf as f64));
@@ -198,50 +222,20 @@ fn execute_aggregate(
     chunk_type: Option<&'static str>,
     aggs: &[aql_parser::ast::AggregateFunc],
 ) -> AqlResult<QueryResult> {
-    use aql_parser::ast::{AggregateFuncType, Predicate};
+    use aql_parser::ast::AggregateFuncType;
 
-    let mut where_parts: Vec<String> = Vec::new();
     let mut params: Vec<RusqValue> = Vec::new();
 
-    // Base conditions per table (same as the main path)
-    match table {
-        EngramTable::Chunks | EngramTable::All => {
-            where_parts.push("is_active = 1".into());
-            if let Some(t) = chunk_type {
-                where_parts.push("memory_type = ?".into());
-                params.push(RusqValue::Text(t.into()));
-            }
-        }
-        EngramTable::Tools | EngramTable::Observations => {
-            where_parts.push("is_active = 1".into());
-        }
-        EngramTable::WorkingMemory => {
-            where_parts.push("(expires_at IS NULL OR expires_at > datetime('now'))".into());
-        }
-    }
-
-    // Predicate conditions (same logic as non-aggregate path)
-    match &stmt.predicate {
-        Predicate::All => {}
-        Predicate::Where { conditions } => {
-            for cond in conditions {
-                where_parts.push(condition_to_sql(cond, table, &mut params));
-            }
-        }
-        Predicate::Key { field, value } => {
-            let field_sql = resolve_field(field, table).to_sql();
-            params.push(value_to_rusqlite(value));
-            where_parts.push(format!("{} = ?", field_sql));
-        }
-        Predicate::Like { .. } | Predicate::Pattern { .. } => {
-            // Vector-search predicates don't make sense with aggregation in Phase 1
+    let where_parts = match build_where_clause(stmt, table, chunk_type, &mut params)? {
+        WhereResult::Built(parts) => parts,
+        WhereResult::VectorSearchDeferred => {
             let mut result = QueryResult::success("Recall", Vec::new());
             result.warnings.push(
                 "LIKE/PATTERN with AGGREGATE is deferred to Phase 2 (vector search)".into(),
             );
             return Ok(result);
         }
-    }
+    };
 
     // Build SELECT clause from aggregates
     let mut select_parts: Vec<String> = Vec::new();
@@ -262,6 +256,16 @@ fn execute_aggregate(
             .alias
             .clone()
             .unwrap_or_else(|| format!("{}_value", func_name.to_lowercase()));
+
+        // Runtime check: alias must be alphanumeric + underscore only
+        // to prevent SQL injection via crafted alias names.
+        if !alias.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return Err(AqlError::InvalidQuery(format!(
+                "AGGREGATE alias '{}' contains unsafe characters; expected alphanumeric+underscore only",
+                alias
+            )));
+        }
+
         select_parts.push(format!("{}({}) AS {}", func_name, field_sql, alias));
     }
 
@@ -286,7 +290,7 @@ fn execute_aggregate(
         if !having.is_empty() {
             let mut having_parts: Vec<String> = Vec::new();
             for cond in having {
-                let fragment = having_condition_to_sql(cond, &mut params);
+                let fragment = having_condition_to_sql(cond, &mut params)?;
                 having_parts.push(fragment);
             }
             sql.push_str(&format!(" HAVING {}", having_parts.join(" AND ")));
@@ -326,7 +330,7 @@ fn execute_aggregate(
 fn having_condition_to_sql(
     cond: &aql_parser::ast::Condition,
     params: &mut Vec<RusqValue>,
-) -> String {
+) -> AqlResult<String> {
     use aql_parser::ast::{Condition, LogicalOp, Operator};
 
     match cond {
@@ -336,6 +340,15 @@ fn having_condition_to_sql(
             value,
             logical_op: _,
         } => {
+            // Runtime injection guard: alias must be alphanumeric + underscore only.
+            // debug_assert! is a no-op in release builds and is therefore not
+            // sufficient as a security boundary.
+            if !field.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                return Err(AqlError::InvalidQuery(format!(
+                    "HAVING field '{}' contains unsafe characters; expected alphanumeric+underscore only",
+                    field
+                )));
+            }
             let op_sql = match operator {
                 Operator::Eq => "=",
                 Operator::Ne => "!=",
@@ -343,24 +356,18 @@ fn having_condition_to_sql(
                 Operator::Gte => ">=",
                 Operator::Lt => "<",
                 Operator::Lte => "<=",
-                // HAVING with CONTAINS/STARTS_WITH/ENDS_WITH/IN is unusual;
-                // fall back to equality for consistency.
                 Operator::Contains
                 | Operator::StartsWith
                 | Operator::EndsWith
-                | Operator::In => "=",
+                | Operator::In => {
+                    return Err(AqlError::InvalidQuery(format!(
+                        "HAVING does not support operator {:?}; use =/!=/</>/<=/>= on aggregate aliases",
+                        operator
+                    )));
+                }
             };
             params.push(value_to_rusqlite(value));
-            // Alias names from the grammar are already alphanumeric + underscore,
-            // so direct interpolation is safe. But debug-assert to be sure.
-            debug_assert!(
-                field
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '_'),
-                "HAVING alias contains unsafe characters: {}",
-                field
-            );
-            format!("{} {} ?", field, op_sql)
+            Ok(format!("{} {} ?", field, op_sql))
         }
         Condition::Group {
             conditions,
@@ -375,9 +382,9 @@ fn having_condition_to_sql(
                         LogicalOp::Or => "OR".to_string(),
                     });
                 }
-                parts.push(having_condition_to_sql(c, params));
+                parts.push(having_condition_to_sql(c, params)?);
             }
-            format!("({})", parts.join(" "))
+            Ok(format!("({})", parts.join(" ")))
         }
     }
 }

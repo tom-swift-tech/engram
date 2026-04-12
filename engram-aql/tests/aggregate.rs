@@ -87,3 +87,47 @@ fn having_excludes_non_matching() {
     assert!(result.success, "error: {:?}", result.error);
     assert_eq!(result.count, 0);
 }
+
+#[test]
+fn sum_trust_score() {
+    let conn = common::seeded_db();
+    let exec = Executor::from_connection(conn).unwrap();
+    let result = exec
+        .query("RECALL FROM EPISODIC ALL AGGREGATE SUM(trust_score) AS total_trust")
+        .unwrap();
+    assert!(result.success, "error: {:?}", result.error);
+    let sum = result.data[0].get("total_trust").and_then(|v| v.as_f64()).unwrap();
+    // 0.9 + 0.7 + 0.8 + 0.85 = 3.25
+    assert!((sum - 3.25).abs() < 0.0001, "sum was: {}", sum);
+}
+
+#[test]
+fn count_on_named_field() {
+    let conn = common::seeded_db();
+    let exec = Executor::from_connection(conn).unwrap();
+    // COUNT on a non-* field. Returns count of non-null values.
+    let result = exec
+        .query("RECALL FROM EPISODIC ALL AGGREGATE COUNT(trust_score) AS n")
+        .unwrap();
+    assert!(result.success, "error: {:?}", result.error);
+    let n = result.data[0].get("n").and_then(|v| v.as_i64()).unwrap();
+    assert_eq!(n, 4);
+}
+
+#[test]
+fn having_with_unsupported_operator_errors() {
+    let conn = common::seeded_db();
+    let exec = Executor::from_connection(conn).unwrap();
+    // HAVING with CONTAINS should return an error result (not silently pass)
+    let result = exec
+        .query(
+            "RECALL FROM EPISODIC ALL AGGREGATE COUNT(*) AS total HAVING total CONTAINS \"2\"",
+        )
+        .unwrap();
+    assert!(!result.success);
+    let err = result.error.unwrap();
+    assert!(
+        err.contains("HAVING") || err.contains("operator"),
+        "unexpected error: {}", err
+    );
+}
