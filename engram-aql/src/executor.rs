@@ -49,6 +49,9 @@ impl Executor {
     fn dispatch(&self, stmt: &Statement) -> AqlResult<QueryResult> {
         match stmt {
             Statement::Recall(r) => statements::recall::execute(&self.conn, r),
+            Statement::Lookup(l) => statements::lookup::execute(&self.conn, l),
+            Statement::Scan(s) => statements::scan::execute(&self.conn, s),
+            Statement::Load(l) => statements::load::execute(&self.conn, l),
 
             // Writes — rejected at dispatch time
             Statement::Store(_)
@@ -57,26 +60,11 @@ impl Executor {
             | Statement::Link(_)
             | Statement::Reflect(_) => Ok(statements::write_reject::reject(stmt)),
 
-            // Other reads — implemented in later tasks
-            _ => Ok(QueryResult::error(
-                statement_name(stmt),
-                format!("statement not yet implemented: {}", statement_name(stmt)),
+            // Pipeline implemented in Task 11
+            Statement::Pipeline(_) => Ok(QueryResult::error(
+                "Pipeline",
+                "PIPELINE not yet implemented",
             )),
         }
-    }
-}
-
-fn statement_name(stmt: &Statement) -> &'static str {
-    match stmt {
-        Statement::Pipeline(_) => "Pipeline",
-        Statement::Reflect(_) => "Reflect",
-        Statement::Scan(_) => "Scan",
-        Statement::Recall(_) => "Recall",
-        Statement::Lookup(_) => "Lookup",
-        Statement::Load(_) => "Load",
-        Statement::Store(_) => "Store",
-        Statement::Update(_) => "Update",
-        Statement::Forget(_) => "Forget",
-        Statement::Link(_) => "Link",
     }
 }
