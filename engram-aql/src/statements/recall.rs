@@ -17,6 +17,14 @@ pub fn execute(conn: &Connection, stmt: &RecallStmt) -> AqlResult<QueryResult> {
     let table = aql_to_table(stmt.memory_type);
     let chunk_type = aql_to_chunk_memory_type(stmt.memory_type);
 
+    // AGGREGATE path — if modifiers have aggregate functions, build a
+    // SELECT <aggs> FROM ... WHERE ... HAVING ... query instead of SELECT *.
+    if let Some(aggs) = &stmt.modifiers.aggregate {
+        if !aggs.is_empty() {
+            return execute_aggregate(conn, stmt, table, chunk_type, aggs);
+        }
+    }
+
     let mut where_parts: Vec<String> = Vec::new();
     let mut params: Vec<RusqValue> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
@@ -181,5 +189,196 @@ fn filter_fields(row: JsonValue, fields: &[String]) -> JsonValue {
         }
     }
     JsonValue::Object(filtered)
+}
+
+fn execute_aggregate(
+    conn: &Connection,
+    stmt: &RecallStmt,
+    table: EngramTable,
+    chunk_type: Option<&'static str>,
+    aggs: &[aql_parser::ast::AggregateFunc],
+) -> AqlResult<QueryResult> {
+    use aql_parser::ast::{AggregateFuncType, Predicate};
+
+    let mut where_parts: Vec<String> = Vec::new();
+    let mut params: Vec<RusqValue> = Vec::new();
+
+    // Base conditions per table (same as the main path)
+    match table {
+        EngramTable::Chunks | EngramTable::All => {
+            where_parts.push("is_active = 1".into());
+            if let Some(t) = chunk_type {
+                where_parts.push("memory_type = ?".into());
+                params.push(RusqValue::Text(t.into()));
+            }
+        }
+        EngramTable::Tools | EngramTable::Observations => {
+            where_parts.push("is_active = 1".into());
+        }
+        EngramTable::WorkingMemory => {
+            where_parts.push("(expires_at IS NULL OR expires_at > datetime('now'))".into());
+        }
+    }
+
+    // Predicate conditions (same logic as non-aggregate path)
+    match &stmt.predicate {
+        Predicate::All => {}
+        Predicate::Where { conditions } => {
+            for cond in conditions {
+                where_parts.push(condition_to_sql(cond, table, &mut params));
+            }
+        }
+        Predicate::Key { field, value } => {
+            let field_sql = resolve_field(field, table).to_sql();
+            params.push(value_to_rusqlite(value));
+            where_parts.push(format!("{} = ?", field_sql));
+        }
+        Predicate::Like { .. } | Predicate::Pattern { .. } => {
+            // Vector-search predicates don't make sense with aggregation in Phase 1
+            let mut result = QueryResult::success("Recall", Vec::new());
+            result.warnings.push(
+                "LIKE/PATTERN with AGGREGATE is deferred to Phase 2 (vector search)".into(),
+            );
+            return Ok(result);
+        }
+    }
+
+    // Build SELECT clause from aggregates
+    let mut select_parts: Vec<String> = Vec::new();
+    for agg in aggs {
+        let func_name = match agg.func {
+            AggregateFuncType::Count => "COUNT",
+            AggregateFuncType::Sum => "SUM",
+            AggregateFuncType::Avg => "AVG",
+            AggregateFuncType::Min => "MIN",
+            AggregateFuncType::Max => "MAX",
+        };
+        let field_sql = match &agg.field {
+            None => "*".to_string(),
+            Some(f) if f == "*" => "*".to_string(),
+            Some(f) => resolve_field(f, table).to_sql(),
+        };
+        let alias = agg
+            .alias
+            .clone()
+            .unwrap_or_else(|| format!("{}_value", func_name.to_lowercase()));
+        select_parts.push(format!("{}({}) AS {}", func_name, field_sql, alias));
+    }
+
+    let where_clause = if where_parts.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", where_parts.join(" AND "))
+    };
+
+    let mut sql = format!(
+        "SELECT {} FROM {} {}",
+        select_parts.join(", "),
+        table.as_sql_name(),
+        where_clause
+    );
+
+    // HAVING clause — operates on the aggregate aliases, which are computed
+    // columns. The field names in HAVING are expected to match the alias
+    // names from the SELECT clause, so we do NOT route them through
+    // resolve_field (which would try to interpret them as column names).
+    if let Some(having) = &stmt.modifiers.having {
+        if !having.is_empty() {
+            let mut having_parts: Vec<String> = Vec::new();
+            for cond in having {
+                let fragment = having_condition_to_sql(cond, &mut params);
+                having_parts.push(fragment);
+            }
+            sql.push_str(&format!(" HAVING {}", having_parts.join(" AND ")));
+        }
+    }
+
+    let mut prepared = conn.prepare(&sql)?;
+    let column_names: Vec<String> = prepared
+        .column_names()
+        .into_iter()
+        .map(String::from)
+        .collect();
+
+    let rows = prepared.query_map(rusqlite::params_from_iter(params.iter()), |row| {
+        let mut map = Map::new();
+        for (i, name) in column_names.iter().enumerate() {
+            let v: RusqValue = row.get(i)?;
+            map.insert(name.clone(), rusqlite_to_json(v));
+        }
+        Ok(JsonValue::Object(map))
+    })?;
+
+    let mut data = Vec::new();
+    for r in rows {
+        data.push(r?);
+    }
+
+    // HAVING filters result sets — if aggregate row doesn't satisfy HAVING,
+    // SQLite returns no rows. A zero-row result from an AGGREGATE is a
+    // meaningful result (not an error).
+    Ok(QueryResult::success("Recall", data))
+}
+
+/// Translate a HAVING condition to SQL. HAVING references aggregate aliases
+/// which are computed columns — we do NOT apply field resolution (which would
+/// try to rewrite aliases as json_extract paths).
+fn having_condition_to_sql(
+    cond: &aql_parser::ast::Condition,
+    params: &mut Vec<RusqValue>,
+) -> String {
+    use aql_parser::ast::{Condition, LogicalOp, Operator};
+
+    match cond {
+        Condition::Simple {
+            field,
+            operator,
+            value,
+            logical_op: _,
+        } => {
+            let op_sql = match operator {
+                Operator::Eq => "=",
+                Operator::Ne => "!=",
+                Operator::Gt => ">",
+                Operator::Gte => ">=",
+                Operator::Lt => "<",
+                Operator::Lte => "<=",
+                // HAVING with CONTAINS/STARTS_WITH/ENDS_WITH/IN is unusual;
+                // fall back to equality for consistency.
+                Operator::Contains
+                | Operator::StartsWith
+                | Operator::EndsWith
+                | Operator::In => "=",
+            };
+            params.push(value_to_rusqlite(value));
+            // Alias names from the grammar are already alphanumeric + underscore,
+            // so direct interpolation is safe. But debug-assert to be sure.
+            debug_assert!(
+                field
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_'),
+                "HAVING alias contains unsafe characters: {}",
+                field
+            );
+            format!("{} {} ?", field, op_sql)
+        }
+        Condition::Group {
+            conditions,
+            logical_op: _,
+        } => {
+            let mut parts: Vec<String> = Vec::new();
+            for (i, c) in conditions.iter().enumerate() {
+                if i > 0 {
+                    let op = c.logical_op().unwrap_or(LogicalOp::And);
+                    parts.push(match op {
+                        LogicalOp::And => "AND".to_string(),
+                        LogicalOp::Or => "OR".to_string(),
+                    });
+                }
+                parts.push(having_condition_to_sql(c, params));
+            }
+            format!("({})", parts.join(" "))
+        }
+    }
 }
 
