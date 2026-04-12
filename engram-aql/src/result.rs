@@ -74,5 +74,11 @@ pub struct AqlLink {
     pub source_id: String,
     pub target_id: String,
     pub link_type: String,
+    /// Confidence score from Engram's `relations` table.
+    ///
+    /// Stored as SQLite REAL, which rusqlite reads as `f64`. The AQL parser's
+    /// `LinkStmt::weight` field is `f32`, but that only applies to literal
+    /// values in AQL source (which we don't construct here — we always read
+    /// confidence from the database).
     pub confidence: f64,
 }
