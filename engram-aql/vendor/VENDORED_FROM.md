@@ -24,11 +24,11 @@ path dependency. Reasons:
 1. Note the new commit hash from upstream
 2. `rm -rf engram-aql/vendor/aql-parser && cp -r <upstream>/crates/aql-parser engram-aql/vendor/aql-parser`
 3. Update this file with the new commit hash and date
-4. Run `cargo test -p aql-parser` (from inside the crate) to verify upstream didn't break anything
+4. Run `cargo test` from `engram-aql/vendor/aql-parser/` to verify the vendored crate still builds clean on its own
 5. Update integration tests in `engram-aql/tests/` if the parser AST changed
 
 ### License
 
-aql-parser is licensed under Apache-2.0. We retain the upstream LICENSE
-file (if present) in the vendored directory. Currently no modifications
-are made to the source.
+aql-parser is licensed under Apache-2.0. The upstream LICENSE file (from
+the AQL repository root) is copied into this vendored directory for full
+attribution. No modifications are made to the source.
