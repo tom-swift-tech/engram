@@ -208,10 +208,24 @@ export class Engram {
     // path runs one transaction at a time; WAL lets readers see the
     // committed state without blocking on the writer.
     //
+    // synchronous = NORMAL is the canonical WAL pair: on OS-level crash
+    // the last transaction may roll back, but process crashes and power
+    // loss remain safe. For agent memory the trade is obvious — losing
+    // one retain on a kernel panic just means the agent re-learns that
+    // fact next time it matters.
+    //
     // busy_timeout gives SQLite a 5-second window to wait for a held
     // lock before returning SQLITE_BUSY — enough for short writes but
-    // short enough to surface genuine deadlocks quickly.
+    // short enough to surface genuine deadlocks quickly. The Rust
+    // engram-aql binary uses the same 5-second window for symmetry.
+    //
+    // Note: journal_mode = WAL is persistent in the database header.
+    // First open upgrades any pre-WAL `.engram` file on disk; subsequent
+    // opens are no-ops. Sidecar files `.engram-wal` and `.engram-shm`
+    // appear alongside the main file at runtime — use engram.backup()
+    // for single-file portability instead of raw `cp`.
     db.pragma('journal_mode = WAL');
+    db.pragma('synchronous = NORMAL');
     db.pragma('busy_timeout = 5000');
 
     // Load sqlite-vec for vector search. Graceful fallback: semantic strategy
@@ -551,6 +565,26 @@ export class Engram {
   /** Close the database connection. Call when the agent shuts down. */
   close(): void {
     this.db.close();
+  }
+
+  /**
+   * Copy this engram to a portable single-file destination.
+   *
+   * Uses SQLite's online backup API — safe to call while retain/recall are
+   * running on this or any other process. Readers and writers on the source
+   * are not blocked; the backup sees a consistent snapshot.
+   *
+   * The destination file is a complete standalone `.engram` with no WAL
+   * sidecar files, suitable for `git add`, rsync, cloud upload, or archival.
+   * Prefer this over `cp` — raw file copy can miss uncommitted WAL frames
+   * and leave the backup missing recent writes.
+   *
+   * @param destPath - Destination path for the backup file. Overwrites if it exists.
+   * @returns Total pages copied (one page is typically 4KB).
+   */
+  async backup(destPath: string): Promise<number> {
+    const metadata = await this.db.backup(destPath);
+    return metadata.totalPages;
   }
 
   // ---------------------------------------------------------------------------
