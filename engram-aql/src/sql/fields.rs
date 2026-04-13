@@ -29,16 +29,6 @@ impl FieldRef {
         match self {
             FieldRef::Column(name) => (*name).to_string(),
             FieldRef::JsonPath { column, path } => {
-                // The AQL grammar (aql.pest) restricts field paths to
-                // [A-Za-z0-9_.-]. This debug_assert catches any future caller
-                // that bypasses the grammar.
-                debug_assert!(
-                    path.chars().all(|c| {
-                        c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.'
-                    }),
-                    "json_extract path contains unsafe characters: {}",
-                    path
-                );
                 format!("json_extract({}, '$.{}')", column, path)
             }
             FieldRef::Unresolvable { .. } => {
@@ -110,6 +100,19 @@ const WORKING_MEMORY_COLUMNS: &[&str] = &[
     "expires_at",
 ];
 
+/// A JSON-path field name is safe to interpolate into the `$.<path>` segment
+/// of a `json_extract(...)` expression only if it matches the character set
+/// the AQL grammar (`aql.pest`) allows: `[A-Za-z0-9_.-]`. Callers outside the
+/// parser (tests, other crates) can bypass the grammar, so this runtime guard
+/// is the real security boundary. `debug_assert!` was previously used here —
+/// it compiles out in release builds, so it was not sufficient.
+fn is_safe_json_path(path: &str) -> bool {
+    !path.is_empty()
+        && path
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
+}
+
 pub fn resolve_field(field: &str, table: EngramTable) -> FieldRef {
     let known: &[&str] = match table {
         EngramTable::Chunks | EngramTable::All => CHUNK_COLUMNS,
@@ -128,20 +131,21 @@ pub fn resolve_field(field: &str, table: EngramTable) -> FieldRef {
     // Tables without a JSON bag column (Observations, Tools) return Unresolvable
     // so queries fail cleanly instead of silently matching NULL.
     // Note: tools.tags is a JSON array (not a bag), so it is also Unresolvable.
+    //
+    // Before constructing a JsonPath variant we validate the field name. An
+    // unsafe name falls through to Unresolvable (which renders as `NULL` in
+    // `to_sql()`), so a malicious field name yields a zero-row query instead
+    // of injectable SQL. This keeps `to_sql()` infallible.
     match table {
-        EngramTable::Chunks | EngramTable::All => FieldRef::JsonPath {
+        EngramTable::Chunks | EngramTable::All if is_safe_json_path(field) => FieldRef::JsonPath {
             column: "text",
             path: field.to_string(),
         },
-        EngramTable::WorkingMemory => FieldRef::JsonPath {
+        EngramTable::WorkingMemory if is_safe_json_path(field) => FieldRef::JsonPath {
             column: "data_json",
             path: field.to_string(),
         },
-        EngramTable::Tools => FieldRef::Unresolvable {
-            table,
-            field: field.to_string(),
-        },
-        EngramTable::Observations => FieldRef::Unresolvable {
+        _ => FieldRef::Unresolvable {
             table,
             field: field.to_string(),
         },

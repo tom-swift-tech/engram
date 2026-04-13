@@ -33,8 +33,9 @@ impl EngramTable {
             EngramTable::Observations => "observations",
             EngramTable::WorkingMemory => "working_memory",
             EngramTable::Tools => "tools",
-            // Phase 1: ALL queries the chunks table, which already covers
-            // semantic/episodic/observation/opinion via memory_type classification.
+            // Phase 1: ALL queries the chunks table only; observations and
+            // working_memory are not federated yet. Callers that accept a
+            // MemoryType::All query must warn the user about this limitation.
             EngramTable::All => "chunks",
         }
     }

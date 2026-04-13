@@ -1,8 +1,11 @@
 //! SQL builder unit tests.
 
+mod common;
+
 use aql_parser::ast::{Condition, LogicalOp, Operator, Value};
 use engram_aql::memory_map::EngramTable;
 use engram_aql::sql::conditions::condition_to_sql;
+use engram_aql::sql::fields::{resolve_field, FieldRef};
 use rusqlite::types::Value as RusqValue;
 
 #[test]
@@ -152,6 +155,69 @@ fn ends_with_anchors_at_end() {
     let sql = condition_to_sql(&cond, EngramTable::Tools, &mut params);
     assert_eq!(sql, "name LIKE ? ESCAPE '\\'");
     assert!(matches!(params[0], RusqValue::Text(ref s) if s == r"%\_prod"));
+}
+
+#[test]
+fn unsafe_json_path_field_is_unresolvable() {
+    // A field name containing characters outside [A-Za-z0-9_.-] must NOT be
+    // interpolated into a json_extract expression. `resolve_field` returns
+    // `Unresolvable`, which `to_sql()` renders as the literal `NULL`, so a
+    // query using such a field returns zero rows instead of injecting SQL.
+    for poisoned in &[
+        "outcome'; DROP TABLE chunks; --",
+        "outcome OR 1=1",
+        "outcome\"",
+        "outcome;",
+        "",
+    ] {
+        let field = resolve_field(poisoned, EngramTable::Chunks);
+        assert!(
+            matches!(field, FieldRef::Unresolvable { .. }),
+            "expected Unresolvable for poisoned field {:?}, got safe variant",
+            poisoned
+        );
+        assert_eq!(field.to_sql(), "NULL");
+    }
+}
+
+#[test]
+fn unsafe_json_path_in_query_returns_zero_rows() {
+    // End-to-end guard: building a WHERE clause from a poisoned field name
+    // and executing it against the seeded database must produce zero rows
+    // (NULL = 'anything' is NULL, never TRUE) — not a SQL error, and not an
+    // injected result. The seeded database has rows where outcome = 'success',
+    // so if the guard failed and the field leaked through, we would see > 0.
+    let conn = common::seeded_db();
+
+    let cond = Condition::Simple {
+        field: "outcome'; DROP TABLE chunks; --".into(),
+        operator: Operator::Eq,
+        value: Value::String("success".into()),
+        logical_op: None,
+    };
+    let mut params: Vec<RusqValue> = Vec::new();
+    let where_sql = condition_to_sql(&cond, EngramTable::Chunks, &mut params);
+
+    // Sanity: the rendered WHERE clause must not contain the malicious payload.
+    assert!(
+        !where_sql.contains("DROP"),
+        "malicious field leaked into SQL: {}",
+        where_sql
+    );
+
+    let sql = format!("SELECT COUNT(*) FROM chunks WHERE {}", where_sql);
+    let count: i64 = conn
+        .query_row(&sql, rusqlite::params_from_iter(params.iter()), |row| {
+            row.get(0)
+        })
+        .expect("query must execute cleanly, not SQL-error");
+    assert_eq!(count, 0, "poisoned field must match zero rows");
+
+    // And confirm the table still exists (i.e. no injection fired).
+    let chunks_rows: i64 = conn
+        .query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))
+        .unwrap();
+    assert!(chunks_rows > 0, "chunks table should be intact");
 }
 
 #[test]

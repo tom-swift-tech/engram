@@ -73,16 +73,27 @@ pub fn execute(conn: &Connection, stmt: &RecallStmt) -> AqlResult<QueryResult> {
     let table = aql_to_table(stmt.memory_type);
     let chunk_type = aql_to_chunk_memory_type(stmt.memory_type);
 
+    let mut warnings: Vec<String> = Vec::new();
+
+    // Phase 1 scope caveat: ALL silently maps to the `chunks` table only.
+    // The design spec defines ALL as chunks + observations + working_memory,
+    // but federation is not implemented yet. Warn so callers know.
+    if stmt.memory_type == aql_parser::ast::MemoryType::All {
+        warnings.push(
+            "ALL memory type in Phase 1 queries the chunks table only; observations and working_memory tables are not included. Future phases may federate across tables."
+                .into(),
+        );
+    }
+
     // AGGREGATE path — if modifiers have aggregate functions, build a
     // SELECT <aggs> FROM ... WHERE ... HAVING ... query instead of SELECT *.
     if let Some(aggs) = &stmt.modifiers.aggregate {
         if !aggs.is_empty() {
-            return execute_aggregate(conn, stmt, table, chunk_type, aggs);
+            return execute_aggregate(conn, stmt, table, chunk_type, aggs, warnings);
         }
     }
 
     let mut params: Vec<RusqValue> = Vec::new();
-    let mut warnings: Vec<String> = Vec::new();
 
     let where_parts = match build_where_clause(stmt, table, chunk_type, &mut params)? {
         WhereResult::Built(parts) => parts,
@@ -289,6 +300,7 @@ fn execute_aggregate(
     table: EngramTable,
     chunk_type: Option<&'static str>,
     aggs: &[aql_parser::ast::AggregateFunc],
+    mut warnings: Vec<String>,
 ) -> AqlResult<QueryResult> {
     use aql_parser::ast::AggregateFuncType;
 
@@ -298,9 +310,10 @@ fn execute_aggregate(
         WhereResult::Built(parts) => parts,
         WhereResult::VectorSearchDeferred => {
             let mut result = QueryResult::success("Recall", Vec::new());
-            result.warnings.push(
+            warnings.push(
                 "LIKE/PATTERN with AGGREGATE is deferred to Phase 2 (vector search)".into(),
             );
+            result.warnings = warnings;
             return Ok(result);
         }
     };
@@ -389,7 +402,9 @@ fn execute_aggregate(
     // HAVING filters result sets — if aggregate row doesn't satisfy HAVING,
     // SQLite returns no rows. A zero-row result from an AGGREGATE is a
     // meaningful result (not an error).
-    Ok(QueryResult::success("Recall", data))
+    let mut result = QueryResult::success("Recall", data);
+    result.warnings = warnings;
+    Ok(result)
 }
 
 /// Translate a HAVING condition to SQL. HAVING references aggregate aliases

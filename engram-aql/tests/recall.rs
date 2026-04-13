@@ -111,6 +111,47 @@ fn recall_invalid_query_returns_error_result() {
 }
 
 #[test]
+fn recall_from_all_emits_phase1_scope_warning() {
+    let conn = common::seeded_db();
+    let exec = Executor::from_connection(conn).unwrap();
+    let result = exec.query("RECALL FROM ALL ALL LIMIT 10").unwrap();
+    assert!(result.success, "error: {:?}", result.error);
+    assert!(
+        result.warnings.iter().any(|w| w.contains("ALL memory type")),
+        "expected ALL Phase 1 scope warning, got: {:?}",
+        result.warnings
+    );
+}
+
+#[test]
+fn recall_from_all_warning_also_fires_on_aggregate_path() {
+    let conn = common::seeded_db();
+    let exec = Executor::from_connection(conn).unwrap();
+    let result = exec
+        .query("RECALL FROM ALL ALL AGGREGATE COUNT(*) AS total")
+        .unwrap();
+    assert!(result.success, "error: {:?}", result.error);
+    assert!(
+        result.warnings.iter().any(|w| w.contains("ALL memory type")),
+        "expected ALL Phase 1 scope warning on aggregate path, got: {:?}",
+        result.warnings
+    );
+}
+
+#[test]
+fn recall_from_episodic_does_not_emit_all_warning() {
+    let conn = common::seeded_db();
+    let exec = Executor::from_connection(conn).unwrap();
+    let result = exec.query("RECALL FROM EPISODIC ALL LIMIT 10").unwrap();
+    assert!(result.success, "error: {:?}", result.error);
+    assert!(
+        !result.warnings.iter().any(|w| w.contains("ALL memory type")),
+        "EPISODIC query should not contain ALL scope warning, got: {:?}",
+        result.warnings
+    );
+}
+
+#[test]
 fn recall_limit_is_capped_at_safety_max() {
     let conn = common::seeded_db();
     let exec = Executor::from_connection(conn).unwrap();

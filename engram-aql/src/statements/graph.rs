@@ -24,15 +24,14 @@ pub fn fetch_links_for(
     }
 
     // Validate link_type for injection safety if filter uses Type variant.
+    // Kept as defense-in-depth alongside bound parameters below.
     if let WithLinks::Type { link_type } = filter {
         validate_identifier(link_type, "WITH LINKS TYPE")?;
     }
 
     let type_filter_clause = match filter {
-        WithLinks::All => String::new(),
-        WithLinks::Type { link_type } => {
-            format!(" AND r.relation_type = '{}'", link_type)
-        }
+        WithLinks::All => "",
+        WithLinks::Type { .. } => " AND r.relation_type = ?",
     };
 
     let placeholders: Vec<&str> = chunk_ids.iter().map(|_| "?").collect();
@@ -50,8 +49,16 @@ pub fn fetch_links_for(
         type_filter_clause
     );
 
+    let mut params: Vec<rusqlite::types::Value> = chunk_ids
+        .iter()
+        .map(|s| rusqlite::types::Value::Text(s.clone()))
+        .collect();
+    if let WithLinks::Type { link_type } = filter {
+        params.push(rusqlite::types::Value::Text(link_type.clone()));
+    }
+
     let mut prepared = conn.prepare(&sql)?;
-    let rows = prepared.query_map(rusqlite::params_from_iter(chunk_ids.iter()), |row| {
+    let rows = prepared.query_map(rusqlite::params_from_iter(params.iter()), |row| {
         Ok(AqlLink {
             source_id: row.get(0)?,
             target_id: row.get(1)?,
