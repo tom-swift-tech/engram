@@ -86,6 +86,15 @@ Hindsight uses embedded Postgres. Engram uses SQLite because:
 - Zero Docker containers required
 - Runs on the homelab without additional services
 
+SQLite runs in WAL mode (`journal_mode = WAL`, `synchronous = NORMAL`) so
+multiple processes can read while one writes — this is what lets the
+`engram-aql` Rust binary share a live `.engram` file with the TypeScript
+library, and what lets multiple agents hit a `shared.engram` concurrently.
+At runtime the main `.engram` file is accompanied by `.engram-wal` and
+`.engram-shm` sidecar files. For backups, use `engram.backup(destPath)`
+rather than raw `cp` — the backup method runs SQLite's online backup API
+and produces a single standalone file with no sidecars.
+
 ### Batch Reflect Over Real-Time
 Hindsight reflects on every query. Engram reflects on a schedule (default: manual trigger, configurable to hourly/daily). This keeps Ollama usage bounded while still building observations and opinions over time.
 
@@ -231,7 +240,6 @@ Key integration points:
 - Plugin bridges `memory_search` / `memory_get` → `engram_recall` via mcporter
 - Markdown sync ingests `workspace/memory/*.md` into Engram automatically
 - Known: ~10s latency from mcporter cold-start (fix: daemon mode or direct import)
-- Known: SQLite locks under parallel writes (fix: serialize retains)
 
 ## Integration with valor-engine
 
@@ -272,7 +280,7 @@ git init && git branch -M main
 
 - [x] **sqlite-vec loading**: Prebuilt binaries via npm (`sqlite-vec` package). No compile-from-source step. The `Engram` class loads it with a `try/catch` — graceful fallback to 3-strategy recall if absent.
 
-- [x] **Shared engram**: Naming convention. Multiple agents call `Engram.open('./shared.engram')`. SQLite WAL mode supports concurrent readers + one writer — concurrent `retain()` from multiple agents is safe as long as calls aren't simultaneous. No separate API needed.
+- [x] **Shared engram**: Naming convention. Multiple agents call `Engram.open('./shared.engram')`. `Engram.open()` sets `journal_mode = WAL`, `synchronous = NORMAL`, and `busy_timeout = 5000` so concurrent readers never block each other or the writer, and a held write lock resolves within the timeout window. Concurrent `retain()` calls serialize at the writer (SQLite allows one writer at a time), but reads proceed fully in parallel. No separate API needed. The same pragma set enables cross-process sharing with the `engram-aql` Rust binary.
 
 - [x] **MCP tool granularity**: All four operations exposed (`engram_retain`, `engram_recall`, `engram_reflect`, `engram_process_extractions`). Agents that only need recall+retain simply ignore the other two tools.
 

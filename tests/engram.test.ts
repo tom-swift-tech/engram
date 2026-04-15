@@ -329,6 +329,72 @@ describe('Engram', () => {
     expect(row.value).toBe('384');
   });
 
+  // ---- backup() ----
+
+  it('backup() writes a portable copy that contains the source data', async () => {
+    dbPath = tmpDbPath();
+    engram = await Engram.create(dbPath, { embedder: new MockEmbedder() });
+
+    const r = await engram.retain('Fact preserved through backup', {
+      memoryType: 'world',
+      trustScore: 0.9,
+    });
+
+    const backupPath = tmpDbPath();
+    try {
+      const pages = await engram.backup(backupPath);
+      expect(pages).toBeGreaterThan(0);
+
+      // The backup must be readable as a standalone SQLite file and contain
+      // the retained chunk — proves the online backup captured committed state.
+      const backup = new Database(backupPath);
+      const row = backup
+        .prepare('SELECT id, text FROM chunks WHERE id = ?')
+        .get(r.chunkId) as { id: string; text: string } | undefined;
+      backup.close();
+
+      expect(row).toBeDefined();
+      expect(row?.text).toBe('Fact preserved through backup');
+    } finally {
+      cleanupDb(backupPath);
+    }
+  });
+
+  it('backup() is safe while the source engram continues to accept writes', async () => {
+    dbPath = tmpDbPath();
+    engram = await Engram.create(dbPath, { embedder: new MockEmbedder() });
+
+    await engram.retain('Fact A captured before backup', { memoryType: 'world' });
+
+    const backupPath = tmpDbPath();
+    try {
+      await engram.backup(backupPath);
+
+      // A retain() after the backup must not corrupt the source or the backup.
+      const afterBackup = await engram.retain('Fact B written after backup', {
+        memoryType: 'world',
+      });
+      expect(afterBackup.chunkId).toMatch(/^chk-/);
+
+      // Source sees both; backup sees only Fact A.
+      const sourceCount = await engram.recall('Fact', {
+        strategies: ['keyword'],
+        topK: 10,
+      });
+      expect(sourceCount.results.length).toBe(2);
+
+      const backup = new Database(backupPath);
+      const backupRows = backup
+        .prepare(`SELECT text FROM chunks WHERE memory_type = 'world' ORDER BY created_at`)
+        .all() as Array<{ text: string }>;
+      backup.close();
+      expect(backupRows).toHaveLength(1);
+      expect(backupRows[0].text).toContain('Fact A');
+    } finally {
+      cleanupDb(backupPath);
+    }
+  });
+
   // ---- Failure cleanup ----
 
   it('closes the database when embedder initialization fails', async () => {

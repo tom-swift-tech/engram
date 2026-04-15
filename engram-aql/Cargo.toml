@@ -1,0 +1,59 @@
+[package]
+name = "engram-aql"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "AQL query binary for Engram agent memory files"
+repository = "https://github.com/swift-innovate/engram"
+readme = "README.md"
+
+[[bin]]
+name = "engram-aql"
+path = "src/main.rs"
+
+[lib]
+name = "engram_aql"
+path = "src/lib.rs"
+
+[dependencies]
+# AQL parser — vendored, see vendor/VENDORED_FROM.md
+aql-parser = { path = "vendor/aql-parser" }
+
+# SQLite access with bundled SQLite amalgamation
+rusqlite = { version = "0.31", features = ["bundled", "chrono", "serde_json"] }
+
+# CLI parsing
+clap = { version = "4.5", features = ["derive"] }
+
+# REPL line editing
+rustyline = "14"
+
+# Pretty table output for REPL
+comfy-table = "7"
+
+# Async runtime for MCP stdio server
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "io-util", "sync"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Time types (matches rusqlite's chrono feature)
+chrono = { version = "0.4", features = ["serde"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile = "3"
+pretty_assertions = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

@@ -434,6 +434,34 @@ npx engram-mcp ./agent.engram --anthropic-api-key sk-ant-... --anthropic-model c
 | `engram_session` | Infer or resume a working memory session |
 | `engram_queue_stats` | Extraction queue depth and processing metrics |
 
+## engram-aql — Native Rust Query Binary (Optional)
+
+For declarative AQL (Agent Query Language) queries over your `.engram` file,
+this repo also contains a companion Rust binary at `engram-aql/`.
+
+It runs alongside TypeScript Engram as a second process, sharing the same
+`.engram` SQLite file in WAL mode. Phase 1 is read-only — writes still go
+through `engram.retain()` on the TS side — but reads support the full AQL
+spec including RECALL, SCAN, LOOKUP, LOAD, AGGREGATE, ORDER BY, WITH LINKS,
+FOLLOW LINKS, and PIPELINE.
+
+Three subcommands:
+
+- `engram-aql query <path> "<aql>"` — one-shot CLI query, JSON output
+- `engram-aql repl <path>` — interactive REPL with pretty tables
+- `engram-aql mcp <path>` — stdio MCP server exposing an `engram_aql` tool
+
+Build and install:
+
+```bash
+cd engram-aql
+cargo install --path .
+```
+
+See `engram-aql/README.md` for details and
+`docs/superpowers/specs/2026-04-12-engram-aql-rust-binary-design.md`
+for the architecture.
+
 ## Two-Tier Entity Extraction
 
 Engram builds a knowledge graph without blocking writes:

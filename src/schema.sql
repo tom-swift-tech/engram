@@ -309,6 +309,32 @@ CREATE TABLE IF NOT EXISTS extraction_queue (
 CREATE INDEX IF NOT EXISTS idx_extraction_queue_status ON extraction_queue(status, queued_at);
 
 -- =============================================================================
+-- TOOLS REGISTRY
+-- Ranked tool storage for AQL LOAD FROM TOOLS queries.
+-- Agents store available tools with descriptions and rankings.
+-- Read by both TypeScript Engram and the Rust engram-aql binary.
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS tools (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    api_url TEXT,
+    ranking REAL DEFAULT 0.5
+        CHECK (ranking >= 0.0 AND ranking <= 1.0),
+    tags TEXT DEFAULT '[]',              -- JSON array of string tags
+    namespace TEXT DEFAULT 'default',
+    scope TEXT DEFAULT 'private'
+        CHECK (scope IN ('private', 'shared', 'cluster')),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    is_active BOOLEAN DEFAULT TRUE
+);
+
+CREATE INDEX IF NOT EXISTS idx_tools_ranking ON tools(ranking DESC) WHERE is_active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_tools_namespace ON tools(namespace) WHERE is_active = TRUE;
+
+-- =============================================================================
 -- VIEWS
 -- Convenience views for common query patterns
 -- =============================================================================
