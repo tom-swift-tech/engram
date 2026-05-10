@@ -2,6 +2,9 @@ node_modules/
 dist/
 coverage/
 
+# Pi extension runtime artifacts (Pi DB lives next to user projects)
+.engram/
+
 # Local-only briefing/notes
 DECK.md
 
