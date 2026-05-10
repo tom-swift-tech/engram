@@ -1,5 +1,9 @@
 node_modules/
 dist/
+coverage/
+
+# Local-only briefing/notes
+DECK.md
 
 # SQLite memory files (agent engrams are runtime state, not source code)
 *.engram
