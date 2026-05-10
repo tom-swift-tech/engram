@@ -254,12 +254,16 @@ describe('recall() — auto-temporal from natural language', () => {
     const r = await retain(db, 'deployed the new API gateway', embedder, {
       trustScore: 0.9,
     });
-    // Set created_at to 5 days ago
-    const fiveDaysAgo = new Date(
-      Date.now() - 5 * 24 * 60 * 60 * 1000,
-    ).toISOString();
+    // Compute a timestamp that lands in last week (Mon-Sun) regardless of
+    // what day-of-week today is. "Wednesday of last week" = this week's
+    // Monday minus 5 days; this matches the parser's Mon-start convention.
+    const now = new Date();
+    const dayOfWeek = now.getUTCDay(); // 0 = Sun
+    const daysSinceThisWeekMon = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+    const lastWeekWed = new Date(now);
+    lastWeekWed.setUTCDate(now.getUTCDate() - daysSinceThisWeekMon - 5);
     db.prepare(`UPDATE chunks SET created_at = ? WHERE id = ?`).run(
-      fiveDaysAgo,
+      lastWeekWed.toISOString(),
       r.chunkId,
     );
 
