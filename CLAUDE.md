@@ -155,7 +155,17 @@ engram/
 │   ├── agent-integration.test.ts
 │   └── mcp-server.test.ts
 ├── docs/
-│   └── OPENCLAW-INTEGRATION.md   ← OpenClaw memory plugin setup guide
+│   ├── OPENCLAW-INTEGRATION.md   ← OpenClaw memory plugin setup guide
+│   └── PI-INTEGRATION.md         ← Pi.dev (pi-mono) extension setup guide
+├── integrations/
+│   ├── README.md                 ← adapter map (OpenClaw external; Pi in-repo)
+│   └── pi/                       ← Pi extension package (engram-pi)
+│       ├── package.json          ← pi.extensions field; engram via file:../..
+│       ├── src/
+│       │   ├── index.ts          ← Pi binding: registers commands + LLM tools, lifecycle
+│       │   ├── adapter.ts        ← pure logic: takes Engram, returns plain objects
+│       │   └── types.ts          ← typebox schemas for the four LLM tools
+│       └── tests/                ← 16 tests (adapter against real Engram + smoke registrations)
 ├── skills/
 │   ├── engram.md                  ← portable agent skill (covers all 8 MCP tools)
 │   └── engram-session.md          ← working memory session skill
@@ -225,15 +235,28 @@ await myAgent.processExtractions();
 // Runs Ollama against queued chunks, builds out entity graph
 ```
 
-## Integration with OpenClaw (Production)
+## Harness Integrations
 
-OpenClaw's `memory-engram` plugin replaces its built-in flat-file FTS with Engram's semantic retrieval via mcporter subprocess. Production-verified by the Tracer agent (2026-03-24, 16/17 stress tests passed). See `docs/OPENCLAW-INTEGRATION.md` for full setup.
+Engram is harness-agnostic. Adapters live in `integrations/`. See `integrations/README.md` for the index.
 
-Key integration points:
+### OpenClaw (production)
+
+External `memory-engram` plugin in the OpenClaw workspace, consumed via `mcporter` subprocess. Production-verified by the Tracer agent (2026-03-24, 16/17 stress tests passed). See `docs/OPENCLAW-INTEGRATION.md`.
+
 - Plugin bridges `memory_search` / `memory_get` → `engram_recall` via mcporter
 - Markdown sync ingests `workspace/memory/*.md` into Engram automatically
+- Migration CLI: `tools/openclaw-import/` (one-shot bulk-load of OpenClaw markdown into `.engram`)
 - Known: ~10s latency from mcporter cold-start (fix: daemon mode or direct import)
 - Known: SQLite locks under parallel writes (fix: serialize retains)
+
+### Pi.dev (`pi-mono`, Phase 1)
+
+In-repo extension at `integrations/pi/`, loaded by Pi via Node.js + `jiti` (in-process, millisecond-latency). Exposes four slash commands (`/remember`, `/recall`, `/memory`, `/forget`) and four LLM tools (`engram_remember`, `engram_recall`, `engram_memory_stats`, `engram_forget`). Project-local DB at `.engram/pi.db`. See `docs/PI-INTEGRATION.md`.
+
+- Adapter is pure (`integrations/pi/src/adapter.ts`); Pi binding (`index.ts`) registers commands/tools and handles lifecycle
+- Lifecycle hooks used: `session_start` (lazy DB open), `session_shutdown` (close)
+- 16 tests against real in-memory Engram + fake Pi API
+- Phase 2 deferred: reflection scheduling, auto-retain on `tool_call`/`message_end`, `engram_session` mapping to Pi's session persistence
 
 ## Integration with valor-engine
 

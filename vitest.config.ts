@@ -5,6 +5,13 @@ export default defineConfig({
     // Native addons (better-sqlite3) require forked child processes,
     // not worker_threads (the vitest default).
     pool: 'forks',
+    // integrations/* are subprojects with their own vitest configs and
+    // dependency closures (e.g. integrations/pi resolves `engram` via a
+    // local symlink). Excluded so the root suite stays independent of
+    // optional install steps. tools/openclaw-import is intentionally kept
+    // in the root globbing — it has no extra deps and contributes 67 tests
+    // to the headline 308 count.
+    exclude: ['**/node_modules/**', '**/dist/**', 'integrations/**'],
     // Auto-cleanup after each test
     restoreMocks: true,
     unstubGlobals: true,

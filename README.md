@@ -444,15 +444,15 @@ Engram builds a knowledge graph without blocking writes:
 
 The knowledge graph compounds automatically: each entity discovered by Tier 2 makes Tier 1 smarter — future mentions get linked instantly.
 
-## OpenClaw Integration
+## Harness Integrations
 
-Engram can replace OpenClaw's built-in flat-file FTS memory system with semantic four-strategy retrieval via the `memory-engram` plugin and mcporter.
+Engram is a memory substrate; agent harnesses consume it via different integration models. See **[integrations/README.md](integrations/README.md)** for the index.
 
-Production-verified with the Tracer agent. See **[docs/OPENCLAW-INTEGRATION.md](docs/OPENCLAW-INTEGRATION.md)** for the full setup guide.
+### OpenClaw
 
-### Migrating Existing Memory
+Replaces OpenClaw's built-in flat-file FTS with semantic four-strategy retrieval via the `memory-engram` plugin and mcporter (out-of-process). Production-verified with the Tracer agent. See **[docs/OPENCLAW-INTEGRATION.md](docs/OPENCLAW-INTEGRATION.md)**.
 
-A CLI tool ships in `tools/openclaw-import/` to import existing OpenClaw `memory/` directories into `.engram` files. Deterministic classification — no LLM calls during import:
+A migration CLI ships in `tools/openclaw-import/` for importing existing OpenClaw `memory/` directories into `.engram` files (deterministic classification, no LLM during import):
 
 ```bash
 cd tools/openclaw-import && npm install
@@ -460,7 +460,18 @@ npx tsx src/index.ts -i /path/to/memory -o ./agent.engram --dry-run  # preview
 npx tsx src/index.ts -i /path/to/memory -o ./agent.engram            # import
 ```
 
-See **[tools/openclaw-import/README.md](tools/openclaw-import/README.md)** for the full category mapping and CLI options.
+See **[tools/openclaw-import/README.md](tools/openclaw-import/README.md)** for the category mapping and CLI options.
+
+### Pi.dev (`pi-mono`)
+
+In-process Pi extension exposing slash commands (`/remember`, `/recall`, `/memory`, `/forget`) and LLM tools (`engram_remember`, `engram_recall`, `engram_memory_stats`, `engram_forget`). Loaded directly via Node.js + `jiti` — millisecond-latency operations against a project-local `.engram/pi.db`.
+
+```bash
+cd integrations/pi && npm install && npm run build
+ln -s "$PWD" ~/.pi/agent/extensions/engram-pi   # or: pi -e ./dist/index.js
+```
+
+See **[docs/PI-INTEGRATION.md](docs/PI-INTEGRATION.md)** for full setup, lifecycle behavior, and the OpenClaw-vs-Pi adapter comparison.
 
 ## Agent Skills
 

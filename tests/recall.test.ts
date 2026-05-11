@@ -667,9 +667,7 @@ describe('formatForPrompt()', () => {
     const { formatForPrompt } = await import('../src/recall.js');
     const output = formatForPrompt({
       results: [],
-      opinions: [
-        { belief: 'Test belief', confidence: 0.9, domain: 'test' },
-      ],
+      opinions: [{ belief: 'Test belief', confidence: 0.9, domain: 'test' }],
       observations: [],
       totalCandidates: 0,
       strategiesUsed: [],

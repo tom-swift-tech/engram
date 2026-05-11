@@ -455,7 +455,8 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
     // 0. Decay stale opinions — prevents beliefs from staying at max confidence
     // when they haven't been reinforced or challenged recently.
     // Reduces by 2% per cycle, floored at 0.1, at most once per 7 days.
-    db.prepare(`
+    db.prepare(
+      `
       UPDATE opinions
       SET confidence = MAX(0.1, confidence - 0.02),
           updated_at = CURRENT_TIMESTAMP
@@ -464,7 +465,8 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
         AND (last_reinforced IS NULL OR last_reinforced < datetime('now', '-30 days'))
         AND (last_challenged IS NULL OR last_challenged < datetime('now', '-30 days'))
         AND updated_at < datetime('now', '-7 days')
-    `).run();
+    `,
+    ).run();
 
     // 1. Gather unreflected facts
     const unreflected = getUnreflectedFacts(db, batchSize);

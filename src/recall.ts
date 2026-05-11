@@ -170,7 +170,10 @@ function inClausePlaceholders(values: string[]): string {
  * Preserves words and whitespace only.
  */
 function sanitizeQuery(query: string): string {
-  return query.replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  return query
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 /**
