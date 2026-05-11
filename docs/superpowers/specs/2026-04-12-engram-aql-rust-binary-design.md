@@ -376,46 +376,66 @@ Field visibility in JSON output is controlled by `serde(skip_serializing_if)` so
 
 ## Schema Verification
 
-On every startup, `engram-aql` verifies the database schema is compatible with what it expects. This prevents silent failures from schema drift.
+On every startup, `engram-aql` verifies the database schema is compatible with what it expects. This prevents silent failures from schema drift. Verification is a **presence probe, not a structural drift detector**: it confirms required tables exist and the `chunks` table has the required columns, but it does not detect column renames, type changes, or trigger changes. Drift beyond column presence is out of scope for Phase 1.
+
+The probe runs at runtime against the open `Connection` using `sqlite_master` and `PRAGMA table_info` — no schema file is embedded in the binary:
 
 ```rust
-// Embed schema.sql at compile time from engram/src/schema.sql
-const EXPECTED_SCHEMA: &str = include_str!("../../src/schema.sql");
+const REQUIRED_TABLES: &[&str] = &[
+    "chunks",
+    "entities",
+    "relations",
+    "chunk_entities",
+    "opinions",
+    "observations",
+    "working_memory",
+    "tools",
+    "bank_config",
+];
 
-pub fn verify_schema(conn: &Connection) -> Result<(), SchemaError> {
-    // Required tables for Phase 1
-    let required_tables = [
-        "chunks",
-        "entities",
-        "relations",
-        "chunk_entities",
-        "opinions",
-        "observations",
-        "working_memory",
-        "tools",        // New in this work
-        "bank_config",
-    ];
+const REQUIRED_CHUNK_COLUMNS: &[&str] = &[
+    "id", "text", "memory_type", "trust_score", "is_active",
+    "context", "source", "source_type", "created_at",
+];
 
-    for table in required_tables {
-        let exists: bool = conn.query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
-            [table],
-            |row| row.get::<_, i64>(0).map(|n| n > 0),
-        )?;
-        if !exists {
-            return Err(SchemaError::MissingTable(table.to_string()));
+pub fn verify_schema(conn: &Connection) -> AqlResult<()> {
+    for table in REQUIRED_TABLES {
+        if !table_exists(conn, table)? {
+            return Err(SchemaError::MissingTable((*table).into()).into());
         }
     }
-
-    // Required columns on chunks (catches old .engram files)
-    let required_chunk_cols = ["id", "text", "memory_type", "trust_score", "is_active"];
-    for col in required_chunk_cols {
-        if !column_exists(conn, "chunks", col)? {
-            return Err(SchemaError::MissingColumn("chunks".into(), col.into()));
+    for column in REQUIRED_CHUNK_COLUMNS {
+        if !column_exists(conn, "chunks", column)? {
+            return Err(SchemaError::MissingColumn {
+                table: "chunks".into(),
+                column: (*column).into(),
+            }
+            .into());
         }
     }
-
     Ok(())
+}
+
+fn table_exists(conn: &Connection, table: &str) -> AqlResult<bool> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        [table],
+        |row| row.get(0),
+    )?;
+    Ok(n > 0)
+}
+
+fn column_exists(conn: &Connection, table: &str, column: &str) -> AqlResult<bool> {
+    // Double-quote the identifier so callers with less-trusted table names
+    // can't inject PRAGMA arguments.
+    let quoted = format!("\"{}\"", table.replace('"', "\"\""));
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({})", quoted))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    let mut names = Vec::new();
+    for row in rows {
+        names.push(row?);
+    }
+    Ok(names.iter().any(|n| n == column))
 }
 ```
 
@@ -427,7 +447,15 @@ hint: this may be an older .engram file. Run TypeScript Engram once to upgrade t
       npx engram-mcp ./tracer.engram --upgrade
 ```
 
-The schema file is embedded via `include_str!`, which means `cargo build` fails if `engram/src/schema.sql` is missing — the Rust binary can't exist without the schema contract.
+The same shape applies for a missing column, surfaced via `SchemaError::MissingColumn { table, column }`.
+
+### Why runtime probing
+
+An earlier draft of this spec proposed embedding `engram/src/schema.sql` via `include_str!` so `cargo build` would fail if the schema file went missing. We chose runtime PRAGMA probing instead because:
+
+- **No cross-repo path coupling.** The `engram-aql` crate can live in any directory layout without a brittle relative path like `../../src/schema.sql` into the TypeScript engram repo. Embedding would hard-code a sibling-checkout assumption that breaks the moment the crate is vendored, moved, or published standalone.
+- **Fast, lean builds.** Nothing extra is baked into the binary and `cargo build` does no file I/O outside the crate. The schema text is never needed at runtime — only the presence of specific tables and columns is.
+- **The compile-time guarantee was weak anyway.** `include_str!` would only catch a *missing file*, not semantic drift — a renamed column, a changed type, or a dropped trigger would compile cleanly and fail at runtime. Runtime probing catches the same presence-level issues (missing tables, missing columns) without the build coupling, and surfaces them with `SchemaError::MissingTable` / `SchemaError::MissingColumn` at the point they actually matter: when opening a real `.engram` file.
 
 ## SQL Builder Patterns
 

@@ -1,0 +1,4 @@
+target/
+*.swp
+.vscode/
+vendor/aql-parser/Cargo.lock
