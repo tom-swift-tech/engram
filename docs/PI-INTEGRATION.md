@@ -2,7 +2,7 @@
 
 [Pi](https://pi.dev) (the `pi-mono` coding agent by [@earendil-works](https://github.com/earendil-works/pi)) is a TypeScript coding agent CLI with a first-class extension system. This guide covers installing Engram as a Pi extension so you get persistent semantic memory across Pi sessions.
 
-**Status:** Phase 1. Slash commands and LLM tools for `remember / recall / memory / forget` are implemented and tested. Reflection scheduling, auto-retain on `tool_call` / `message_end`, and `engram_session` (working memory) integration are deferred to Phase 2.
+**Status:** Phase 1 + working-memory bridge. Slash commands and LLM tools for `remember / recall / memory / forget / session` are implemented and tested; LLM-callable `engram_session_resume / _update / _snapshot` tools plus a `before_agent_start` system-prompt addendum land Phase 2's session bridge. Reflection scheduling and auto-retain on `tool_call` / `message_end` remain deferred.
 
 ## Architecture
 
@@ -93,10 +93,11 @@ If you see this, the extension is registered and the DB was created on demand at
 | `/memory` | Counts of all memory tables + extraction queue depth |
 | `/forget <chk-xxx>` | Soft-delete by ID (no confirmation — direct) |
 | `/forget <query>` | Recall top-1, confirm in TUI, soft-delete on yes |
+| `/session` | Show the most recently touched working session + list active ones |
 
 ### LLM tools
 
-The LLM sees four tools every turn:
+The LLM sees seven tools every turn:
 
 | Tool | Purpose | Required params |
 |------|---------|-----------------|
@@ -104,6 +105,9 @@ The LLM sees four tools every turn:
 | `engram_recall` | Search memory | `query` |
 | `engram_memory_stats` | Report counts | (none) |
 | `engram_forget` | Soft-delete by chunk ID | `chunkId` (must match `^chk-`) |
+| `engram_session_resume` | Resume or create a working memory session for the current task | `message` |
+| `engram_session_update` | Update progress on an active session | `sessionId`, `progress` |
+| `engram_session_snapshot` | Snapshot a completed session to long-term memory and end it | `sessionId` |
 
 The schema rejects free-form forget queries from the LLM — the model must first `engram_recall` to find a real chunk ID before it can forget.
 
@@ -140,10 +144,9 @@ Both adapters target the same `.engram` SQLite file format; you could in princip
 
 ## What's next (deferred from Phase 1)
 
-Tracked in `tasks/todo.md` under "Out of Scope":
+Tracked in `tasks/todo.md`:
 
 - Triggering `engram.processExtractions()` and `engram.reflect()` on `turn_end` or `session_shutdown`
-- Mapping Pi's session persistence to Engram's `working_memory` table via `engram_session`
 - Optional auto-retain of conversation turns as `experience`-type chunks (with gating to avoid noise)
 - Custom UI components via Pi's `ctx.ui.custom()` (e.g., a memory inspector widget)
 - Publishing as `pi install`-able package
