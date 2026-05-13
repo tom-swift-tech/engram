@@ -69,3 +69,64 @@ export const ForgetParams = Type.Object({
 });
 
 export type ForgetToolParams = Static<typeof ForgetParams>;
+
+// =============================================================================
+// Working memory session bridge (Phase 2)
+// =============================================================================
+
+export const SessionResumeParams = Type.Object({
+  message: Type.String({
+    description:
+      'The current user message or task description. Used to match an existing working session via embedding similarity, or create a new one.',
+  }),
+  threshold: Type.Optional(
+    Type.Number({
+      minimum: 0,
+      maximum: 1,
+      description:
+        'Cosine similarity threshold for matching an existing session (default 0.55). Lower = aggressive match; higher = create new sessions more often.',
+    }),
+  ),
+  maxActive: Type.Optional(
+    Type.Integer({
+      minimum: 1,
+      maximum: 50,
+      description:
+        'Max concurrent active sessions (default 5). When exceeded, the oldest is snapshotted to long-term memory.',
+    }),
+  ),
+});
+
+export type SessionResumeToolParams = Static<typeof SessionResumeParams>;
+
+export const SessionUpdateParams = Type.Object({
+  sessionId: Type.String({
+    description:
+      'Working memory session id (format: wm-xxx) returned by engram_session_resume.',
+    pattern: '^wm-',
+  }),
+  progress: Type.Optional(
+    Type.String({
+      description:
+        'Free-form progress note. Replaces any previous progress on this session.',
+    }),
+  ),
+  extensions: Type.Optional(
+    Type.Record(Type.String(), Type.Unknown(), {
+      description:
+        'Optional agent-defined keys merged into the session state (e.g. ticket ids, checklist).',
+    }),
+  ),
+});
+
+export type SessionUpdateToolParams = Static<typeof SessionUpdateParams>;
+
+export const SessionSnapshotParams = Type.Object({
+  sessionId: Type.String({
+    description:
+      'Working memory session id to snapshot. The session is collapsed to a long-term episodic chunk and expired.',
+    pattern: '^wm-',
+  }),
+});
+
+export type SessionSnapshotToolParams = Static<typeof SessionSnapshotParams>;
