@@ -55,6 +55,11 @@ const DEFAULT_DB_RELATIVE = '.engram/pi.db';
 let enginePromise: Promise<Engram> | null = null;
 let cachedDbPath: string | null = null;
 
+// Module-level transient pointer set by engram_session_* tools so the
+// /session slash command can answer "what are you currently working on?"
+// Never persisted; lost on reload. Engram remains the only stateful party.
+let currentSessionId: string | null = null;
+
 // Engine factory — overridable from tests to swap in a deterministic embedder
 // without paying the LocalEmbedder model download. Production never touches
 // this; the only setter is the test-only export below, prefixed `_`.
@@ -85,6 +90,7 @@ async function getEngram(): Promise<Engram> {
 export function _setEngineFactoryForTesting(factory: EngineFactory): void {
   enginePromise = null;
   cachedDbPath = null;
+  currentSessionId = null;
   engineFactory = factory;
 }
 
@@ -92,6 +98,7 @@ export function _setEngineFactoryForTesting(factory: EngineFactory): void {
 export function _resetEngineFactoryForTesting(): void {
   enginePromise = null;
   cachedDbPath = null;
+  currentSessionId = null;
   engineFactory = (path) => Engram.open(path);
 }
 
