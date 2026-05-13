@@ -15,6 +15,7 @@
 //   /recall   <query>      retrieve relevant memories
 //   /memory                show memory stats
 //   /forget   <id|query>   soft-delete a chunk (confirms before query-based deletes)
+//   /session               show current working session + list active sessions
 //
 // LLM tools (JSON Schema):
 //   engram_remember
@@ -314,6 +315,45 @@ export default function engramPiExtension(pi: ExtensionAPI): void {
         ok ? `Forgot ${candidate.chunkId}` : 'Forget failed.',
         ok ? 'success' : 'error',
       );
+    },
+  });
+
+  pi.registerCommand('session', {
+    description: 'Show the current working session and list active sessions',
+    handler: async (_args, ctx) => {
+      const engram = await getEngram();
+      const active = engram.listWorkingSessions();
+      const lines: string[] = [];
+
+      if (currentSessionId) {
+        const current = active.find((s) => s.id === currentSessionId);
+        if (current) {
+          lines.push(`Current: ${current.id} — ${current.goal}`);
+          const progress =
+            typeof current.progress === 'string' ? current.progress : undefined;
+          if (progress) {
+            lines.push(`  Progress: ${progress}`);
+          }
+          lines.push('');
+        }
+      } else {
+        lines.push(
+          'No active session in this run — call engram_session_resume to start one.',
+        );
+        lines.push('');
+      }
+
+      if (active.length === 0) {
+        lines.push('No active working memory sessions.');
+      } else {
+        lines.push(`Active sessions (${active.length}):`);
+        for (const s of active) {
+          const marker = s.id === currentSessionId ? '*' : ' ';
+          lines.push(`  ${marker} ${s.id} — ${s.goal}`);
+        }
+      }
+
+      notifyOrLog(ctx, lines.join('\n'));
     },
   });
 
