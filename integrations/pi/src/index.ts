@@ -64,6 +64,15 @@ import {
 
 const DEFAULT_DB_RELATIVE = '.engram/pi.db';
 
+const SESSION_ADDENDUM = [
+  '',
+  'You have access to persistent working memory across sessions via Engram:',
+  '- engram_session_resume — call early when starting substantive work; returns prior context if this topic has been worked on before',
+  '- engram_session_update — call before turn boundaries to record progress notes',
+  '- engram_session_snapshot — call when a piece of work is complete; collapses the session to long-term memory',
+  'Use these for multi-turn tasks; prefer engram_recall for one-off lookups.',
+].join('\n');
+
 let enginePromise: Promise<Engram> | null = null;
 let cachedDbPath: string | null = null;
 
@@ -185,6 +194,23 @@ export default function engramPiExtension(pi: ExtensionAPI): void {
 
   pi.on('session_shutdown', async () => {
     await closeEngram();
+  });
+
+  pi.on('before_agent_start', (event) => {
+    try {
+      return {
+        systemPrompt: `${event.systemPrompt}\n${SESSION_ADDENDUM}`,
+      };
+    } catch (err) {
+      // Never break a turn over the addendum — return nothing so Pi keeps
+      // the existing system prompt.
+      // eslint-disable-next-line no-console
+      console.error(
+        'engram-pi: failed to append session addendum:',
+        err instanceof Error ? err.message : err,
+      );
+      return undefined;
+    }
   });
 
   // ---------------------------------------------------------------------------
