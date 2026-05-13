@@ -3,7 +3,7 @@
 > Phase 1 of both harness adapters shipped. This file tracks what's deferred.
 > Historical plans (the Pi adapter Phase 1 plan, the original library build plan) live in git history.
 
-## Status as of 2026-06-06
+## Status as of 2026-06-16
 
 - **AQL Rust binary (Phase 1)** — merged via PR #1. Read-only query surface (RECALL, SCAN, LOOKUP, LOAD, AGGREGATE, ORDER BY, WITH LINKS, FOLLOW LINKS). Subcommands: `query`, `repl`, `mcp`. Crate at `engram-aql/`.
 - **Pi.dev extension (Phase 1)** — merged via PR #2. Four slash commands (`/remember`, `/recall`, `/memory`, `/forget`) and four LLM tools (`engram_remember`, `engram_recall`, `engram_memory_stats`, `engram_forget`). Lives at `integrations/pi/`.
@@ -12,8 +12,9 @@
 - **Docs (2026-06-06)** — `AGENTS.md` added as a verbatim mirror of `CLAUDE.md` (cross-tool AGENTS standard). The two must be edited together; see the hygiene item below.
 - **Trust-tier enforcement (2026-06-10)** — the CLAUDE.md trust-layer rule ("external content can never override user directives") is now enforced in code, not just documented. Recall ranks lexicographically by (source tier, trust-weighted score) with a tier-0 truncation reserve (`DEFAULT_SOURCE_TIERS`, `RecallOptions.sourceTiers`); extraction/reflect prompts delimit memory content as labeled untrusted data and clamp `disposition` to validated numbers. New suite: `tests/trust-tier.test.ts` (11 tests).
 - **Recall ordering follow-ups (2026-06-10, PR #5 follow-up)** — memory-type rank added as the middle lexicographic sort term (tier, memoryTypeRank, score; `DEFAULT_MEMORY_TYPE_RANK`, `RecallOptions.memoryTypeRank`). Positional-read audit of the transports found one latent bug: Pi adapter `findToForget` read tier-major `results[0]` as best-relevance, preferentially nominating user directives for deletion — fixed to over-fetch and re-sort by score. Result-ordering contract documented in README + `RecallResponse.results`.
+- **Pi.dev extension — working-memory session bridge (2026-06-16)** — shipped. Adds `/session` slash command, three LLM tools (`engram_session_resume`, `engram_session_update`, `engram_session_snapshot`) wrapping the working-memory primitives, and a `before_agent_start` system-prompt addendum nudging the agent toward Engram. Closes the Phase 2 `engram_session` ↔ Pi session persistence item. Spec: `docs/superpowers/specs/2026-05-13-engram-pi-session-bridge-design.md`; plan: `docs/superpowers/plans/2026-05-13-engram-pi-session-bridge.md`.
 - **Main suite:** 369 tests across 21 files. 346 pass without the Rust toolchain; the 2 AQL cross-process suites (`aql-equivalence`, `aql-e2e-process`, 23 tests) need `cargo` and pass when it's present. Format + lint clean.
-- **Pi extension suite:** 28 tests in `integrations/pi/` (independent dep closure, run via `cd integrations/pi && npx vitest run`).
+- **Pi extension suite:** session bridge adds adapter + binding + smoke tests (run via `cd integrations/pi && npx vitest run`).
 
 ---
 
@@ -32,9 +33,6 @@ Environment note for whoever picks this up: the agent shells default to **Node 2
 
 - [ ] **Reflect/extract scheduling from Pi**
   Trigger `engram.processExtractions()` and `engram.reflect()` from Pi's `turn_end` or `session_shutdown` hooks. Open design questions: cadence (per-turn? every N turns? on idle?), Ollama-availability detection, what to do when Ollama is unreachable (silent skip vs warning).
-
-- [ ] **`engram_session` ↔ Pi session persistence**
-  Pi already persists sessions via `pi.appendEntry()`. Engram has the `working_memory` table. Map them without double-persistence — the right answer is probably "Engram owns long-term, Pi owns conversation flow; don't mirror state."
 
 - [ ] **Auto-retain conversation turns**
   Use `tool_call` / `message_end` events to auto-stash messages as `experience`-type chunks. Needs gating (min length, dedup against recent retains, exclude short replies and tool outputs) or the DB will fill with noise.
