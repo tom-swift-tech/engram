@@ -409,4 +409,41 @@ export default function engramPiExtension(pi: ExtensionAPI): void {
       };
     },
   });
+
+  pi.registerTool<typeof SessionUpdateParams, unknown>({
+    name: 'engram_session_update',
+    label: 'Session Update',
+    description:
+      'Update progress on an active working memory session. Call before turn boundaries you want preserved across sessions. Provide the sessionId from engram_session_resume.',
+    parameters: SessionUpdateParams,
+    async execute(_id, params: SessionUpdateToolParams) {
+      const engram = await getEngram();
+      try {
+        const result = await updateSession(engram, {
+          sessionId: params.sessionId,
+          progress: params.progress,
+          extensions: params.extensions as
+            | Record<string, unknown>
+            | undefined,
+        });
+        currentSessionId = result.sessionId;
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Updated ${result.sessionId} (updated_at ${result.updated_at})`,
+            },
+          ],
+          details: result,
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: 'text', text: `Update failed: ${msg}` }],
+          isError: true,
+          details: { sessionId: params.sessionId, error: msg },
+        };
+      }
+    },
+  });
 }
