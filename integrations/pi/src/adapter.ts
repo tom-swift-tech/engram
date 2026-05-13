@@ -240,3 +240,23 @@ export async function updateSession(
     updated_at: reloaded.updated_at,
   };
 }
+
+export interface SnapshotSessionInput {
+  sessionId: string;
+}
+
+export interface SnapshotSessionOutput {
+  sessionId: string;
+  chunkId: string;
+}
+
+export async function snapshotSession(
+  engram: Engram,
+  input: SnapshotSessionInput,
+): Promise<SnapshotSessionOutput> {
+  const result = await engram.snapshotWorkingSession(input.sessionId);
+  return {
+    sessionId: input.sessionId,
+    chunkId: result.chunkId,
+  };
+}
