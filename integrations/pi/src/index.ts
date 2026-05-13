@@ -21,6 +21,8 @@
 //   engram_recall
 //   engram_memory_stats
 //   engram_forget          (requires explicit chunkId — no agent-driven query deletes)
+//   engram_session_resume
+//   engram_session_update
 // =============================================================================
 
 import { mkdir } from 'node:fs/promises';
