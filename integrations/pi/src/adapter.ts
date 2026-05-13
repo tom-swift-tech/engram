@@ -211,3 +211,37 @@ export async function resumeSession(
     reason: result.diagnostics.reason,
   };
 }
+
+export interface UpdateSessionInput {
+  sessionId: string;
+  /** Free-form progress note merged into session state */
+  progress?: string;
+  /** Agent-defined extension keys merged into session state */
+  extensions?: Record<string, unknown>;
+}
+
+export interface UpdateSessionOutput {
+  sessionId: string;
+  updated_at: string;
+}
+
+export async function updateSession(
+  engram: Engram,
+  input: UpdateSessionInput,
+): Promise<UpdateSessionOutput> {
+  const updates: Record<string, unknown> = { ...(input.extensions ?? {}) };
+  if (input.progress !== undefined) {
+    updates.progress = input.progress;
+  }
+  await engram.updateWorkingSession(input.sessionId, updates);
+  const reloaded = engram.getWorkingSession(input.sessionId);
+  if (!reloaded) {
+    throw new Error(
+      `Working memory session ${input.sessionId} not found after update`,
+    );
+  }
+  return {
+    sessionId: reloaded.id,
+    updated_at: reloaded.updated_at,
+  };
+}

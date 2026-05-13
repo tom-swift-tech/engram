@@ -18,6 +18,7 @@ import {
   forgetById,
   looksLikeChunkId,
   resumeSession,
+  updateSession,
 } from '../src/adapter.js';
 
 // Deterministic embedder (no Ollama, no model download).
@@ -237,6 +238,56 @@ describe('Pi adapter', () => {
       const active = engram.listWorkingSessions();
       expect(active.find((s) => s.id === first.sessionId)).toBeUndefined();
       expect(active.find((s) => s.id === second.sessionId)).toBeDefined();
+    });
+  });
+
+  describe('updateSession', () => {
+    it('merges progress into the stored session state', async () => {
+      const resumed = await resumeSession(engram, {
+        message: 'alpha refactor work',
+        threshold: 0.999,
+      });
+      const updated = await updateSession(engram, {
+        sessionId: resumed.sessionId,
+        progress: 'Extracted JWT decoder into its own file',
+      });
+      expect(updated.sessionId).toBe(resumed.sessionId);
+      expect(typeof updated.updated_at).toBe('string');
+
+      // Re-resume the same topic — Engram should return the updated progress
+      const reloaded = await resumeSession(engram, {
+        message: 'alpha refactor work',
+      });
+      expect(reloaded.sessionId).toBe(resumed.sessionId);
+      expect(reloaded.progress).toBe('Extracted JWT decoder into its own file');
+    });
+
+    it('preserves agent-defined extension keys', async () => {
+      const resumed = await resumeSession(engram, {
+        message: 'beta migration plan',
+        threshold: 0.999,
+      });
+      await updateSession(engram, {
+        sessionId: resumed.sessionId,
+        extensions: { ticketIds: ['ENG-42', 'ENG-43'] },
+      });
+
+      // Read back via Engram's getWorkingSession
+      const state = engram.getWorkingSession(resumed.sessionId);
+      expect(state).not.toBeNull();
+      expect((state as Record<string, unknown>).ticketIds).toEqual([
+        'ENG-42',
+        'ENG-43',
+      ]);
+    });
+
+    it('throws when the sessionId is unknown', async () => {
+      await expect(
+        updateSession(engram, {
+          sessionId: 'wm-does-not-exist',
+          progress: 'this should fail',
+        }),
+      ).rejects.toThrow(/not found|expired/i);
     });
   });
 });
