@@ -17,6 +17,7 @@ import {
   findToForget,
   forgetById,
   looksLikeChunkId,
+  resumeSession,
 } from '../src/adapter.js';
 
 // Deterministic embedder (no Ollama, no model download).
@@ -172,6 +173,70 @@ describe('Pi adapter', () => {
     it('forgetById returns false for unknown ids', async () => {
       const ok = await forgetById(engram, 'chk-does-not-exist');
       expect(ok).toBe(false);
+    });
+  });
+
+  describe('resumeSession', () => {
+    it('creates a new session on a fresh DB (reason "new", confidence 1.0)', async () => {
+      const result = await resumeSession(engram, {
+        message: 'help me refactor the auth middleware',
+      });
+      expect(result.sessionId).toMatch(/^wm-/);
+      expect(result.reason).toBe('new');
+      expect(result.confidence).toBe(1.0);
+      expect(result.goal).toContain('auth middleware');
+    });
+
+    it('matches an existing session on a similar follow-up message', async () => {
+      const first = await resumeSession(engram, {
+        message: 'help me refactor the auth middleware',
+      });
+      const second = await resumeSession(engram, {
+        message: 'help me refactor the auth middleware some more',
+      });
+      expect(second.sessionId).toBe(first.sessionId);
+      expect(second.reason).toBe('match');
+      expect(second.confidence).toBeLessThan(1.0);
+    });
+
+    it('creates a fresh session for an unrelated topic', async () => {
+      const first = await resumeSession(engram, {
+        message: 'AAAA plan the deployment to staging',
+        threshold: 0.999,
+      });
+      const second = await resumeSession(engram, {
+        message: 'ZZZZ compare the cost of two cloud providers',
+        threshold: 0.999,
+      });
+      expect(second.sessionId).not.toBe(first.sessionId);
+      expect(second.reason).toBe('new');
+    });
+
+    it('passes maxActive through to inferWorkingSession', async () => {
+      // alpha/beta/tau chosen because their pairwise cosines in the 8d
+      // TestEmbedder are all well below 0.999, so each resumeSession call
+      // creates a distinct session rather than matching an existing one.
+      const first = await resumeSession(engram, {
+        message: 'alpha',
+        threshold: 0.999,
+      });
+      const second = await resumeSession(engram, {
+        message: 'beta',
+        threshold: 0.999,
+      });
+      // Both active with default maxActive (5)
+      expect(engram.listWorkingSessions().length).toBe(2);
+
+      // Third with maxActive: 2 should snapshot the oldest (first),
+      // leaving second + third active.
+      await resumeSession(engram, {
+        message: 'tau',
+        threshold: 0.999,
+        maxActive: 2,
+      });
+      const active = engram.listWorkingSessions();
+      expect(active.find((s) => s.id === first.sessionId)).toBeUndefined();
+      expect(active.find((s) => s.id === second.sessionId)).toBeDefined();
     });
   });
 });
