@@ -70,12 +70,12 @@ function makeFakePi(): {
 }
 
 describe('engram-pi extension factory', () => {
-  it('registers the four documented slash commands', () => {
+  it('registers the five documented slash commands', () => {
     const { pi, commands } = makeFakePi();
     engramPiExtension(pi);
 
     const names = commands.map((c) => c.name).sort();
-    expect(names).toEqual(['forget', 'memory', 'recall', 'remember']);
+    expect(names).toEqual(['forget', 'memory', 'recall', 'remember', 'session']);
 
     for (const cmd of commands) {
       expect(typeof cmd.description).toBe('string');
@@ -84,7 +84,7 @@ describe('engram-pi extension factory', () => {
     }
   });
 
-  it('registers the four documented LLM tools with engram_ prefix', () => {
+  it('registers the seven documented LLM tools with engram_ prefix', () => {
     const { pi, tools } = makeFakePi();
     engramPiExtension(pi);
 
@@ -94,6 +94,9 @@ describe('engram-pi extension factory', () => {
       'engram_memory_stats',
       'engram_recall',
       'engram_remember',
+      'engram_session_resume',
+      'engram_session_snapshot',
+      'engram_session_update',
     ]);
 
     for (const t of tools) {
@@ -124,10 +127,51 @@ describe('engram-pi extension factory', () => {
     expect(chunkIdSchema?.pattern).toBe('^chk-');
   });
 
-  it('subscribes to session_start and session_shutdown lifecycle events', () => {
+  it('subscribes to session_start, session_shutdown, and before_agent_start lifecycle events', () => {
     const { pi, handlers } = makeFakePi();
     engramPiExtension(pi);
     const events = handlers.map((h) => h.event).sort();
-    expect(events).toEqual(['session_shutdown', 'session_start']);
+    expect(events).toEqual([
+      'before_agent_start',
+      'session_shutdown',
+      'session_start',
+    ]);
+  });
+
+  it('engram_session_resume requires a message parameter', () => {
+    const { pi, tools } = makeFakePi();
+    engramPiExtension(pi);
+    const tool = tools.find((t) => t.name === 'engram_session_resume');
+    expect(tool).toBeDefined();
+    expect(tool!.parameters.required).toContain('message');
+  });
+
+  it('engram_session_update and snapshot require a sessionId matching wm- prefix', () => {
+    const { pi, tools } = makeFakePi();
+    engramPiExtension(pi);
+    for (const name of ['engram_session_update', 'engram_session_snapshot']) {
+      const tool = tools.find((t) => t.name === name);
+      expect(tool, `tool ${name} should be registered`).toBeDefined();
+      expect(tool!.parameters.required).toContain('sessionId');
+      const idSchema = tool!.parameters.properties?.sessionId as
+        | { pattern?: string }
+        | undefined;
+      expect(idSchema?.pattern).toBe('^wm-');
+    }
+  });
+
+  it('before_agent_start handler returns a systemPrompt containing the session addendum', () => {
+    const { pi, handlers } = makeFakePi();
+    engramPiExtension(pi);
+    const handler = handlers.find((h) => h.event === 'before_agent_start');
+    expect(handler).toBeDefined();
+    const result = handler!.handler(
+      { type: 'before_agent_start', prompt: 'hi', systemPrompt: 'BASE' },
+      {},
+    ) as { systemPrompt?: string } | undefined;
+    expect(result?.systemPrompt).toContain('BASE');
+    expect(result?.systemPrompt).toContain('engram_session_resume');
+    expect(result?.systemPrompt).toContain('engram_session_update');
+    expect(result?.systemPrompt).toContain('engram_session_snapshot');
   });
 });

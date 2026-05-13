@@ -528,6 +528,8 @@ export default function engramPiExtension(pi: ExtensionAPI): void {
         const result = await snapshotSession(engram, {
           sessionId: params.sessionId,
         });
+        // Only clear the live pointer when snapshotting the current session;
+        // snapshotting an unrelated/explicit sessionId must not clobber active work.
         if (currentSessionId === params.sessionId) {
           currentSessionId = null;
         }
