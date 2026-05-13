@@ -7,8 +7,9 @@
 
 - **AQL Rust binary (Phase 1)** — merged via PR #1. Read-only query surface (RECALL, SCAN, LOOKUP, LOAD, AGGREGATE, ORDER BY, WITH LINKS, FOLLOW LINKS). Subcommands: `query`, `repl`, `mcp`. Crate at `engram-aql/`.
 - **Pi.dev extension (Phase 1)** — merged via PR #2. Four slash commands (`/remember`, `/recall`, `/memory`, `/forget`) and four LLM tools (`engram_remember`, `engram_recall`, `engram_memory_stats`, `engram_forget`). Lives at `integrations/pi/`.
-- **Main suite:** 336 tests across 19 files, all green. Format + lint clean.
-- **Pi extension suite:** 28 tests in `integrations/pi/` (independent dep closure, run via `cd integrations/pi && npx vitest run`).
+- **Pi.dev extension — working-memory bridge** — shipped on this branch. Adds `/session` slash command, three LLM tools (`engram_session_resume`, `engram_session_update`, `engram_session_snapshot`), and a `before_agent_start` system-prompt addendum nudging the agent toward Engram. Spec: `docs/superpowers/specs/2026-05-13-engram-pi-session-bridge-design.md`.
+- **Main suite:** all green. Format + lint clean.
+- **Pi extension suite:** all green (run via `cd integrations/pi && npx vitest run`).
 
 ---
 
@@ -16,9 +17,6 @@
 
 - [ ] **Reflect/extract scheduling from Pi**
   Trigger `engram.processExtractions()` and `engram.reflect()` from Pi's `turn_end` or `session_shutdown` hooks. Open design questions: cadence (per-turn? every N turns? on idle?), Ollama-availability detection, what to do when Ollama is unreachable (silent skip vs warning).
-
-- [ ] **`engram_session` ↔ Pi session persistence**
-  Pi already persists sessions via `pi.appendEntry()`. Engram has the `working_memory` table. Map them without double-persistence — the right answer is probably "Engram owns long-term, Pi owns conversation flow; don't mirror state."
 
 - [ ] **Auto-retain conversation turns**
   Use `tool_call` / `message_end` events to auto-stash messages as `experience`-type chunks. Needs gating (min length, dedup against recent retains, exclude short replies and tool outputs) or the DB will fill with noise.
