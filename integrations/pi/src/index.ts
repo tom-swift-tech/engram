@@ -39,15 +39,24 @@ import {
   findToForget,
   forgetById,
   looksLikeChunkId,
+  resumeSession,
+  updateSession,
+  snapshotSession,
 } from './adapter.js';
 import {
   RememberParams,
   RecallParams,
   MemoryStatsParams,
   ForgetParams,
+  SessionResumeParams,
+  SessionUpdateParams,
+  SessionSnapshotParams,
   type RememberToolParams,
   type RecallToolParams,
   type ForgetToolParams,
+  type SessionResumeToolParams,
+  type SessionUpdateToolParams,
+  type SessionSnapshotToolParams,
 } from './types.js';
 
 const DEFAULT_DB_RELATIVE = '.engram/pi.db';
@@ -368,6 +377,35 @@ export default function engramPiExtension(pi: ExtensionAPI): void {
           },
         ],
         details: { chunkId: params.chunkId, forgotten: ok },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: 'engram_session_resume',
+    label: 'Session Resume',
+    description:
+      'Resume or create a working memory session for the current task. Call early when starting substantive multi-turn work. Returns the session id, goal, prior progress (if any), and related long-term context. Pass the session id to engram_session_update / engram_session_snapshot.',
+    parameters: SessionResumeParams,
+    async execute(_id, params: SessionResumeToolParams) {
+      const engram = await getEngram();
+      const result = await resumeSession(engram, {
+        message: params.message,
+        threshold: params.threshold,
+        maxActive: params.maxActive,
+      });
+      currentSessionId = result.sessionId;
+      const summary = [
+        `${result.reason === 'new' ? 'New' : 'Resumed'} session ${result.sessionId}`,
+        `Goal: ${result.goal}`,
+        result.progress ? `Progress: ${result.progress}` : null,
+        result.relatedContext ? `\n${result.relatedContext}` : null,
+      ]
+        .filter(Boolean)
+        .join('\n');
+      return {
+        content: [{ type: 'text', text: summary }],
+        details: result,
       };
     },
   });
