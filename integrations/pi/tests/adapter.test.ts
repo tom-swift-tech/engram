@@ -19,6 +19,7 @@ import {
   looksLikeChunkId,
   resumeSession,
   updateSession,
+  snapshotSession,
 } from '../src/adapter.js';
 
 // Deterministic embedder (no Ollama, no model download).
@@ -288,6 +289,43 @@ describe('Pi adapter', () => {
           progress: 'this should fail',
         }),
       ).rejects.toThrow(/not found|expired/i);
+    });
+  });
+
+  describe('snapshotSession', () => {
+    it('returns the new long-term chunkId and expires the session', async () => {
+      const resumed = await resumeSession(engram, {
+        message: 'tau production rollout planning',
+        threshold: 0.999,
+      });
+      await updateSession(engram, {
+        sessionId: resumed.sessionId,
+        progress: 'Drafted the rollback plan; coordinated with SRE',
+      });
+
+      const result = await snapshotSession(engram, {
+        sessionId: resumed.sessionId,
+      });
+      expect(result.sessionId).toBe(resumed.sessionId);
+      expect(result.chunkId).toMatch(/^chk-/);
+
+      // Session no longer active
+      const active = engram.listWorkingSessions();
+      expect(active.find((s) => s.id === resumed.sessionId)).toBeUndefined();
+
+      // Re-resume on the same topic creates a NEW session
+      const reresumed = await resumeSession(engram, {
+        message: 'tau production rollout planning',
+        threshold: 0.999,
+      });
+      expect(reresumed.sessionId).not.toBe(resumed.sessionId);
+      expect(reresumed.reason).toBe('new');
+    });
+
+    it('throws when the sessionId is unknown', async () => {
+      await expect(
+        snapshotSession(engram, { sessionId: 'wm-does-not-exist' }),
+      ).rejects.toThrow();
     });
   });
 });
