@@ -10,7 +10,7 @@
 Pi coding agent
     │
     └── extension: engram-pi  (in-process, jiti-loaded TypeScript)
-        ├── slash commands  (/remember /recall /memory /forget)
+        ├── slash commands  (/remember /recall /memory /forget /session)
         ├── LLM tools       (engram_remember, engram_recall, …)
         ├── lifecycle hooks (session_start opens DB, session_shutdown closes)
         │
@@ -106,7 +106,7 @@ The LLM sees seven tools every turn:
 | `engram_memory_stats` | Report counts | (none) |
 | `engram_forget` | Soft-delete by chunk ID | `chunkId` (must match `^chk-`) |
 | `engram_session_resume` | Resume or create a working memory session for the current task | `message` |
-| `engram_session_update` | Update progress on an active session | `sessionId`, `progress` |
+| `engram_session_update` | Update progress (optional) on an active session | `sessionId` |
 | `engram_session_snapshot` | Snapshot a completed session to long-term memory and end it | `sessionId` |
 
 The schema rejects free-form forget queries from the LLM — the model must first `engram_recall` to find a real chunk ID before it can forget.
