@@ -320,6 +320,10 @@ describe('Pi adapter', () => {
       });
       expect(reresumed.sessionId).not.toBe(resumed.sessionId);
       expect(reresumed.reason).toBe('new');
+
+      // Headline value prop: the snapshotted progress surfaces in
+      // relatedContext on a re-resume, so the agent can pick up the thread.
+      expect(reresumed.relatedContext).toContain('rollback plan');
     });
 
     it('throws when the sessionId is unknown', async () => {

@@ -211,20 +211,25 @@ describe('engram-pi integration smoke (built dist + real Engram)', () => {
     // No-op; here for symmetry if we add module-level state later.
   });
 
-  it('registers four commands, four tools, and two lifecycle handlers', () => {
+  it('registers five commands, seven tools, and three lifecycle handlers', () => {
     expect([...captured.commands.keys()].sort()).toEqual([
       'forget',
       'memory',
       'recall',
       'remember',
+      'session',
     ]);
     expect([...captured.tools.keys()].sort()).toEqual([
       'engram_forget',
       'engram_memory_stats',
       'engram_recall',
       'engram_remember',
+      'engram_session_resume',
+      'engram_session_snapshot',
+      'engram_session_update',
     ]);
     expect([...captured.handlers.keys()].sort()).toEqual([
+      'before_agent_start',
       'session_shutdown',
       'session_start',
     ]);
