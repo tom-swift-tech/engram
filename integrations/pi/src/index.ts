@@ -23,6 +23,7 @@
 //   engram_forget          (requires explicit chunkId — no agent-driven query deletes)
 //   engram_session_resume
 //   engram_session_update
+//   engram_session_snapshot
 // =============================================================================
 
 import { mkdir } from 'node:fs/promises';
@@ -442,6 +443,41 @@ export default function engramPiExtension(pi: ExtensionAPI): void {
         const msg = err instanceof Error ? err.message : String(err);
         return {
           content: [{ type: 'text', text: `Update failed: ${msg}` }],
+          isError: true,
+          details: { sessionId: params.sessionId, error: msg },
+        };
+      }
+    },
+  });
+
+  pi.registerTool<typeof SessionSnapshotParams, unknown>({
+    name: 'engram_session_snapshot',
+    label: 'Session Snapshot',
+    description:
+      'Snapshot a completed working memory session to long-term memory and end it. The session goal + progress are retained as a chunk; the session is then expired. Use when the agent considers a piece of work complete.',
+    parameters: SessionSnapshotParams,
+    async execute(_id, params: SessionSnapshotToolParams) {
+      const engram = await getEngram();
+      try {
+        const result = await snapshotSession(engram, {
+          sessionId: params.sessionId,
+        });
+        if (currentSessionId === params.sessionId) {
+          currentSessionId = null;
+        }
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Snapshotted ${result.sessionId} → ${result.chunkId}`,
+            },
+          ],
+          details: result,
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: 'text', text: `Snapshot failed: ${msg}` }],
           isError: true,
           details: { sessionId: params.sessionId, error: msg },
         };
