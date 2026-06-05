@@ -10,7 +10,7 @@ export default defineConfig({
     // local symlink). Excluded so the root suite stays independent of
     // optional install steps. tools/openclaw-import is intentionally kept
     // in the root globbing — it has no extra deps and contributes 67 tests
-    // to the headline 308 count.
+    // to the headline 357 count.
     exclude: ['**/node_modules/**', '**/dist/**', 'integrations/**'],
     // Auto-cleanup after each test
     restoreMocks: true,

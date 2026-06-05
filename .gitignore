@@ -18,6 +18,11 @@ DECK.md
 *.sqlite-wal
 *.sqlite-shm
 
+# Stray test DB artifacts (tests should use tmp paths; this guards accidents)
+*.db
+*.db-wal
+*.db-shm
+
 # Environment
 .env
 .env.*

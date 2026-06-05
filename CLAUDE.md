@@ -148,8 +148,10 @@ engram/
 │   ├── local-embedder.ts        ← in-process embeddings via @xenova/transformers
 │   ├── working-memory-types.ts  ← types for working memory session management
 │   ├── mcp-tools.ts             ← MCP tool definitions (8 tools: retain/recall/reflect/extract/forget/supersede/session/queue_stats)
-│   └── mcp-server.ts            ← standalone MCP stdio server (engram-mcp CLI)
-├── tests/                        ← 308 tests across 16 suites
+│   ├── mcp-server.ts            ← standalone MCP stdio server (engram-mcp bin)
+│   ├── cli.ts                   ← `engram` CLI: one subcommand per MCP tool, --json contract for Pi (engram bin)
+│   └── cli-args.ts              ← CLI argv parser + Engram.open option-builder + shared validation/clamp helpers
+├── tests/                        ← 16 suites (357 tests repo-wide via npm test; +67 from tools/openclaw-import)
 │   ├── helpers.ts
 │   ├── retain.test.ts
 │   ├── retain-gate.test.ts
@@ -162,7 +164,8 @@ engram/
 │   ├── working-memory.test.ts
 │   ├── local-embedder.test.ts
 │   ├── agent-integration.test.ts
-│   └── mcp-server.test.ts
+│   ├── mcp-server.test.ts
+│   └── cli.test.ts               ← engram CLI: per-subcommand happy path, --json contract, stdin, exit codes (21 tests)
 ├── docs/
 │   ├── OPENCLAW-INTEGRATION.md   ← OpenClaw memory plugin setup guide
 │   └── PI-INTEGRATION.md         ← Pi.dev (pi-mono) extension setup guide
@@ -177,7 +180,8 @@ engram/
 │       └── tests/                ← 16 tests (adapter against real Engram + smoke registrations)
 ├── skills/
 │   ├── engram.md                  ← portable agent skill (covers all 8 MCP tools)
-│   └── engram-session.md          ← working memory session skill
+│   ├── engram-session.md          ← working memory session skill
+│   └── cli-memory/SKILL.md        ← Pi-facing `engram` CLI contract (per-command --json shapes, exit codes, when to recall/retain/supersede/session)
 ├── tools/
 │   └── openclaw-import/           ← CLI to import OpenClaw memory files into .engram
 │       ├── README.md
@@ -322,6 +326,8 @@ git init && git branch -M main
 - [x] **Shared engram**: Naming convention. Multiple agents call `Engram.open('./shared.engram')`. `Engram.open()` sets `journal_mode = WAL`, `synchronous = NORMAL`, and `busy_timeout = 5000` so concurrent readers never block each other or the writer, and a held write lock resolves within the timeout window. Concurrent `retain()` calls serialize at the writer (SQLite allows one writer at a time), but reads proceed fully in parallel. No separate API needed. The same pragma set enables cross-process sharing with the `engram-aql` Rust binary.
 
 - [x] **MCP tool surface**: 8 tools exposed in `mcp-tools.ts` — `engram_retain`, `engram_recall`, `engram_reflect`, `engram_process_extractions`, `engram_forget`, `engram_supersede`, `engram_session`, `engram_queue_stats`. Agents pick what they need; `forget`/`supersede` enable correction loops, `session` carries working-memory context across turns, `queue_stats` reports extraction-queue health for ops/diagnostics.
+
+- [x] **CLI transport** (`engram` bin, `src/cli.ts`): a third transport over the same `Engram` core, structurally a sibling of `mcp-server.ts` — parse argv → `Engram.open()` → dispatch to the SAME methods → print. One kebab-cased subcommand per MCP tool (`retain`/`recall`/`reflect`/`process-extractions`/`forget`/`supersede`/`session`/`queue-stats`) so `skills/cli-memory/SKILL.md` maps 1:1 to the tool surface. Built for use as a Pi coding-agent skill: `--json` on every command emits the raw method return to stdout and nothing else (the stable Pi integration contract); diagnostics go to stderr; the primary text arg is read from stdin when omitted (pipe context in); exit codes are 0 success / 2 not-found (`forget`/`supersede` missing chunk) / 1 error. DB path resolves from `--db <path>` then `ENGRAM_DB`. No retain/recall/reflect logic is duplicated — `src/cli-args.ts` holds the argv parser, the `Engram.open` option-builder (same flags as `engram-mcp`), and the validation/clamp helpers (a canonical copy mirroring the private ones in the frozen `mcp-tools.ts`).
 
 - [x] **Reflect schedule**: Library default is manual (call `engram.reflect()` or the CLI). `ReflectScheduler` class ships for timer-based use. Recommendation for valor-engine: `ReflectScheduler` with a 6-hour default, configurable per operative.
 

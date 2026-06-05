@@ -16,7 +16,8 @@
     }
   },
   "bin": {
-    "engram-mcp": "./dist/mcp-server.js"
+    "engram-mcp": "./dist/mcp-server.js",
+    "engram": "./dist/cli.js"
   },
   "files": [
     "dist"

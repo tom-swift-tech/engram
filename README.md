@@ -434,6 +434,74 @@ npx engram-mcp ./agent.engram --anthropic-api-key sk-ant-... --anthropic-model c
 | `engram_session` | Infer or resume a working memory session |
 | `engram_queue_stats` | Extraction queue depth and processing metrics |
 
+## CLI
+
+A third transport over the same Engram core — one subcommand per MCP tool,
+kebab-cased. Ideal as a coding-agent skill (e.g. Pi): the agent shells out, pipes
+context in on stdin, and parses `--json` on stdout. Ships as the `engram` bin.
+
+```bash
+npm install -g engram      # or: npx engram <command>
+```
+
+Point it at a database with `--db <path>` on each call, or set `ENGRAM_DB` once
+(`--db` takes precedence; if neither is set the command exits 1):
+
+```bash
+export ENGRAM_DB=./agent.engram
+```
+
+Every command accepts `--json`, which emits the raw method return as JSON to
+**stdout and nothing else** (diagnostics go to stderr). Without it you get
+human-readable output. The same generation/embedding flags as `engram-mcp` are
+accepted: `--ollama-url`, `--use-ollama-embeddings`, `--reflect-model`,
+`--generation-endpoint`/`--generation-model`/`--generation-api-key`,
+`--anthropic-api-key`/`--anthropic-model`.
+
+**Exit codes:** `0` success · `2` not-found (`forget`/`supersede` on a missing
+chunk) · `1` error (bad/missing argument, no DB path, operation failure).
+
+The eight commands:
+
+```bash
+# Store a fact
+engram retain "Tom prefers Pulumi over Terraform" \
+  --memory-type world --source-type user_stated --trust-score 0.9 --json
+
+# Search (keywords/proper nouns beat questions; temporal phrases auto-parse)
+engram recall "Terraform IaC provider" --top-k 5 --json
+engram recall "decisions last week" --strategies semantic,temporal --json
+
+# Infer/resume a working-memory session (once per incoming message)
+engram session "Help me plan the deployment" --json
+
+# Correct an outdated fact (old chunk soft-deleted + linked to the new one)
+engram supersede chk-abc123 "Tom switched to Kubernetes" --json
+
+# Soft-delete a chunk
+engram forget chk-abc123 --json
+
+# Background maintenance (need an LLM)
+engram reflect --json
+engram process-extractions --batch-size 10 --json
+
+# Queue health
+engram queue-stats --json
+```
+
+The primary text argument for `retain`, `recall`, `session`, and the `newText`
+of `supersede` is read from **stdin** when the positional is omitted, so an agent
+can pipe context straight in:
+
+```bash
+echo "long pasted context to remember" | engram retain --db ./agent.engram --json
+cat error.log | engram recall --json
+```
+
+The `--json` shape of each command is its method's return value verbatim — see
+`skills/cli-memory/SKILL.md` for the per-command schemas and an agent-facing
+decision guide (when to recall vs. retain vs. supersede vs. session).
+
 ## engram-aql — Native Rust Query Binary (Optional)
 
 For declarative AQL (Agent Query Language) queries over your `.engram` file,
@@ -507,6 +575,7 @@ Portable skill files for agents using Engram via mcporter:
 
 - **[skills/engram.md](skills/engram.md)** — Complete tool reference with all 8 MCP tools, usage patterns, and common mistakes
 - **[skills/engram-session.md](skills/engram-session.md)** — Working memory session lifecycle and tuning guide
+- **[skills/cli-memory/SKILL.md](skills/cli-memory/SKILL.md)** — `engram` CLI contract for coding agents (e.g. Pi): per-command `--json` schemas, exit codes, and when to recall vs. retain vs. supersede vs. session
 
 ## Integration Patterns
 

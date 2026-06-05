@@ -3,11 +3,12 @@
 > Phase 1 of both harness adapters shipped. This file tracks what's deferred.
 > Historical plans (the Pi adapter Phase 1 plan, the original library build plan) live in git history.
 
-## Status as of 2026-05-11
+## Status as of 2026-06-05
 
 - **AQL Rust binary (Phase 1)** — merged via PR #1. Read-only query surface (RECALL, SCAN, LOOKUP, LOAD, AGGREGATE, ORDER BY, WITH LINKS, FOLLOW LINKS). Subcommands: `query`, `repl`, `mcp`. Crate at `engram-aql/`.
 - **Pi.dev extension (Phase 1)** — merged via PR #2. Four slash commands (`/remember`, `/recall`, `/memory`, `/forget`) and four LLM tools (`engram_remember`, `engram_recall`, `engram_memory_stats`, `engram_forget`). Lives at `integrations/pi/`.
-- **Main suite:** 336 tests across 19 files, all green. Format + lint clean.
+- **`engram` CLI transport (2026-06-05)** — third transport over the `Engram` core (`src/cli.ts` + `src/cli-args.ts`, `engram` bin). One kebab-cased subcommand per MCP tool; `--json` on every command emits the raw method return to stdout (stable Pi contract), diagnostics to stderr, primary text arg read from stdin when omitted, exit codes 0/2/1. Pi-facing skill at `skills/cli-memory/SKILL.md`; README has install + 8-command reference. Frozen core/MCP files untouched.
+- **Main suite:** 357 tests across 20 files. 334 pass without the Rust toolchain; the 2 AQL cross-process suites (`aql-equivalence`, `aql-e2e-process`, 23 tests) need `cargo` and pass when it's present. Format + lint clean.
 - **Pi extension suite:** 28 tests in `integrations/pi/` (independent dep closure, run via `cd integrations/pi && npx vitest run`).
 
 ---
@@ -28,6 +29,9 @@
 
 - [ ] **Publish `engram-pi` as `pi install`-able**
   Phase 1 ships in-repo; consumers symlink or use `-e`. To enable `pi install <source>`, decide: npm publish under `@swift-innovate`? git-installable from this repo? Versioning policy needs settling first.
+
+- [ ] **Validate the `engram` CLI skill against a live Pi agent**
+  `skills/cli-memory/SKILL.md` + the `engram` bin shipped 2026-06-05 with unit-tested `--json` contracts, but the end-to-end loop (Pi agent shells out, pipes context on stdin, branches on exit code) hasn't been run against a real agent yet. Confirm the documented JSON shapes survive a round-trip and the recall→answer→retain cadence is what the SKILL prescribes. Also worth measuring: the CLI is a candidate to sidestep the ~10s mcporter cold-start noted in the OpenClaw integration — a per-call `engram recall` may or may not beat it (cold Node + embedder init per invocation); benchmark before recommending it as the OpenClaw path.
 
 ## Phase 2 — AQL Rust binary
 
