@@ -24,6 +24,7 @@
   ],
   "scripts": {
     "build": "tsc && node -e \"require('fs').copyFileSync('src/schema.sql', 'dist/schema.sql')\"",
+    "prepare": "npm run build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
