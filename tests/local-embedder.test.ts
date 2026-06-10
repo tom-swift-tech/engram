@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ---------------------------------------------------------------------------
-// Mock @xenova/transformers before importing LocalEmbedder.
+// Mock @huggingface/transformers before importing LocalEmbedder.
 // vi.mock is hoisted, so we use vi.hoisted() to share the mock fn.
 // ---------------------------------------------------------------------------
 
@@ -9,7 +9,7 @@ const { mockPipelineFn } = vi.hoisted(() => {
   return { mockPipelineFn: vi.fn() };
 });
 
-vi.mock('@xenova/transformers', () => {
+vi.mock('@huggingface/transformers', () => {
   return { pipeline: mockPipelineFn };
 });
 
@@ -52,7 +52,19 @@ describe('LocalEmbedder', () => {
     expect(mockPipelineFn).toHaveBeenCalledWith(
       'feature-extraction',
       'Xenova/nomic-embed-text-v1.5',
-      { quantized: true },
+      // v3 dtype, mapped from the embedder's quantized option (q8 = quantized)
+      { dtype: 'q8' },
+    );
+  });
+
+  it('defaults to the public nomic-ai repo (Xenova mirror is gated upstream)', async () => {
+    const embedder = new LocalEmbedder();
+    expect(embedder.dimensions).toBe(768);
+    await embedder.init();
+    expect(mockPipelineFn).toHaveBeenCalledWith(
+      'feature-extraction',
+      'nomic-ai/nomic-embed-text-v1.5',
+      { dtype: 'q8' },
     );
   });
 

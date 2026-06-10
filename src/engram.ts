@@ -140,7 +140,7 @@ export interface EngramOptions {
   };
   /** Ollama endpoint (default: http://localhost:11434) */
   ollamaUrl?: string;
-  /** Embedding model (default: 'Xenova/nomic-embed-text-v1.5' local, 'nomic-embed-text' Ollama) */
+  /** Embedding model (default: 'nomic-ai/nomic-embed-text-v1.5' local, 'nomic-embed-text' Ollama) */
   embedModel?: string;
   /** Embedding dimensions (default: 768 for nomic-embed-text) */
   embedDimensions?: number;
@@ -351,7 +351,7 @@ export class Engram {
           embedDimensions ?? 768,
         );
       } else {
-        const localModel = embedModel ?? 'Xenova/nomic-embed-text-v1.5';
+        const localModel = embedModel ?? 'nomic-ai/nomic-embed-text-v1.5';
         const local = new LocalEmbedder(localModel);
         await local.init();
         embedder = local;
