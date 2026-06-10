@@ -4,8 +4,19 @@
 // Replaces the Ollama HTTP embedding provider with a fully local,
 // in-process embedding pipeline. No server, no network, no Docker.
 //
-// Model downloads once to ~/.cache/xenova/ on first use.
-// Subsequent runs load from cache instantly.
+// Uses @huggingface/transformers (v3+, the maintained successor to the
+// deprecated @xenova/transformers — same library, new org; the rename also
+// drops the old onnxruntime-web → protobufjs@6 advisory chain).
+//
+// Default model is nomic-embed from the UPSTREAM nomic-ai repo: the old
+// Xenova/nomic-embed-text-v1.5 mirror went gated on the HF hub (401 without a
+// token), which silently broke first-run downloads for every fresh install.
+// The nomic-ai repo is public, ships the same ONNX weights (incl. quantized),
+// and produces identical 768-dim vectors — existing .engram files stay valid.
+//
+// Model downloads once to node_modules/@huggingface/transformers/.cache/ on
+// first use. Subsequent runs load from cache instantly. (A reinstall or the
+// package-name change empties that cache — first run after either re-downloads.)
 //
 // Supports query vs document prefixing for models that use it
 // (nomic-embed-text uses 'search_query:' / 'search_document:' prefixes).
@@ -27,8 +38,12 @@ async function getPipeline(
     // Store the promise *before* the first await so concurrent callers
     // share one in-flight initialization instead of racing.
     const initPromise = (async () => {
-      const { pipeline } = await import('@xenova/transformers');
-      return pipeline('feature-extraction', modelName, { quantized });
+      const { pipeline } = await import('@huggingface/transformers');
+      // v3 replaced v2's `quantized: boolean` with `dtype`: q8 is the v2
+      // quantized equivalent, fp32 the full-precision one.
+      return pipeline('feature-extraction', modelName, {
+        dtype: quantized ? 'q8' : 'fp32',
+      });
     })().catch((err: unknown) => {
       // Self-healing: evict failed initialization so the next call can retry
       // instead of permanently caching a rejected promise.
@@ -61,6 +76,14 @@ interface ModelInfo {
 }
 
 const MODEL_REGISTRY: Record<string, ModelInfo> = {
+  'nomic-ai/nomic-embed-text-v1.5': {
+    dimensions: 768,
+    usePrefixes: true,
+    queryPrefix: 'search_query: ',
+    documentPrefix: 'search_document: ',
+  },
+  // Legacy mirror of the entry above — now GATED on the HF hub (401 without a
+  // token). Kept for installs with a warm cache or configured HF credentials.
   'Xenova/nomic-embed-text-v1.5': {
     dimensions: 768,
     usePrefixes: true,
@@ -94,7 +117,7 @@ export class LocalEmbedder implements EmbeddingProvider {
   public readonly dimensions: number;
 
   constructor(
-    model: string = 'Xenova/nomic-embed-text-v1.5',
+    model: string = 'nomic-ai/nomic-embed-text-v1.5',
     options?: { quantized?: boolean; dimensions?: number },
   ) {
     this.modelName = model;
@@ -123,7 +146,8 @@ export class LocalEmbedder implements EmbeddingProvider {
   /**
    * Initialize the embedding pipeline.
    * Downloads the model on first use (~30MB for quantized nomic).
-   * Subsequent calls load from ~/.cache/xenova/ instantly.
+   * Subsequent calls load from the package cache
+   * (node_modules/@huggingface/transformers/.cache/) instantly.
    */
   async init(): Promise<void> {
     if (this.initialized) return;
