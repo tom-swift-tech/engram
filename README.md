@@ -237,6 +237,7 @@ const response = await agent.recall('What IaC tools does Tom use?', {
   contextBoost?: { pattern: string; multiplier: number },
   decayHalfLifeDays?: number,       // trust decay half-life (default: 180, 0 to disable)
   sourceTiers?: Record<string, number>, // source_type → tier overrides (see DEFAULT_SOURCE_TIERS)
+  memoryTypeRank?: Record<string, number>, // memory_type → within-tier rank overrides (see DEFAULT_MEMORY_TYPE_RANK)
   snippetChars?: number,            // max chars per result
   rrfK?: number,                    // RRF constant (default: 60)
 });
@@ -247,6 +248,8 @@ const response = await agent.recall('What IaC tools does Tom use?', {
 // response.totalCandidates
 // response.strategiesUsed
 ```
+
+**Result ordering.** `recall` returns results in **tier-major order, not pure relevance order**: sorted first by source tier (0 `user_stated`, 1 `inferred`/`agent_generated`, 2 `tool_result`/`external_doc`), then by memory-type rank within each tier (`world` > `observation` > `experience` > `opinion`), then by trust-weighted relevance within those. This enforces the trust-layer guarantee — external content cannot outrank user directives regardless of relevance or trust score. Integrators: `results[0]` is the best match in the highest-present tier, **not** necessarily the highest-relevance match overall; do not assume score-descending order across the full list (re-sort by `score` locally where you genuinely need relevance order). Tier mapping is configurable via `RecallOptions.sourceTiers`; memory-type ranking via `RecallOptions.memoryTypeRank` (defaults exported as `DEFAULT_SOURCE_TIERS` / `DEFAULT_MEMORY_TYPE_RANK`).
 
 ### `processExtractions(batchSize?)`
 

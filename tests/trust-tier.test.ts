@@ -121,6 +121,45 @@ describe('recall() — source-tier ranking floor', () => {
     expect(result.results[0].trustScore).toBe(0.9);
   });
 
+  it('orders by memory-type rank within a tier when trust-weighted scores are equal', async () => {
+    // Two tier-1 (inferred) chunks engineered to identical fused scores:
+    // each is rank 1 in exactly one strategy (keyword vs graph), same
+    // trust, decay disabled. The opinion is found by keyword, which runs
+    // first — so without the memory-type sort term the stable sort would
+    // leave opinion at position 0 and this test would fail.
+    const opinion = await retain(db, 'zorpcorp quarterly summary', embedder, {
+      memoryType: 'opinion',
+      sourceType: 'inferred',
+      trustScore: 0.7,
+    });
+    const observation = await retain(db, 'internal synthesis brief', embedder, {
+      memoryType: 'observation',
+      sourceType: 'inferred',
+      trustScore: 0.7,
+    });
+
+    // Link only the observation to the 'zorpcorp' entity so graph search
+    // finds it at rank 1 while keyword finds only the opinion at rank 1.
+    db.prepare(
+      `INSERT INTO entities (id, name, canonical_name, entity_type)
+       VALUES ('ent-zorp', 'Zorpcorp', 'zorpcorp', 'organization')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO chunk_entities (chunk_id, entity_id) VALUES (?, 'ent-zorp')`,
+    ).run(observation.chunkId);
+
+    const result = await recall(db, 'zorpcorp', embedder, {
+      strategies: ['keyword', 'graph'],
+      topK: 5,
+      decayHalfLifeDays: 0,
+    });
+
+    expect(result.results).toHaveLength(2);
+    expect(result.results[0].id).toBe(observation.chunkId);
+    expect(result.results[0].memoryType).toBe('observation');
+    expect(result.results[1].id).toBe(opinion.chunkId);
+  });
+
   it('honors sourceTiers overrides', async () => {
     await retain(
       db,

@@ -53,6 +53,7 @@ import {
   recall,
   formatForPrompt,
   DEFAULT_SOURCE_TIERS,
+  DEFAULT_MEMORY_TYPE_RANK,
   type RecallOptions,
   type RecallResponse,
   type RecallResult,
@@ -122,6 +123,7 @@ export {
   parseTemporalQuery,
   DEFAULT_OLLAMA_URL,
   DEFAULT_SOURCE_TIERS,
+  DEFAULT_MEMORY_TYPE_RANK,
 };
 export type { TemporalRange, ChunkOptions };
 

@@ -94,6 +94,23 @@ export const DEFAULT_SOURCE_TIERS: Record<string, number> = {
 /** Unknown source types rank in the least-privileged tier. */
 const UNKNOWN_SOURCE_TIER = 2;
 
+/**
+ * Memory-type → rank, the middle term of the lexicographic sort
+ * (tier, memoryTypeRank, score). It only discriminates WITHIN a source
+ * tier — provenance dominates memory type exactly as it dominates score.
+ * Opinion ranks lowest deliberately: this agrees with the 0.85
+ * opinion-confidence cap in formatForPrompt rather than fighting it.
+ */
+export const DEFAULT_MEMORY_TYPE_RANK: Record<string, number> = {
+  world: 0,
+  observation: 1,
+  experience: 2,
+  opinion: 3,
+};
+
+/** Unknown/missing memory types sort last within their tier. */
+const UNKNOWN_MEMORY_TYPE_RANK = 99;
+
 // =============================================================================
 // Types
 // =============================================================================
@@ -135,6 +152,11 @@ export interface RecallOptions {
    * DEFAULT_SOURCE_TIERS). Unknown source types fall to the lowest tier.
    */
   sourceTiers?: Record<string, number>;
+  /**
+   * Memory-type → rank overrides, merged over DEFAULT_MEMORY_TYPE_RANK.
+   * Orders results within a source tier; unknown types sort last.
+   */
+  memoryTypeRank?: Record<string, number>;
 }
 
 export interface RecallResult {
@@ -150,6 +172,12 @@ export interface RecallResult {
 }
 
 export interface RecallResponse {
+  /**
+   * Tier-major order, NOT pure relevance order: sorted by (source tier,
+   * memory-type rank, trust-weighted score). results[0] is the best match
+   * in the highest-present tier, not necessarily the highest-relevance
+   * match overall.
+   */
   results: RecallResult[];
   opinions: Array<{
     belief: string;
@@ -740,12 +768,17 @@ export async function recall(
     contextBoost,
     decayHalfLifeDays = 180,
     sourceTiers,
+    memoryTypeRank,
   } = options;
 
   const tiers = { ...DEFAULT_SOURCE_TIERS, ...sourceTiers };
   const tierOf = (sourceType: string): number =>
     tiers[sourceType] ?? UNKNOWN_SOURCE_TIER;
   const tierZeroTypes = Object.keys(tiers).filter((t) => tiers[t] === 0);
+
+  const memoryRanks = { ...DEFAULT_MEMORY_TYPE_RANK, ...memoryTypeRank };
+  const memoryRankOf = (memoryType: string): number =>
+    memoryRanks[memoryType] ?? UNKNOWN_MEMORY_TYPE_RANK;
 
   // Auto-derive temporal bounds from natural language when not explicitly provided
   const parsed = !after && !before ? parseTemporalQuery(query) : null;
@@ -845,16 +878,21 @@ export async function recall(
   const fused = reciprocalRankFusion(strategyResults, rrfK);
   applyWeighting(fused, { decayHalfLifeDays, sourceBoost, contextBoost });
 
-  // Sort lexicographically by (source tier, fused score) and take top K.
-  // The tier is a structural floor: no amount of trust or relevance lets a
-  // lower-tier chunk outrank a higher-tier one — trust weighting still
-  // orders results within a tier. Sorting the FULL fused set before
-  // truncation means tier-0 matches always survive the topK cut.
+  // Sort lexicographically by (source tier, memory-type rank, fused score)
+  // and take top K. The tier is a structural floor: no amount of trust or
+  // relevance lets a lower-tier chunk outrank a higher-tier one. Memory-type
+  // rank then orders within a tier (world > observation > experience >
+  // opinion by default), and trust-weighted score orders within those.
+  // Sorting the FULL fused set before truncation means tier-0 matches
+  // always survive the topK cut.
   const sorted = [...fused.values()]
     .sort((a, b) => {
       const tierDiff =
         tierOf(a.chunk.source_type) - tierOf(b.chunk.source_type);
       if (tierDiff !== 0) return tierDiff;
+      const typeDiff =
+        memoryRankOf(a.chunk.memory_type) - memoryRankOf(b.chunk.memory_type);
+      if (typeDiff !== 0) return typeDiff;
       return b.score - a.score;
     })
     .slice(0, topK);

@@ -142,8 +142,13 @@ export async function findToForget(
   engram: Engram,
   query: string,
 ): Promise<ForgetCandidate | null> {
-  const response = await engram.recall(query, { topK: 1 });
-  const top = response.results[0];
+  // recall returns tier-major order (source tier before relevance), which
+  // protects user directives in prompt contexts — but a forget lookup wants
+  // the single most RELEVANT match regardless of provenance. With topK: 1
+  // the tier-major cut would preferentially nominate user-stated directives
+  // for deletion. Over-fetch and re-sort by score locally instead.
+  const response = await engram.recall(query, { topK: 5 });
+  const top = [...response.results].sort((a, b) => b.score - a.score)[0];
   if (!top) return null;
   return {
     chunkId: top.id,
