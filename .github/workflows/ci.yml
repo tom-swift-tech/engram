@@ -10,6 +10,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Check AGENTS.md mirrors CLAUDE.md
+        run: |
+          # The two files are verbatim mirrors except the "you are here" marker
+          # lines in the file-structure tree. Strip those two lines and diff.
+          diff <(grep -vE '^├── (CLAUDE|AGENTS)\.md' CLAUDE.md) \
+               <(grep -vE '^├── (CLAUDE|AGENTS)\.md' AGENTS.md)
       - uses: actions/setup-node@v4
         with:
           node-version: 20
