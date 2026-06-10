@@ -68,7 +68,7 @@ The system mirrors how biological memory works:
 
 3. **Reconsolidation** (reflect) — Periodic review of accumulated traces produces higher-order understanding. Observations emerge from patterns. Beliefs form and update with confidence. Old observations get refined as new evidence arrives. This is the learning loop.
 
-4. **Retrieval** (recall) — Multi-pathway access to stored traces. Semantic similarity (pattern matching), keyword (direct access), graph traversal (associative recall), temporal (episodic memory). Results are fused via RRF and weighted by trace strength (trust score). When temporal bounds are detected (auto-parsed or explicit), ALL strategies filter by date — not just the temporal strategy. Queries are sanitized (punctuation stripped) before keyword/graph to prevent FTS5 syntax errors.
+4. **Retrieval** (recall) — Multi-pathway access to stored traces. Semantic similarity (pattern matching), keyword (direct access), graph traversal (associative recall), temporal (episodic memory). Results are fused via RRF, weighted by trace strength (trust score), then sorted lexicographically by source tier (see Trust Layer) so external content can never outrank user-stated directives. When temporal bounds are detected (auto-parsed or explicit), ALL strategies filter by date — not just the temporal strategy. Queries are sanitized (punctuation stripped) before keyword/graph to prevent FTS5 syntax errors.
 
 ## Key Design Decisions
 
@@ -76,7 +76,7 @@ The system mirrors how biological memory works:
 The #1 lesson from Hearthmind: never block writes on LLM calls. `retain()` embeds and stores in ~5ms. Entity extraction runs in a background queue via Ollama. The knowledge graph builds up over time without impacting agent responsiveness.
 
 ### Trust Layer (Unique to Engram)
-Neither Memvid nor Hindsight tracks provenance. Every chunk carries `source_type` (user_stated, inferred, external_doc, tool_result, agent_generated) and `trust_score` (0.0-1.0). The recall pipeline weights results by trust. Security rule: external docs and tool results can NEVER override core agent directives regardless of trust score.
+Neither Memvid nor Hindsight tracks provenance. Every chunk carries `source_type` (user_stated, inferred, external_doc, tool_result, agent_generated) and `trust_score` (0.0-1.0). The recall pipeline weights results by trust. Security rule: external docs and tool results can NEVER override core agent directives regardless of trust score. This is enforced structurally in recall: final ranking is a lexicographic (source tier, trust-weighted score) sort — tier 0 `user_stated`, tier 1 `inferred`/`agent_generated`, tier 2 `tool_result`/`external_doc` — so no trust score or relevance lets a lower tier outrank a higher one, trust weighting orders results within a tier, and a truncation reserve re-fetches tier-0 matches when volume fills a strategy's candidate window (tiers tunable via `RecallOptions.sourceTiers`; defaults in `DEFAULT_SOURCE_TIERS`). At the ingest layer, extraction and reflection prompts delimit memory content inside labeled `untrusted_data` blocks and clamp `disposition` config to validated numbers — an injection mitigation, not a guarantee.
 
 ### SQLite Over Postgres
 Hindsight uses embedded Postgres. Engram uses SQLite because:
@@ -152,11 +152,12 @@ engram/
 │   ├── mcp-server.ts            ← standalone MCP stdio server (engram-mcp bin)
 │   ├── cli.ts                   ← `engram` CLI: one subcommand per MCP tool, --json contract for Pi (engram bin)
 │   └── cli-args.ts              ← CLI argv parser + Engram.open option-builder + shared validation/clamp helpers
-├── tests/                        ← 16 suites (357 tests repo-wide via npm test; +67 from tools/openclaw-import)
+├── tests/                        ← 17 suites (368 tests repo-wide via npm test; +67 from tools/openclaw-import)
 │   ├── helpers.ts
 │   ├── retain.test.ts
 │   ├── retain-gate.test.ts
 │   ├── recall.test.ts
+│   ├── trust-tier.test.ts        ← source-tier ranking floor + prompt-injection mitigations
 │   ├── reflect.test.ts
 │   ├── extract-cpu.test.ts
 │   ├── temporal-parser.test.ts
