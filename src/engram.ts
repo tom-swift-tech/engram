@@ -52,6 +52,7 @@ import {
 import {
   recall,
   formatForPrompt,
+  DEFAULT_SOURCE_TIERS,
   type RecallOptions,
   type RecallResponse,
   type RecallResult,
@@ -120,6 +121,7 @@ export {
   AnthropicGeneration,
   parseTemporalQuery,
   DEFAULT_OLLAMA_URL,
+  DEFAULT_SOURCE_TIERS,
 };
 export type { TemporalRange, ChunkOptions };
 

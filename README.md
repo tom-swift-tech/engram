@@ -90,7 +90,7 @@ Engram's pipeline mirrors how biological memory actually works:
 
 3. **Reconsolidation** (`reflect`) — Periodic review of accumulated traces produces higher-order understanding. Observations emerge from patterns. Beliefs form and update with confidence. Old observations get refined as new evidence arrives.
 
-4. **Retrieval** (`recall`) — Multi-pathway access to stored traces. Semantic similarity (pattern matching), keyword (direct access), graph traversal (associative recall), temporal (episodic memory). Results are fused via RRF and weighted by trust score with temporal decay.
+4. **Retrieval** (`recall`) — Multi-pathway access to stored traces. Semantic similarity (pattern matching), keyword (direct access), graph traversal (associative recall), temporal (episodic memory). Results are fused via RRF, weighted by trust score with temporal decay, and ranked by source tier so external content never outranks user-stated directives.
 
 ## Prerequisites
 
@@ -215,7 +215,7 @@ const results = await agent.retainBatch([
 
 ### `recall(query, options?)`
 
-Retrieve memories using four parallel strategies fused via Reciprocal Rank Fusion and weighted by trust score with temporal decay.
+Retrieve memories using four parallel strategies fused via Reciprocal Rank Fusion, weighted by trust score with temporal decay, then ranked lexicographically by source tier (user-stated content structurally outranks external content — see Design Decisions).
 
 Temporal expressions are auto-parsed from the query — `"last week"`, `"yesterday"`, `"March 15th"`, `"past 30 days"`, `"Q1 2026"` all activate the temporal strategy without explicit parameters.
 
@@ -236,6 +236,7 @@ const response = await agent.recall('What IaC tools does Tom use?', {
   sourceBoost?: { pattern: string; multiplier: number },
   contextBoost?: { pattern: string; multiplier: number },
   decayHalfLifeDays?: number,       // trust decay half-life (default: 180, 0 to disable)
+  sourceTiers?: Record<string, number>, // source_type → tier overrides (see DEFAULT_SOURCE_TIERS)
   snippetChars?: number,            // max chars per result
   rrfK?: number,                    // RRF constant (default: 60)
 });
@@ -665,7 +666,7 @@ try {
 
 **Fast write / slow extract.** `retain()` never blocks on an LLM call. This exists because of lessons learned from mem0 integration — Ollama connectivity issues and write latency were killing agent responsiveness.
 
-**Trust layer.** Every chunk carries `source_type` and `trust_score`. Recall weights results by trust. External documents and tool results cannot override core agent directives regardless of their trust score.
+**Trust layer.** Every chunk carries `source_type` and `trust_score`. Recall weights results by trust, then ranks lexicographically by source tier — tier 0 `user_stated`, tier 1 `inferred`/`agent_generated`, tier 2 `tool_result`/`external_doc` — so external documents and tool results structurally cannot outrank user-stated directives, no matter their trust score or relevance (tunable via `sourceTiers`). Extraction and reflection prompts delimit memory content as labeled untrusted data — a prompt-injection mitigation, not a guarantee.
 
 **SQLite over Postgres.** One file per agent — portable, git-committable, backup-friendly. sqlite-vec handles vector search; FTS5 handles keyword search. No Docker containers, no infrastructure dependencies.
 

@@ -69,6 +69,32 @@ const GRAPH_STOP_WORDS = new Set([
 ]);
 
 // =============================================================================
+// Source tiers
+// =============================================================================
+
+/**
+ * Source-type → ranking tier. Final recall ordering is lexicographic
+ * (tier ascending, fused score descending), so a lower-tier result can
+ * NEVER outrank a higher-tier one regardless of trust score or relevance.
+ * This is what enforces the trust-layer rule that external content
+ * (tool results, external docs) cannot override user-stated directives.
+ *
+ * Tier 0: user_stated — directives and facts from the user.
+ * Tier 1: inferred, agent_generated — the agent's own conclusions.
+ * Tier 2: tool_result, external_doc — content from outside the trust boundary.
+ */
+export const DEFAULT_SOURCE_TIERS: Record<string, number> = {
+  user_stated: 0,
+  inferred: 1,
+  agent_generated: 1,
+  tool_result: 2,
+  external_doc: 2,
+};
+
+/** Unknown source types rank in the least-privileged tier. */
+const UNKNOWN_SOURCE_TIER = 2;
+
+// =============================================================================
 // Types
 // =============================================================================
 
@@ -103,6 +129,12 @@ export interface RecallOptions {
   contextBoost?: { pattern: string; multiplier: number };
   /** Trust decay half-life in days (default: 180). Set to 0 to disable decay. */
   decayHalfLifeDays?: number;
+  /**
+   * Source-type → ranking tier overrides, merged over DEFAULT_SOURCE_TIERS.
+   * Lower tier = structurally higher rank (lexicographic sort, see
+   * DEFAULT_SOURCE_TIERS). Unknown source types fall to the lowest tier.
+   */
+  sourceTiers?: Record<string, number>;
 }
 
 export interface RecallResult {
@@ -155,6 +187,8 @@ interface QueryFilters {
   contextFilter?: string;
   after?: string;
   before?: string;
+  /** Restrict to these source types (used by the tier-0 truncation reserve) */
+  sourceTypeIn?: string[];
 }
 
 // =============================================================================
@@ -204,6 +238,21 @@ function buildTemporalFilter(
   return { conditions, params };
 }
 
+/**
+ * Build SQL fragment and params restricting results to specific source types.
+ * Used by the tier-0 truncation reserve in recall().
+ */
+function buildSourceTypeFilter(filters: QueryFilters): {
+  sql: string;
+  params: string[];
+} {
+  if (!filters.sourceTypeIn?.length) return { sql: '', params: [] };
+  return {
+    sql: `AND c.source_type IN (${inClausePlaceholders(filters.sourceTypeIn)})`,
+    params: filters.sourceTypeIn,
+  };
+}
+
 // =============================================================================
 // Retrieval Strategies
 // =============================================================================
@@ -230,6 +279,7 @@ function semanticSearch(
   const temporalSQL = temporal.conditions.length
     ? 'AND ' + temporal.conditions.join(' AND ')
     : '';
+  const sourceType = buildSourceTypeFilter(filters);
 
   try {
     const rows = db
@@ -245,6 +295,7 @@ function semanticSearch(
         AND (? IS NULL OR c.source LIKE '%' || ? || '%')
         AND (? IS NULL OR c.context LIKE '%' || ? || '%')
         ${typeFilter}
+        ${sourceType.sql}
         ${temporalSQL}
       ORDER BY distance ASC
       LIMIT ?
@@ -258,6 +309,7 @@ function semanticSearch(
         contextFilter ?? null,
         contextFilter ?? null,
         ...(memoryTypes ?? []),
+        ...sourceType.params,
         ...temporal.params,
         limit,
       ) as any[];
@@ -294,6 +346,7 @@ function keywordSearch(
   const temporalSQL = temporal.conditions.length
     ? 'AND ' + temporal.conditions.join(' AND ')
     : '';
+  const sourceType = buildSourceTypeFilter(filters);
 
   try {
     const rows = db
@@ -310,6 +363,7 @@ function keywordSearch(
         AND (? IS NULL OR c.source LIKE '%' || ? || '%')
         AND (? IS NULL OR c.context LIKE '%' || ? || '%')
         ${typeFilter}
+        ${sourceType.sql}
         ${temporalSQL}
       ORDER BY rank
       LIMIT ?
@@ -323,6 +377,7 @@ function keywordSearch(
         contextFilter ?? null,
         contextFilter ?? null,
         ...(memoryTypes ?? []),
+        ...sourceType.params,
         ...temporal.params,
         limit,
       ) as any[];
@@ -414,6 +469,7 @@ function graphSearch(
     const temporalSQL = temporal.conditions.length
       ? 'AND ' + temporal.conditions.join(' AND ')
       : '';
+    const sourceType = buildSourceTypeFilter(filters);
 
     const directChunks = db
       .prepare(
@@ -428,6 +484,7 @@ function graphSearch(
         AND (? IS NULL OR c.source LIKE '%' || ? || '%')
         AND (? IS NULL OR c.context LIKE '%' || ? || '%')
         ${typeFilter}
+        ${sourceType.sql}
         ${temporalSQL}
       ORDER BY c.trust_score DESC, c.created_at DESC
       LIMIT ?
@@ -441,6 +498,7 @@ function graphSearch(
         contextFilter ?? null,
         contextFilter ?? null,
         ...(memoryTypes ?? []),
+        ...sourceType.params,
         ...temporal.params,
         limit,
       ) as any[];
@@ -464,6 +522,7 @@ function graphSearch(
         AND (? IS NULL OR c.source LIKE '%' || ? || '%')
         AND (? IS NULL OR c.context LIKE '%' || ? || '%')
         ${typeFilter}
+        ${sourceType.sql}
         ${temporalSQL}
       ORDER BY r.confidence DESC, c.trust_score DESC
       LIMIT ?
@@ -479,6 +538,7 @@ function graphSearch(
         contextFilter ?? null,
         contextFilter ?? null,
         ...(memoryTypes ?? []),
+        ...sourceType.params,
         ...temporal.params,
         Math.max(0, limit - directChunks.length),
       ) as any[];
@@ -501,14 +561,7 @@ function graphSearch(
 function temporalSearch(
   db: Database.Database,
   limit: number,
-  filters: {
-    after?: string;
-    before?: string;
-    memoryTypes?: string[];
-    minTrust?: number;
-    sourceFilter?: string;
-    contextFilter?: string;
-  },
+  filters: QueryFilters,
 ): ScoredChunk[] {
   if (!filters.after && !filters.before) return [];
 
@@ -536,6 +589,12 @@ function temporalSearch(
       `c.memory_type IN (${inClausePlaceholders(filters.memoryTypes)})`,
     );
     params.push(...filters.memoryTypes);
+  }
+  if (filters.sourceTypeIn?.length) {
+    conditions.push(
+      `c.source_type IN (${inClausePlaceholders(filters.sourceTypeIn)})`,
+    );
+    params.push(...filters.sourceTypeIn);
   }
 
   conditions.push(`(? IS NULL OR c.source LIKE '%' || ? || '%')`);
@@ -680,7 +739,13 @@ export async function recall(
     sourceBoost,
     contextBoost,
     decayHalfLifeDays = 180,
+    sourceTiers,
   } = options;
+
+  const tiers = { ...DEFAULT_SOURCE_TIERS, ...sourceTiers };
+  const tierOf = (sourceType: string): number =>
+    tiers[sourceType] ?? UNKNOWN_SOURCE_TIER;
+  const tierZeroTypes = Object.keys(tiers).filter((t) => tiers[t] === 0);
 
   // Auto-derive temporal bounds from natural language when not explicitly provided
   const parsed = !after && !before ? parseTemporalQuery(query) : null;
@@ -699,6 +764,30 @@ export async function recall(
   const strategyResults: ScoredChunk[][] = [];
   const strategiesUsed: string[] = [];
 
+  // Truncation guard: when a strategy's candidate list is full (hit its SQL
+  // LIMIT), sheer volume of lower-tier content may have crowded tier-0 rows
+  // out of the candidate set before the tier floor could protect them.
+  // Re-run the strategy restricted to tier-0 source types and append any
+  // rows not already present. The appended rank only orders results within
+  // their tier — the lexicographic final sort guarantees tier-0 survival.
+  const withTierZeroReserve = (
+    run: (f: QueryFilters, limit: number) => ScoredChunk[],
+  ): ScoredChunk[] => {
+    const results = run(filters, perStrategyLimit);
+    if (tierZeroTypes.length === 0 || results.length < perStrategyLimit) {
+      return results;
+    }
+    const have = new Set(results.map((r) => r.id));
+    const reserve = run(
+      { ...filters, sourceTypeIn: tierZeroTypes },
+      topK,
+    ).filter((r) => !have.has(r.id));
+    return [
+      ...results,
+      ...reserve.map((r, i) => ({ ...r, rank: results.length + i + 1 })),
+    ];
+  };
+
   // Run strategies
   if (strategies.includes('semantic')) {
     const queryEmbedding =
@@ -709,11 +798,8 @@ export async function recall(
             }
           ).embedQuery(query)
         : await embedder.embed(query);
-    const results = semanticSearch(
-      db,
-      queryEmbedding,
-      perStrategyLimit,
-      filters,
+    const results = withTierZeroReserve((f, limit) =>
+      semanticSearch(db, queryEmbedding, limit, f),
     );
     if (results.length > 0) {
       strategyResults.push(results);
@@ -726,7 +812,9 @@ export async function recall(
   const sanitized = sanitizeQuery(query);
 
   if (strategies.includes('keyword') && sanitized) {
-    const results = keywordSearch(db, sanitized, perStrategyLimit, filters);
+    const results = withTierZeroReserve((f, limit) =>
+      keywordSearch(db, sanitized, limit, f),
+    );
     if (results.length > 0) {
       strategyResults.push(results);
       strategiesUsed.push('keyword');
@@ -734,7 +822,9 @@ export async function recall(
   }
 
   if (strategies.includes('graph') && sanitized) {
-    const results = graphSearch(db, sanitized, perStrategyLimit, filters);
+    const results = withTierZeroReserve((f, limit) =>
+      graphSearch(db, sanitized, limit, f),
+    );
     if (results.length > 0) {
       strategyResults.push(results);
       strategiesUsed.push('graph');
@@ -742,11 +832,9 @@ export async function recall(
   }
 
   if (strategies.includes('temporal') && (effectiveAfter || effectiveBefore)) {
-    const results = temporalSearch(db, perStrategyLimit, {
-      after: effectiveAfter,
-      before: effectiveBefore,
-      ...filters,
-    });
+    const results = withTierZeroReserve((f, limit) =>
+      temporalSearch(db, limit, f),
+    );
     if (results.length > 0) {
       strategyResults.push(results);
       strategiesUsed.push('temporal');
@@ -757,9 +845,18 @@ export async function recall(
   const fused = reciprocalRankFusion(strategyResults, rrfK);
   applyWeighting(fused, { decayHalfLifeDays, sourceBoost, contextBoost });
 
-  // Sort by fused score and take top K
+  // Sort lexicographically by (source tier, fused score) and take top K.
+  // The tier is a structural floor: no amount of trust or relevance lets a
+  // lower-tier chunk outrank a higher-tier one — trust weighting still
+  // orders results within a tier. Sorting the FULL fused set before
+  // truncation means tier-0 matches always survive the topK cut.
   const sorted = [...fused.values()]
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => {
+      const tierDiff =
+        tierOf(a.chunk.source_type) - tierOf(b.chunk.source_type);
+      if (tierDiff !== 0) return tierDiff;
+      return b.score - a.score;
+    })
     .slice(0, topK);
 
   const results: RecallResult[] = sorted.map((entry) => ({
