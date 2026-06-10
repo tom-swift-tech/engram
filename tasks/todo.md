@@ -3,13 +3,26 @@
 > Phase 1 of both harness adapters shipped. This file tracks what's deferred.
 > Historical plans (the Pi adapter Phase 1 plan, the original library build plan) live in git history.
 
-## Status as of 2026-06-05
+## Status as of 2026-06-06
 
 - **AQL Rust binary (Phase 1)** — merged via PR #1. Read-only query surface (RECALL, SCAN, LOOKUP, LOAD, AGGREGATE, ORDER BY, WITH LINKS, FOLLOW LINKS). Subcommands: `query`, `repl`, `mcp`. Crate at `engram-aql/`.
 - **Pi.dev extension (Phase 1)** — merged via PR #2. Four slash commands (`/remember`, `/recall`, `/memory`, `/forget`) and four LLM tools (`engram_remember`, `engram_recall`, `engram_memory_stats`, `engram_forget`). Lives at `integrations/pi/`.
 - **`engram` CLI transport (2026-06-05)** — third transport over the `Engram` core (`src/cli.ts` + `src/cli-args.ts`, `engram` bin). One kebab-cased subcommand per MCP tool; `--json` on every command emits the raw method return to stdout (stable Pi contract), diagnostics to stderr, primary text arg read from stdin when omitted, exit codes 0/2/1. Pi-facing skill at `skills/cli-memory/SKILL.md`; README has install + 8-command reference. Frozen core/MCP files untouched.
+- **Packaging (2026-06-06)** — `prepare` script (commit `0bf16af`) runs `npm run build` on install, so installing this repo by **git ref** now yields a working `dist/` with the `engram` + `engram-mcp` bins and the library. No npm publish yet (see the publish item below).
+- **Docs (2026-06-06)** — `AGENTS.md` added as a verbatim mirror of `CLAUDE.md` (cross-tool AGENTS standard). The two must be edited together; see the hygiene item below.
 - **Main suite:** 357 tests across 20 files. 334 pass without the Rust toolchain; the 2 AQL cross-process suites (`aql-equivalence`, `aql-e2e-process`, 23 tests) need `cargo` and pass when it's present. Format + lint clean.
 - **Pi extension suite:** 28 tests in `integrations/pi/` (independent dep closure, run via `cd integrations/pi && npx vitest run`).
+
+---
+
+## Next session — start here
+
+Phase 1 across all three transports is shipped and the CLI + packaging just landed, so the highest-leverage next step is **proving the CLI loop end-to-end**, then picking up Pi Phase 2:
+
+1. **Validate the `engram` CLI skill against a live Pi agent** (Pi adapter section below) — the contracts are unit-tested but the real shell-out/stdin/exit-code loop hasn't run against an agent yet. This closes the loop on the work just shipped.
+2. **Reflect/extract scheduling from Pi** — the next substantive Pi Phase 2 feature; everything downstream (auto-retain, session mapping) benefits from settling the cadence/Ollama-availability questions first.
+
+Environment note for whoever picks this up: the agent shells default to **Node 24** (no MSVC toolchain), but `better-sqlite3` here is the **Node 20** prebuild — run the suite with the fnm-managed Node 20 (`~/AppData/Roaming/fnm/node-versions/v20.20.2`). A `cargo` toolchain is needed for the 2 AQL cross-process suites.
 
 ---
 
@@ -28,7 +41,7 @@
   Use `ctx.ui.custom()` to render a live panel of recent chunks/opinions during a Pi session. Nice-to-have.
 
 - [ ] **Publish `engram-pi` as `pi install`-able**
-  Phase 1 ships in-repo; consumers symlink or use `-e`. To enable `pi install <source>`, decide: npm publish under `@swift-innovate`? git-installable from this repo? Versioning policy needs settling first.
+  Phase 1 ships in-repo; consumers symlink or use `-e`. The `prepare` script (added 2026-06-06) already makes the **git-ref install** path build a working `dist/`, so the dist-build half is solved. Remaining decision: npm publish under `@swift-innovate` vs. git-ref-only, plus a versioning policy. Note `engram-pi` resolves `engram` via `file:../..` today — a published flow needs that swapped to a real version range.
 
 - [ ] **Validate the `engram` CLI skill against a live Pi agent**
   `skills/cli-memory/SKILL.md` + the `engram` bin shipped 2026-06-05 with unit-tested `--json` contracts, but the end-to-end loop (Pi agent shells out, pipes context on stdin, branches on exit code) hasn't been run against a real agent yet. Confirm the documented JSON shapes survive a round-trip and the recall→answer→retain cadence is what the SKILL prescribes. Also worth measuring: the CLI is a candidate to sidestep the ~10s mcporter cold-start noted in the OpenClaw integration — a per-call `engram recall` may or may not beat it (cold Node + embedder init per invocation); benchmark before recommending it as the OpenClaw path.
@@ -42,7 +55,8 @@
 ## Process / hygiene
 
 - [ ] Confirm GitHub repo setting **"Automatically delete head branches"** is on so future PR merges auto-clean their branches (we did the manual cleanup for PR #1 and #2 on 2026-05-11).
-- [ ] CLAUDE.md's "Integration with valor-engine" example still says `Engram.open('./myAgent.engram')` — verify this still matches the consumer pattern in valor-engine when next touching that integration.
+- [ ] **Keep `AGENTS.md` ≡ `CLAUDE.md` in sync.** They're verbatim mirrors (only the "you are here" marker differs). Every architecture/file-structure/decision edit must land in both. `AGENTS.md` is currently **untracked** — commit it so the mirror is captured in history. Worth a one-line check (or a CI guard) that `diff` between them stays empty apart from that marker.
+- [ ] The "Integration with valor-engine" example in `CLAUDE.md`/`AGENTS.md` still says `Engram.open('./myAgent.engram')` — verify this still matches the consumer pattern in valor-engine when next touching that integration.
 
 ## Picked-up reference
 

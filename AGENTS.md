@@ -131,8 +131,8 @@ Agent memory files use the `.engram` extension (they're SQLite files):
 
 ```
 engram/
-├── CLAUDE.md           ← you are here (source of truth)
-├── AGENTS.md           ← verbatim mirror of CLAUDE.md for AGENTS-standard tools (keep in sync)
+├── CLAUDE.md           ← source of truth (keep in sync with this file)
+├── AGENTS.md           ← you are here (verbatim mirror of CLAUDE.md, AGENTS standard)
 ├── README.md           ← public-facing docs
 ├── package.json
 ├── tsconfig.json
