@@ -2,7 +2,7 @@
 
 [Pi](https://pi.dev) (the `pi-mono` coding agent by [@earendil-works](https://github.com/earendil-works/pi)) is a TypeScript coding agent CLI with a first-class extension system. This guide covers installing Engram as a Pi extension so you get persistent semantic memory across Pi sessions.
 
-**Status:** Phase 1 + working-memory bridge + background consolidation. Slash commands and LLM tools for `remember / recall / memory / forget / session` are implemented and tested; LLM-callable `engram_session_resume / _update / _snapshot` tools plus a `before_agent_start` system-prompt addendum land Phase 2's session bridge; turn-based extraction/reflection scheduling runs automatically off `turn_end` / `session_shutdown`. Auto-retain on `tool_call` / `message_end` remains deferred.
+**Status:** Phase 1 + working-memory bridge + background consolidation + auto-retain. Slash commands and LLM tools for `remember / recall / memory / forget / session` are implemented and tested; LLM-callable `engram_session_resume / _update / _snapshot` tools plus a `before_agent_start` system-prompt addendum land Phase 2's session bridge; turn-based extraction/reflection scheduling runs automatically off `turn_end` / `session_shutdown`; conversation messages are auto-retained off `message_end`. Remaining Phase 2: a memory-inspector UI widget and `pi install`-able packaging.
 
 ## Architecture
 
@@ -12,7 +12,7 @@ Pi coding agent
     └── extension: engram-pi  (in-process, jiti-loaded TypeScript)
         ├── slash commands  (/remember /recall /memory /forget /session)
         ├── LLM tools       (engram_remember, engram_recall, …)
-        ├── lifecycle hooks (session_start opens DB, turn_end consolidates, session_shutdown flushes + closes)
+        ├── lifecycle hooks (session_start opens DB, message_end auto-retains, turn_end consolidates, session_shutdown flushes + closes)
         │
         └── Engram (in-process import — no subprocess, no MCP)
             ├── retain (~5ms, local Transformers.js embeddings)
@@ -131,6 +131,36 @@ Cadence is tunable via environment variables (0 disables that step):
 | `ENGRAM_PI_REFLECT_EVERY_TURNS` | `12` | Turns between reflection passes |
 | `ENGRAM_PI_EXTRACT_BATCH` | `10` | Chunks drained per extraction pass |
 
+## Auto-retain (automatic, on by default)
+
+The extension captures completed conversation messages into memory as `experience` chunks off Pi's `message_end` hook — **no agent action required**. It's **on by default**; set `ENGRAM_PI_AUTO_RETAIN=0` to turn it off.
+
+What's captured, and with what provenance:
+
+| Message role | Stored as | Trust |
+|--------------|-----------|-------|
+| user | `experience` / `user_stated` | 0.7 |
+| assistant | `experience` / `agent_generated` | 0.5 |
+| tool / bash output | `experience` / `tool_result` | 0.4 |
+
+Tool output lands in the **lowest trust tier** (`tool_result`), so even high volumes of captured output can never outrank a user-stated directive at recall — the trust layer enforces this structurally.
+
+Gating keeps the DB sane:
+
+- Skips empty/whitespace messages, user `/command` invocations, and internal roles (compaction/branch summaries).
+- Skips messages below `minChars` and **truncates** anything over `maxChars` (so a giant file read or command dump can't bloat the store).
+- Exact/near-duplicate messages collapse via Engram's normalized `text_hash` dedup — re-stating the same thing doesn't create new chunks.
+
+Capture runs **fire-and-forget** (retain embeds in-process in ~ms, no LLM) and never blocks a turn; a message that fails gating never even opens the DB.
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `ENGRAM_PI_AUTO_RETAIN` | on | Set to `0`/`false`/`off` to disable auto-retain |
+| `ENGRAM_PI_AUTO_RETAIN_MIN_CHARS` | `8` | Skip messages shorter than this |
+| `ENGRAM_PI_AUTO_RETAIN_MAX_CHARS` | `4000` | Truncate captured text to this length |
+
+Combined with background consolidation, captured messages flow through the pipeline automatically: retain → extraction queue → entity graph → reflection.
+
 ## Database location and Git
 
 The DB lives at `<pi-cwd>/.engram/pi.db`. Add to `.gitignore`:
@@ -166,6 +196,5 @@ Both adapters target the same `.engram` SQLite file format; you could in princip
 
 Tracked in `tasks/todo.md`:
 
-- Optional auto-retain of conversation turns as `experience`-type chunks (with gating to avoid noise)
 - Custom UI components via Pi's `ctx.ui.custom()` (e.g., a memory inspector widget)
 - Publishing as `pi install`-able package
