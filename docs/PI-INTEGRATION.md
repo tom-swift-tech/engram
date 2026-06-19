@@ -2,7 +2,7 @@
 
 [Pi](https://pi.dev) (the `pi-mono` coding agent by [@earendil-works](https://github.com/earendil-works/pi)) is a TypeScript coding agent CLI with a first-class extension system. This guide covers installing Engram as a Pi extension so you get persistent semantic memory across Pi sessions.
 
-**Status:** Phase 1 + working-memory bridge. Slash commands and LLM tools for `remember / recall / memory / forget / session` are implemented and tested; LLM-callable `engram_session_resume / _update / _snapshot` tools plus a `before_agent_start` system-prompt addendum land Phase 2's session bridge. Reflection scheduling and auto-retain on `tool_call` / `message_end` remain deferred.
+**Status:** Phase 1 + working-memory bridge + background consolidation. Slash commands and LLM tools for `remember / recall / memory / forget / session` are implemented and tested; LLM-callable `engram_session_resume / _update / _snapshot` tools plus a `before_agent_start` system-prompt addendum land Phase 2's session bridge; turn-based extraction/reflection scheduling runs automatically off `turn_end` / `session_shutdown`. Auto-retain on `tool_call` / `message_end` remains deferred.
 
 ## Architecture
 
@@ -12,7 +12,7 @@ Pi coding agent
     └── extension: engram-pi  (in-process, jiti-loaded TypeScript)
         ├── slash commands  (/remember /recall /memory /forget /session)
         ├── LLM tools       (engram_remember, engram_recall, …)
-        ├── lifecycle hooks (session_start opens DB, session_shutdown closes)
+        ├── lifecycle hooks (session_start opens DB, turn_end consolidates, session_shutdown flushes + closes)
         │
         └── Engram (in-process import — no subprocess, no MCP)
             ├── retain (~5ms, local Transformers.js embeddings)
@@ -111,6 +111,26 @@ The LLM sees seven tools every turn:
 
 The schema rejects free-form forget queries from the LLM — the model must first `engram_recall` to find a real chunk ID before it can forget.
 
+## Background consolidation (automatic)
+
+The extension consolidates memory on its own — no agent action or slash command required. It hooks Pi's `turn_end` and `session_shutdown`:
+
+- **Every 3 turns**, if the extraction queue has pending items, it drains them (`processExtractions()`) to build out the entity graph.
+- **Every 12 turns**, it runs `reflect()` to synthesize observations and update opinions.
+- **On `session_shutdown`**, it runs one final drain + reflect (time-bounded to 30s) before closing the DB.
+
+All of this runs **fire-and-forget** — it never blocks a turn on an Ollama call — and an in-flight guard prevents cycles from stacking. If memory was never used in a session, nothing opens (the embedder load is still lazy). If Ollama is unreachable, the work is skipped and you get a **single** warning per session; it stays silent afterward.
+
+These steps need Ollama (unlike retain/recall, which embed in-process). Without it, extraction and reflection simply no-op until it's available.
+
+Cadence is tunable via environment variables (0 disables that step):
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `ENGRAM_PI_EXTRACT_EVERY_TURNS` | `3` | Turns between extraction-queue drains |
+| `ENGRAM_PI_REFLECT_EVERY_TURNS` | `12` | Turns between reflection passes |
+| `ENGRAM_PI_EXTRACT_BATCH` | `10` | Chunks drained per extraction pass |
+
 ## Database location and Git
 
 The DB lives at `<pi-cwd>/.engram/pi.db`. Add to `.gitignore`:
@@ -146,7 +166,6 @@ Both adapters target the same `.engram` SQLite file format; you could in princip
 
 Tracked in `tasks/todo.md`:
 
-- Triggering `engram.processExtractions()` and `engram.reflect()` on `turn_end` or `session_shutdown`
 - Optional auto-retain of conversation turns as `experience`-type chunks (with gating to avoid noise)
 - Custom UI components via Pi's `ctx.ui.custom()` (e.g., a memory inspector widget)
 - Publishing as `pi install`-able package

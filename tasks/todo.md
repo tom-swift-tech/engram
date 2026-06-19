@@ -32,8 +32,13 @@ Environment note for whoever picks this up: the suite now runs on **Node 20 or 2
 
 ## Phase 2 — Pi adapter
 
-- [ ] **Reflect/extract scheduling from Pi**
-  Trigger `engram.processExtractions()` and `engram.reflect()` from Pi's `turn_end` or `session_shutdown` hooks. Open design questions: cadence (per-turn? every N turns? on idle?), Ollama-availability detection, what to do when Ollama is unreachable (silent skip vs warning).
+- [x] **Reflect/extract scheduling from Pi** — shipped 2026-06-19 (branch `feat/pi-reflect-scheduling`). Implemented as below; 14 new tests (adapter cadence/reachability + binding lifecycle). Docs in `docs/PI-INTEGRATION.md` ("Background consolidation").
+  Design: **turn-based cadence + shutdown flush, non-blocking, overlap-guarded.**
+  - `turn_end`: increment a turn counter. Every `EXTRACT_EVERY_TURNS` (default 3) turns *and* when the extraction queue has pending items → `processExtractions()` in the background. Every `REFLECT_EVERY_TURNS` (default 12) turns → `reflect()` in the background. Never awaited inside the turn; a single in-flight guard prevents overlap.
+  - `session_shutdown`: await any in-flight cycle, then run a final flush (drain extractions + one `reflect()`), bounded by a 30s timeout so a wedged Ollama can't hang exit. Then close.
+  - **Ollama unreachable:** detected by classifying connection errors (`ECONNREFUSED`/`fetch failed`/`ENOTFOUND`) thrown by the generator. Behavior: `ctx.ui.notify(...)` **once** per session (warning), silent thereafter. Shutdown flush stays silent (UI gone).
+  - Intervals overridable via `ENGRAM_PI_EXTRACT_EVERY_TURNS` / `ENGRAM_PI_REFLECT_EVERY_TURNS` / `ENGRAM_PI_EXTRACT_BATCH`.
+  - Pure decision (`planConsolidation`) + effectful runner (`runConsolidation`) in `adapter.ts`; counter/guard/once-warning state + hook registration in `index.ts`. Test hooks `_setSchedulingConfigForTesting` / `_getPendingConsolidationForTesting`.
 
 - [ ] **Auto-retain conversation turns**
   Use `tool_call` / `message_end` events to auto-stash messages as `experience`-type chunks. Needs gating (min length, dedup against recent retains, exclude short replies and tool outputs) or the DB will fill with noise.

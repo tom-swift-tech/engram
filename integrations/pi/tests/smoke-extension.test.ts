@@ -127,7 +127,7 @@ describe('engram-pi extension factory', () => {
     expect(chunkIdSchema?.pattern).toBe('^chk-');
   });
 
-  it('subscribes to session_start, session_shutdown, and before_agent_start lifecycle events', () => {
+  it('subscribes to session_start, session_shutdown, before_agent_start, and turn_end lifecycle events', () => {
     const { pi, handlers } = makeFakePi();
     engramPiExtension(pi);
     const events = handlers.map((h) => h.event).sort();
@@ -135,6 +135,7 @@ describe('engram-pi extension factory', () => {
       'before_agent_start',
       'session_shutdown',
       'session_start',
+      'turn_end',
     ]);
   });
 
