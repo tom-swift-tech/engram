@@ -8,6 +8,13 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Test the supported floor (engines: >=20) and the current LTS-track
+        # major. better-sqlite3 ships prebuilt binaries for both ABIs; pinning
+        # to a single version is what previously broke local Node 24 dev.
+        node-version: [20, 24]
     steps:
       - uses: actions/checkout@v4
       - name: Check AGENTS.md mirrors CLAUDE.md
@@ -18,7 +25,7 @@ jobs:
                <(grep -vE '^├── (CLAUDE|AGENTS)\.md' AGENTS.md)
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: ${{ matrix.node-version }}
           cache: npm
       - run: npm ci
       - run: npm run lint
