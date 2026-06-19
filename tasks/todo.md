@@ -61,6 +61,7 @@ Environment note for whoever picks this up: the suite now runs on **Node 20 or 2
 ## Process / hygiene
 
 - [x] GitHub repo setting **"Automatically delete head branches"** enabled on 2026-06-19 (`delete_branch_on_merge=true`) — future PR merges auto-clean their branches.
+- [x] **CI covers `integrations/pi`** (2026-06-19) — the `check` job now installs, typechecks, builds, and tests the Pi extension after the root build, on the `[20, 24]` matrix. Previously only the root package was gated; the Pi suite ran locally-only.
 - [ ] **Keep `AGENTS.md` ≡ `CLAUDE.md` in sync.** They're verbatim mirrors (only the "you are here" marker differs). Every architecture/file-structure/decision edit must land in both. `AGENTS.md` is tracked and a CI step (`.github/workflows/ci.yml`) already guards that `diff` between them stays empty apart from that marker — keep both edited together.
 - [ ] The "Integration with valor-engine" example in `CLAUDE.md`/`AGENTS.md` still says `Engram.open('./myAgent.engram')` — verify this still matches the consumer pattern in valor-engine when next touching that integration.
 
