@@ -33,3 +33,19 @@ jobs:
       - run: npm run typecheck
       - run: npm run coverage
       - run: npm run build
+      # Pi extension package — its own deps + suite, not covered by the root
+      # scripts above. Runs after the root build because the extension's vitest
+      # config aliases `engram` to the root dist/, and `npm ci` here rebuilds the
+      # file:../.. engram copy used by typecheck.
+      - name: Pi extension — install
+        run: npm ci
+        working-directory: integrations/pi
+      - name: Pi extension — typecheck
+        run: npm run typecheck
+        working-directory: integrations/pi
+      - name: Pi extension — build
+        run: npm run build
+        working-directory: integrations/pi
+      - name: Pi extension — test
+        run: npm test
+        working-directory: integrations/pi
