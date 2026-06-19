@@ -127,12 +127,13 @@ describe('engram-pi extension factory', () => {
     expect(chunkIdSchema?.pattern).toBe('^chk-');
   });
 
-  it('subscribes to session_start, session_shutdown, before_agent_start, and turn_end lifecycle events', () => {
+  it('subscribes to session_start, session_shutdown, before_agent_start, turn_end, and message_end lifecycle events', () => {
     const { pi, handlers } = makeFakePi();
     engramPiExtension(pi);
     const events = handlers.map((h) => h.event).sort();
     expect(events).toEqual([
       'before_agent_start',
+      'message_end',
       'session_shutdown',
       'session_start',
       'turn_end',

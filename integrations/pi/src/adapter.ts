@@ -422,3 +422,140 @@ export async function runConsolidation(
 
   return { extracted, reflected, ollamaReachable };
 }
+
+// =============================================================================
+// Auto-retain — Phase 2
+//
+// Auto-stash conversation messages as experience-type memories. The pure half
+// (planAutoRetain) decides what, if anything, to store from a single message
+// and with what provenance; the effectful half (autoRetain) performs the
+// retain. Kept Pi-agnostic via the minimal RetainableMessage shape — the
+// binding maps Pi's MessageEndEvent.message onto it.
+//
+// Provenance by role matters for the trust layer: tool/bash output is stored
+// as `tool_result`, the lowest recall tier, so a flood of captured output can
+// never outrank a user-stated directive at retrieval time.
+// =============================================================================
+
+/** Minimal message shape the binding maps Pi's AgentMessage onto. */
+export interface RetainableMessage {
+  role: string;
+  /** string, or an array of content parts (text parts carry a string `text`). */
+  content: unknown;
+}
+
+export interface AutoRetainConfig {
+  /** Skip messages whose extracted text is shorter than this (default 8). */
+  minChars: number;
+  /** Truncate extracted text to this length so huge tool output can't bloat the DB (default 4000). */
+  maxChars: number;
+}
+
+export const DEFAULT_AUTO_RETAIN_CONFIG: AutoRetainConfig = {
+  minChars: 8,
+  maxChars: 4000,
+};
+
+type SourceType = 'user_stated' | 'agent_generated' | 'tool_result';
+
+interface RoleMapping {
+  sourceType: SourceType;
+  trustScore: number;
+}
+
+// Conversational roles we capture, with provenance. Roles absent here
+// (branchSummary, compactionSummary, custom, …) are internal artifacts — skipped.
+const ROLE_MAP: Record<string, RoleMapping> = {
+  user: { sourceType: 'user_stated', trustScore: 0.7 },
+  assistant: { sourceType: 'agent_generated', trustScore: 0.5 },
+  toolResult: { sourceType: 'tool_result', trustScore: 0.4 },
+  bashExecution: { sourceType: 'tool_result', trustScore: 0.4 },
+};
+
+const TRUNCATION_MARKER = '… [truncated]';
+
+/**
+ * Pull plain text out of a message's `content`, which is either a string or an
+ * array of parts where text parts carry a string `text` field (image parts are
+ * ignored). Returns '' when there's no extractable text.
+ */
+export function extractMessageText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((part) =>
+        part &&
+        typeof part === 'object' &&
+        typeof (part as { text?: unknown }).text === 'string'
+          ? (part as { text: string }).text
+          : '',
+      )
+      .filter(Boolean)
+      .join('\n');
+  }
+  return '';
+}
+
+export interface AutoRetainPlan {
+  text: string;
+  memoryType: 'experience';
+  sourceType: SourceType;
+  trustScore: number;
+  source: string;
+  context: string;
+}
+
+/**
+ * Pure decision: given a message, return what to retain (or null to skip).
+ * Skips non-conversational roles, empty/whitespace text, user `/command`
+ * invocations, and text below `minChars`; truncates to `maxChars`.
+ */
+export function planAutoRetain(
+  message: RetainableMessage,
+  config: AutoRetainConfig = DEFAULT_AUTO_RETAIN_CONFIG,
+): AutoRetainPlan | null {
+  const mapping = ROLE_MAP[message.role];
+  if (!mapping) return null;
+
+  const raw = extractMessageText(message.content).trim();
+  if (!raw) return null;
+  // Slash-command invocations are control input, not memories.
+  if (message.role === 'user' && raw.startsWith('/')) return null;
+  if (raw.length < config.minChars) return null;
+
+  const text =
+    raw.length > config.maxChars
+      ? raw.slice(0, config.maxChars - TRUNCATION_MARKER.length) +
+        TRUNCATION_MARKER
+      : raw;
+
+  return {
+    text,
+    memoryType: 'experience',
+    sourceType: mapping.sourceType,
+    trustScore: mapping.trustScore,
+    source: 'pi:conversation',
+    context: `role:${message.role}`,
+  };
+}
+
+/**
+ * Effectful: plan, then retain. Returns the RetainResult, or null if the
+ * message was skipped by planAutoRetain. retain() embeds in-process (~ms, no
+ * LLM) and dedups via normalized text_hash, so re-stored duplicates collapse.
+ */
+export async function autoRetain(
+  engram: Engram,
+  message: RetainableMessage,
+  config: AutoRetainConfig = DEFAULT_AUTO_RETAIN_CONFIG,
+): Promise<RetainResult | null> {
+  const plan = planAutoRetain(message, config);
+  if (!plan) return null;
+  return engram.retain(plan.text, {
+    memoryType: plan.memoryType,
+    source: plan.source,
+    sourceType: plan.sourceType,
+    trustScore: plan.trustScore,
+    context: plan.context,
+  });
+}

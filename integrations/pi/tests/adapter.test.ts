@@ -29,6 +29,10 @@ import {
   runConsolidation,
   isConnectionError,
   DEFAULT_SCHEDULING_CONFIG,
+  extractMessageText,
+  planAutoRetain,
+  autoRetain,
+  DEFAULT_AUTO_RETAIN_CONFIG,
 } from '../src/adapter.js';
 
 // Deterministic embedder (no Ollama, no model download).
@@ -482,5 +486,115 @@ describe('runConsolidation — effectful', () => {
     );
     expect(res.extracted?.failed).toBeGreaterThan(0);
     expect(res.ollamaReachable).toBe(true);
+  });
+});
+
+// =============================================================================
+// Auto-retain (pure planning + effectful retain)
+// =============================================================================
+
+describe('extractMessageText', () => {
+  it('returns a string content as-is', () => {
+    expect(extractMessageText('hello world')).toBe('hello world');
+  });
+
+  it('joins text parts and ignores non-text (e.g. image) parts', () => {
+    const content = [
+      { type: 'text', text: 'first line' },
+      { type: 'image', url: 'data:...' },
+      { type: 'text', text: 'second line' },
+    ];
+    expect(extractMessageText(content)).toBe('first line\nsecond line');
+  });
+
+  it('returns empty string for unsupported content shapes', () => {
+    expect(extractMessageText(undefined)).toBe('');
+    expect(extractMessageText(42)).toBe('');
+    expect(extractMessageText([{ type: 'image' }])).toBe('');
+  });
+});
+
+describe('planAutoRetain — pure', () => {
+  const cfg = { minChars: 8, maxChars: 50 };
+
+  it('maps user/assistant/tool roles to the right provenance', () => {
+    const user = planAutoRetain({ role: 'user', content: 'deploy the staging cluster tonight' }, cfg);
+    expect(user).toMatchObject({ memoryType: 'experience', sourceType: 'user_stated', trustScore: 0.7 });
+
+    const asst = planAutoRetain({ role: 'assistant', content: 'I will deploy the staging cluster now' }, cfg);
+    expect(asst).toMatchObject({ sourceType: 'agent_generated', trustScore: 0.5 });
+
+    const tool = planAutoRetain({ role: 'toolResult', content: 'exit code 0, build succeeded fine' }, cfg);
+    expect(tool).toMatchObject({ sourceType: 'tool_result', trustScore: 0.4 });
+
+    const bash = planAutoRetain({ role: 'bashExecution', content: 'npm test => 59 passing tests' }, cfg);
+    expect(bash).toMatchObject({ sourceType: 'tool_result', trustScore: 0.4 });
+  });
+
+  it('skips internal / unknown roles', () => {
+    expect(planAutoRetain({ role: 'compactionSummary', content: 'summary text here long enough' }, cfg)).toBeNull();
+    expect(planAutoRetain({ role: 'branchSummary', content: 'another summary that is long enough' }, cfg)).toBeNull();
+    expect(planAutoRetain({ role: 'custom', content: 'custom payload long enough to pass' }, cfg)).toBeNull();
+  });
+
+  it('skips empty, too-short, and user slash-command messages', () => {
+    expect(planAutoRetain({ role: 'user', content: '   ' }, cfg)).toBeNull();
+    expect(planAutoRetain({ role: 'user', content: 'ok' }, cfg)).toBeNull(); // below minChars
+    expect(planAutoRetain({ role: 'user', content: '/recall staging deploy' }, cfg)).toBeNull();
+    // a slash from a tool result is NOT a command — still captured
+    expect(planAutoRetain({ role: 'toolResult', content: '/usr/bin/node not found here' }, cfg)).not.toBeNull();
+  });
+
+  it('truncates over-long text with a marker', () => {
+    const long = 'x'.repeat(200);
+    const plan = planAutoRetain({ role: 'toolResult', content: long }, cfg);
+    expect(plan).not.toBeNull();
+    expect(plan!.text.length).toBe(cfg.maxChars);
+    expect(plan!.text.endsWith('… [truncated]')).toBe(true);
+  });
+
+  it('tags the source and role context', () => {
+    const plan = planAutoRetain({ role: 'user', content: 'a sufficiently long user message' }, cfg);
+    expect(plan!.source).toBe('pi:conversation');
+    expect(plan!.context).toBe('role:user');
+  });
+});
+
+describe('autoRetain — effectful', () => {
+  let dbPath: string;
+  let e: Engram;
+
+  beforeEach(async () => {
+    dbPath = tmpDbPath();
+    e = await Engram.create(dbPath, { embedder: new TestEmbedder() });
+  });
+  afterEach(() => {
+    e.close();
+    cleanup(dbPath);
+  });
+
+  it('stores a captured user message as an experience and returns the result', async () => {
+    const res = await autoRetain(
+      e,
+      { role: 'user', content: 'Tom prefers Terraform with the bpg provider' },
+      DEFAULT_AUTO_RETAIN_CONFIG,
+    );
+    expect(res?.chunkId).toMatch(/^chk-/);
+    expect(memoryStats(e).chunks).toBe(1);
+  });
+
+  it('returns null and stores nothing for a skipped message', async () => {
+    const res = await autoRetain(e, { role: 'user', content: '/memory' }, DEFAULT_AUTO_RETAIN_CONFIG);
+    expect(res).toBeNull();
+    expect(memoryStats(e).chunks).toBe(0);
+  });
+
+  it('deduplicates a repeated message via normalized text_hash', async () => {
+    const msg = { role: 'assistant', content: 'the deployment finished without errors at all' };
+    const first = await autoRetain(e, msg, DEFAULT_AUTO_RETAIN_CONFIG);
+    const second = await autoRetain(e, msg, DEFAULT_AUTO_RETAIN_CONFIG);
+    expect(first?.deduplicated ?? false).toBe(false);
+    expect(second?.deduplicated).toBe(true);
+    expect(memoryStats(e).chunks).toBe(1);
   });
 });

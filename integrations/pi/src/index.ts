@@ -10,6 +10,9 @@
 //   - On 'turn_end': drive the background-consolidation cadence — every few
 //     turns drain the extraction queue / run reflection, fire-and-forget so the
 //     turn never blocks on Ollama. Skipped entirely if memory was never opened.
+//   - On 'message_end': auto-retain the completed message as an experience
+//     memory (on by default; ENGRAM_PI_AUTO_RETAIN=0 disables). Fire-and-forget;
+//     a message that fails gating never opens the DB.
 //   - On 'session_shutdown': flush a final extract+reflect (time-bounded), then
 //     close Engram. Pi may not always fire this (e.g. crash); SQLite WAL is
 //     durable across abrupt exits.
@@ -55,6 +58,11 @@ import {
   runConsolidation,
   DEFAULT_SCHEDULING_CONFIG,
   type SchedulingConfig,
+  autoRetain,
+  planAutoRetain,
+  DEFAULT_AUTO_RETAIN_CONFIG,
+  type AutoRetainConfig,
+  type RetainableMessage,
 } from './adapter.js';
 import {
   RememberParams,
@@ -137,6 +145,32 @@ function resetSchedulingState(): void {
   pendingConsolidation = null;
 }
 
+// ---------------------------------------------------------------------------
+// Auto-retain (Phase 2)
+//
+// Capture conversation messages as experience memories off message_end.
+// On by default; ENGRAM_PI_AUTO_RETAIN=0 (or false/no/off) disables it.
+// ---------------------------------------------------------------------------
+
+function envBoolDefaultTrue(name: string): boolean {
+  const raw = (process.env[name] ?? '').trim().toLowerCase();
+  return !['0', 'false', 'no', 'off'].includes(raw);
+}
+
+let autoRetainEnabled = envBoolDefaultTrue('ENGRAM_PI_AUTO_RETAIN');
+let autoRetainConfig: AutoRetainConfig = {
+  minChars: envInt(
+    'ENGRAM_PI_AUTO_RETAIN_MIN_CHARS',
+    DEFAULT_AUTO_RETAIN_CONFIG.minChars,
+  ),
+  maxChars: envInt(
+    'ENGRAM_PI_AUTO_RETAIN_MAX_CHARS',
+    DEFAULT_AUTO_RETAIN_CONFIG.maxChars,
+  ),
+};
+// Most recent detached auto-retain promise, for deterministic test awaits.
+let pendingAutoRetain: Promise<void> | null = null;
+
 // Engine factory — overridable from tests to swap in a deterministic embedder
 // without paying the LocalEmbedder model download. Production never touches
 // this; the only setter is the test-only export below, prefixed `_`.
@@ -169,6 +203,7 @@ export function _setEngineFactoryForTesting(factory: EngineFactory): void {
   cachedDbPath = null;
   currentSessionId = null;
   resetSchedulingState();
+  pendingAutoRetain = null;
   engineFactory = factory;
 }
 
@@ -183,6 +218,12 @@ export function _resetEngineFactoryForTesting(): void {
     reflectEveryTurns: DEFAULT_SCHEDULING_CONFIG.reflectEveryTurns,
     extractBatchSize: DEFAULT_SCHEDULING_CONFIG.extractBatchSize,
   };
+  autoRetainEnabled = true;
+  autoRetainConfig = {
+    minChars: DEFAULT_AUTO_RETAIN_CONFIG.minChars,
+    maxChars: DEFAULT_AUTO_RETAIN_CONFIG.maxChars,
+  };
+  pendingAutoRetain = null;
   engineFactory = (path) => Engram.open(path);
 }
 
@@ -199,6 +240,22 @@ export function _setSchedulingConfigForTesting(
  */
 export function _getPendingConsolidationForTesting(): Promise<void> | null {
   return pendingConsolidation;
+}
+
+/** Test-only: toggle auto-retain and/or override its gating thresholds. */
+export function _setAutoRetainConfigForTesting(opts: {
+  enabled?: boolean;
+  minChars?: number;
+  maxChars?: number;
+}): void {
+  if (opts.enabled !== undefined) autoRetainEnabled = opts.enabled;
+  if (opts.minChars !== undefined) autoRetainConfig.minChars = opts.minChars;
+  if (opts.maxChars !== undefined) autoRetainConfig.maxChars = opts.maxChars;
+}
+
+/** Test-only: the most recent detached auto-retain promise (or null). */
+export function _getPendingAutoRetainForTesting(): Promise<void> | null {
+  return pendingAutoRetain;
 }
 
 async function closeEngram(): Promise<void> {
@@ -282,6 +339,30 @@ function scheduleConsolidation(ctx: ExtensionContext): void {
   })();
 }
 
+/**
+ * Called from message_end. Captures the message as an experience memory,
+ * fire-and-forget. Gated by a pure pre-check so a message that won't be stored
+ * never opens Engram (preserving lazy-open); retain() is fast and in-process,
+ * but we still don't block the turn on it.
+ */
+function scheduleAutoRetain(message: RetainableMessage): void {
+  if (!autoRetainEnabled) return;
+  if (!planAutoRetain(message, autoRetainConfig)) return;
+
+  pendingAutoRetain = (async () => {
+    try {
+      const engram = await getEngram();
+      await autoRetain(engram, message, autoRetainConfig);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(
+        'engram-pi: auto-retain failed:',
+        err instanceof Error ? err.message : err,
+      );
+    }
+  })();
+}
+
 /** Resolve after `ms`, regardless of the raced promise. */
 function timeout(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -359,6 +440,12 @@ export default function engramPiExtension(pi: ExtensionAPI): void {
   // the actual extract/reflect runs detached so the turn never blocks on Ollama.
   pi.on('turn_end', (_event, ctx) => {
     scheduleConsolidation(ctx);
+  });
+
+  // Auto-retain: capture each completed message as an experience memory.
+  pi.on('message_end', (event) => {
+    const message = (event as { message?: RetainableMessage }).message;
+    if (message) scheduleAutoRetain(message);
   });
 
   pi.on('before_agent_start', (event) => {

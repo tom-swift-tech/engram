@@ -40,8 +40,12 @@ Environment note for whoever picks this up: the suite now runs on **Node 20 or 2
   - Intervals overridable via `ENGRAM_PI_EXTRACT_EVERY_TURNS` / `ENGRAM_PI_REFLECT_EVERY_TURNS` / `ENGRAM_PI_EXTRACT_BATCH`.
   - Pure decision (`planConsolidation`) + effectful runner (`runConsolidation`) in `adapter.ts`; counter/guard/once-warning state + hook registration in `index.ts`. Test hooks `_setSchedulingConfigForTesting` / `_getPendingConsolidationForTesting`.
 
-- [ ] **Auto-retain conversation turns**
-  Use `tool_call` / `message_end` events to auto-stash messages as `experience`-type chunks. Needs gating (min length, dedup against recent retains, exclude short replies and tool outputs) or the DB will fill with noise.
+- [x] **Auto-retain conversation turns** — shipped 2026-06-19 (branch `feat/pi-auto-retain`). 15 new tests (adapter planning/extraction/effectful + binding lifecycle). Docs in `docs/PI-INTEGRATION.md` ("Auto-retain").
+  Design: hook **`message_end`**, capture **all conversational roles**, **on by default**.
+  - Role → provenance: `user` → `experience`/`user_stated`/0.7; `assistant` → `experience`/`agent_generated`/0.5; `toolResult`/`bashExecution` → `experience`/`tool_result`/0.4. Internal roles (`branchSummary`, `compactionSummary`, `custom`) skipped. The `tool_result` tier means captured tool output can never outrank user directives at recall (trust layer).
+  - Gating: extract text from `content` (string or `TextContent[]`); skip empty/whitespace, skip user `/command` invocations, skip below `minChars` (default 8), **truncate to `maxChars` (default 4000)** so giant tool outputs don't bloat the DB. Exact/near dupes handled free by retain's normalized `text_hash` dedup.
+  - Enabled by default; disable with `ENGRAM_PI_AUTO_RETAIN=0`. Tunable: `ENGRAM_PI_AUTO_RETAIN_MIN_CHARS`, `ENGRAM_PI_AUTO_RETAIN_MAX_CHARS`.
+  - Fire-and-forget retain (fast, in-process — no LLM); lazy-open preserved (only opens when a message passes gating). Pure `planAutoRetain(message, config)` + effectful `autoRetain(engram, …)` in `adapter.ts`; `message_end` registration + env state in `index.ts`. Test hooks `_setAutoRetainConfigForTesting` / `_getPendingAutoRetainForTesting`.
 
 - [ ] **Memory inspector UI widget**
   Use `ctx.ui.custom()` to render a live panel of recent chunks/opinions during a Pi session. Nice-to-have.
