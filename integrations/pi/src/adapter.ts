@@ -164,3 +164,104 @@ export async function forgetById(
 ): Promise<boolean> {
   return engram.forget(chunkId);
 }
+
+// =============================================================================
+// Working memory session bridge — Phase 2
+//
+// Wraps Engram's inferWorkingSession / updateWorkingSession /
+// snapshotWorkingSession operations as pure functions over plain types.
+// The binding layer (index.ts) carries the LLM-tool surface and one
+// transient module-level currentSessionId pointer for the /session command.
+// =============================================================================
+
+export interface ResumeSessionInput {
+  message: string;
+  /** Cosine similarity threshold; defaults to Engram's default (0.55) */
+  threshold?: number;
+  /** Max active sessions before oldest is snapshotted; defaults to Engram's default (5) */
+  maxActive?: number;
+}
+
+export interface ResumeSessionOutput {
+  sessionId: string;
+  goal: string;
+  progress?: string;
+  relatedContext: string;
+  confidence: number;
+  reason: 'match' | 'new' | 'forced';
+}
+
+export async function resumeSession(
+  engram: Engram,
+  input: ResumeSessionInput,
+): Promise<ResumeSessionOutput> {
+  const result = await engram.inferWorkingSession(input.message, {
+    threshold: input.threshold,
+    maxActive: input.maxActive,
+  });
+  return {
+    sessionId: result.session.id,
+    goal: result.session.goal,
+    progress:
+      typeof result.session.progress === 'string'
+        ? result.session.progress
+        : undefined,
+    relatedContext: result.relatedContext,
+    confidence: result.confidence,
+    reason: result.diagnostics.reason,
+  };
+}
+
+export interface UpdateSessionInput {
+  sessionId: string;
+  /** Free-form progress note merged into session state */
+  progress?: string;
+  /** Agent-defined extension keys merged into session state */
+  extensions?: Record<string, unknown>;
+}
+
+export interface UpdateSessionOutput {
+  sessionId: string;
+  updated_at: string;
+}
+
+export async function updateSession(
+  engram: Engram,
+  input: UpdateSessionInput,
+): Promise<UpdateSessionOutput> {
+  const updates: Record<string, unknown> = { ...(input.extensions ?? {}) };
+  if (input.progress !== undefined) {
+    updates.progress = input.progress;
+  }
+  await engram.updateWorkingSession(input.sessionId, updates);
+  const reloaded = engram.getWorkingSession(input.sessionId);
+  if (!reloaded) {
+    throw new Error(
+      `Working memory session ${input.sessionId} not found after update`,
+    );
+  }
+  return {
+    sessionId: reloaded.id,
+    updated_at: reloaded.updated_at,
+  };
+}
+
+export interface SnapshotSessionInput {
+  sessionId: string;
+}
+
+export interface SnapshotSessionOutput {
+  sessionId: string;
+  chunkId: string;
+}
+
+export async function snapshotSession(
+  engram: Engram,
+  input: SnapshotSessionInput,
+): Promise<SnapshotSessionOutput> {
+  const result = await engram.snapshotWorkingSession(input.sessionId);
+  return {
+    sessionId: input.sessionId,
+    chunkId: result.chunkId,
+  };
+}

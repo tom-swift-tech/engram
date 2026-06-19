@@ -158,3 +158,40 @@ ${relatedContext}`;
 // Background maintenance
 setInterval(() => engram.expireStaleWorkingSessions(48), 60 * 60 * 1000);
 ```
+
+## Using the Pi adapter
+
+When the engram-pi extension is loaded in a Pi session, the working-memory
+surface is exposed as three LLM-callable tools:
+
+| Tool | Use it when |
+|------|-------------|
+| `engram_session_resume` | Starting a multi-turn task. Pass the user's request as `message`. Returns the session id, prior progress (if matched), and pre-formatted long-term context. |
+| `engram_session_update` | Before a turn boundary you want preserved across sessions. Pass `sessionId` from resume + a free-form `progress` string. |
+| `engram_session_snapshot` | When a piece of work is complete. Collapses the session to long-term memory and ends it. |
+
+The Pi extension also exposes a `/session` slash command that lists active
+sessions and highlights the one most recently touched in the current Pi run.
+
+### Worked example
+
+```
+turn 1 (user): "let's refactor the auth middleware"
+  ↓ agent: engram_session_resume({ message: "refactor the auth middleware" })
+  ← { sessionId: "wm-abc", reason: "new", goal: "...", relatedContext: "..." }
+
+turn 3 (agent, before responding): engram_session_update({
+    sessionId: "wm-abc",
+    progress: "Extracted JWT decoder into auth/jwt.ts"
+  })
+  ← { sessionId: "wm-abc", updated_at: "..." }
+
+turn 6 (agent, work done): engram_session_snapshot({ sessionId: "wm-abc" })
+  ← { sessionId: "wm-abc", chunkId: "chk-xyz" }
+```
+
+When the user returns three days later with `"keep working on the auth refactor"`,
+the agent calls `engram_session_resume` again. Engram's embedding match against
+the (now-expired) `wm-abc` fails, but the long-term episodic chunk `chk-xyz`
+surfaces in `relatedContext`, so the agent picks up with full prior progress
+visible.

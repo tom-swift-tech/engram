@@ -15,12 +15,16 @@
 //   /recall   <query>      retrieve relevant memories
 //   /memory                show memory stats
 //   /forget   <id|query>   soft-delete a chunk (confirms before query-based deletes)
+//   /session               show current working session + list active sessions
 //
 // LLM tools (JSON Schema):
 //   engram_remember
 //   engram_recall
 //   engram_memory_stats
 //   engram_forget          (requires explicit chunkId — no agent-driven query deletes)
+//   engram_session_resume
+//   engram_session_update
+//   engram_session_snapshot
 // =============================================================================
 
 import { mkdir } from 'node:fs/promises';
@@ -39,21 +43,44 @@ import {
   findToForget,
   forgetById,
   looksLikeChunkId,
+  resumeSession,
+  updateSession,
+  snapshotSession,
 } from './adapter.js';
 import {
   RememberParams,
   RecallParams,
   MemoryStatsParams,
   ForgetParams,
+  SessionResumeParams,
+  SessionUpdateParams,
+  SessionSnapshotParams,
   type RememberToolParams,
   type RecallToolParams,
   type ForgetToolParams,
+  type SessionResumeToolParams,
+  type SessionUpdateToolParams,
+  type SessionSnapshotToolParams,
 } from './types.js';
 
 const DEFAULT_DB_RELATIVE = '.engram/pi.db';
 
+const SESSION_ADDENDUM = [
+  '',
+  'You have access to persistent working memory across sessions via Engram:',
+  '- engram_session_resume — call early when starting substantive work; returns prior context if this topic has been worked on before',
+  '- engram_session_update — call before turn boundaries to record progress notes',
+  '- engram_session_snapshot — call when a piece of work is complete; collapses the session to long-term memory',
+  'Use these for multi-turn tasks; prefer engram_recall for one-off lookups.',
+].join('\n');
+
 let enginePromise: Promise<Engram> | null = null;
 let cachedDbPath: string | null = null;
+
+// Module-level transient pointer set by engram_session_* tools so the
+// /session slash command can answer "what are you currently working on?"
+// Never persisted; lost on reload. Engram remains the only stateful party.
+let currentSessionId: string | null = null;
 
 // Engine factory — overridable from tests to swap in a deterministic embedder
 // without paying the LocalEmbedder model download. Production never touches
@@ -85,6 +112,7 @@ async function getEngram(): Promise<Engram> {
 export function _setEngineFactoryForTesting(factory: EngineFactory): void {
   enginePromise = null;
   cachedDbPath = null;
+  currentSessionId = null;
   engineFactory = factory;
 }
 
@@ -92,6 +120,7 @@ export function _setEngineFactoryForTesting(factory: EngineFactory): void {
 export function _resetEngineFactoryForTesting(): void {
   enginePromise = null;
   cachedDbPath = null;
+  currentSessionId = null;
   engineFactory = (path) => Engram.open(path);
 }
 
@@ -166,6 +195,23 @@ export default function engramPiExtension(pi: ExtensionAPI): void {
 
   pi.on('session_shutdown', async () => {
     await closeEngram();
+  });
+
+  pi.on('before_agent_start', (event) => {
+    try {
+      return {
+        systemPrompt: `${event.systemPrompt}\n${SESSION_ADDENDUM}`,
+      };
+    } catch (err) {
+      // Never break a turn over the addendum — return nothing so Pi keeps
+      // the existing system prompt.
+      // eslint-disable-next-line no-console
+      console.error(
+        'engram-pi: failed to append session addendum:',
+        err instanceof Error ? err.message : err,
+      );
+      return undefined;
+    }
   });
 
   // ---------------------------------------------------------------------------
@@ -272,6 +318,45 @@ export default function engramPiExtension(pi: ExtensionAPI): void {
     },
   });
 
+  pi.registerCommand('session', {
+    description: 'Show the current working session and list active sessions',
+    handler: async (_args, ctx) => {
+      const engram = await getEngram();
+      const active = engram.listWorkingSessions();
+      const lines: string[] = [];
+
+      if (currentSessionId) {
+        const current = active.find((s) => s.id === currentSessionId);
+        if (current) {
+          lines.push(`Current: ${current.id} — ${current.goal}`);
+          const progress =
+            typeof current.progress === 'string' ? current.progress : undefined;
+          if (progress) {
+            lines.push(`  Progress: ${progress}`);
+          }
+          lines.push('');
+        }
+      } else {
+        lines.push(
+          'No active session in this run — call engram_session_resume to start one.',
+        );
+        lines.push('');
+      }
+
+      if (active.length === 0) {
+        lines.push('No active working memory sessions.');
+      } else {
+        lines.push(`Active sessions (${active.length}):`);
+        for (const s of active) {
+          const marker = s.id === currentSessionId ? '*' : ' ';
+          lines.push(`  ${marker} ${s.id} — ${s.goal}`);
+        }
+      }
+
+      notifyOrLog(ctx, lines.join('\n'));
+    },
+  });
+
   // ---------------------------------------------------------------------------
   // LLM tools
   // ---------------------------------------------------------------------------
@@ -362,6 +447,109 @@ export default function engramPiExtension(pi: ExtensionAPI): void {
         ],
         details: { chunkId: params.chunkId, forgotten: ok },
       };
+    },
+  });
+
+  pi.registerTool({
+    name: 'engram_session_resume',
+    label: 'Session Resume',
+    description:
+      'Resume or create a working memory session for the current task. Call early when starting substantive multi-turn work. Returns the session id, goal, prior progress (if any), and related long-term context. Pass the session id to engram_session_update / engram_session_snapshot.',
+    parameters: SessionResumeParams,
+    async execute(_id, params: SessionResumeToolParams) {
+      const engram = await getEngram();
+      const result = await resumeSession(engram, {
+        message: params.message,
+        threshold: params.threshold,
+        maxActive: params.maxActive,
+      });
+      currentSessionId = result.sessionId;
+      const summary = [
+        `${result.reason === 'new' ? 'New' : 'Resumed'} session ${result.sessionId}`,
+        `Goal: ${result.goal}`,
+        result.progress ? `Progress: ${result.progress}` : null,
+        result.relatedContext ? `\n${result.relatedContext}` : null,
+      ]
+        .filter(Boolean)
+        .join('\n');
+      return {
+        content: [{ type: 'text', text: summary }],
+        details: result,
+      };
+    },
+  });
+
+  pi.registerTool<typeof SessionUpdateParams, unknown>({
+    name: 'engram_session_update',
+    label: 'Session Update',
+    description:
+      'Update progress on an active working memory session. Call before turn boundaries you want preserved across sessions. Provide the sessionId from engram_session_resume.',
+    parameters: SessionUpdateParams,
+    async execute(_id, params: SessionUpdateToolParams) {
+      const engram = await getEngram();
+      try {
+        const result = await updateSession(engram, {
+          sessionId: params.sessionId,
+          progress: params.progress,
+          extensions: params.extensions as
+            | Record<string, unknown>
+            | undefined,
+        });
+        currentSessionId = result.sessionId;
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Updated ${result.sessionId} (updated_at ${result.updated_at})`,
+            },
+          ],
+          details: result,
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: 'text', text: `Update failed: ${msg}` }],
+          isError: true,
+          details: { sessionId: params.sessionId, error: msg },
+        };
+      }
+    },
+  });
+
+  pi.registerTool<typeof SessionSnapshotParams, unknown>({
+    name: 'engram_session_snapshot',
+    label: 'Session Snapshot',
+    description:
+      'Snapshot a completed working memory session to long-term memory and end it. The session goal + progress are retained as a chunk; the session is then expired. Use when the agent considers a piece of work complete.',
+    parameters: SessionSnapshotParams,
+    async execute(_id, params: SessionSnapshotToolParams) {
+      const engram = await getEngram();
+      try {
+        const result = await snapshotSession(engram, {
+          sessionId: params.sessionId,
+        });
+        // Only clear the live pointer when snapshotting the current session;
+        // snapshotting an unrelated/explicit sessionId must not clobber active work.
+        if (currentSessionId === params.sessionId) {
+          currentSessionId = null;
+        }
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Snapshotted ${result.sessionId} → ${result.chunkId}`,
+            },
+          ],
+          details: result,
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: 'text', text: `Snapshot failed: ${msg}` }],
+          isError: true,
+          details: { sessionId: params.sessionId, error: msg },
+        };
+      }
     },
   });
 }
