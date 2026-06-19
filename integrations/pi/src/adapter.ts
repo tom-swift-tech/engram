@@ -265,3 +265,160 @@ export async function snapshotSession(
     chunkId: result.chunkId,
   };
 }
+
+// =============================================================================
+// Background consolidation scheduling — Phase 2
+//
+// Engram's founding constraint is "never block a write/turn on an LLM call".
+// processExtractions() and reflect() both hit Ollama, so the binding runs them
+// fire-and-forget off Pi's turn_end / session_shutdown hooks. This module owns
+// the *pure* parts: deciding when a cycle is due (planConsolidation) and
+// running it while classifying Ollama-reachability (runConsolidation). The
+// counter, in-flight guard, and once-per-session warning live in index.ts.
+// =============================================================================
+
+export interface SchedulingConfig {
+  /** Run processExtractions() every N turns (when the queue has pending items). */
+  extractEveryTurns: number;
+  /** Run reflect() every N turns. */
+  reflectEveryTurns: number;
+  /** Batch size passed to processExtractions(). */
+  extractBatchSize: number;
+}
+
+export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
+  extractEveryTurns: 3,
+  reflectEveryTurns: 12,
+  extractBatchSize: 10,
+};
+
+export interface ConsolidationPlan {
+  extract: boolean;
+  reflect: boolean;
+}
+
+function onInterval(turn: number, every: number): boolean {
+  return every > 0 && turn > 0 && turn % every === 0;
+}
+
+/**
+ * Cheap pre-check: is *any* cadence interval hit this turn? Used by the binding
+ * to decide whether it's even worth opening Engram — an idle session that never
+ * touched memory should pay neither the lazy-open (embedder load) nor a no-op
+ * queue check.
+ */
+export function consolidationDue(
+  turn: number,
+  config: SchedulingConfig = DEFAULT_SCHEDULING_CONFIG,
+): boolean {
+  return (
+    onInterval(turn, config.extractEveryTurns) ||
+    onInterval(turn, config.reflectEveryTurns)
+  );
+}
+
+/**
+ * Pure cadence decision. `turn` is 1-based (the count *after* this turn ends).
+ * Extraction is gated on both the turn interval and a non-empty queue so we
+ * never spin up Ollama just to drain zero items; reflection is purely
+ * interval-driven (it has its own min-facts threshold inside Engram).
+ */
+export function planConsolidation(
+  turn: number,
+  queuePending: number,
+  config: SchedulingConfig = DEFAULT_SCHEDULING_CONFIG,
+): ConsolidationPlan {
+  return {
+    extract: onInterval(turn, config.extractEveryTurns) && queuePending > 0,
+    reflect: onInterval(turn, config.reflectEveryTurns),
+  };
+}
+
+export interface ConsolidationResult {
+  extracted: { processed: number; failed: number } | null;
+  reflected: Awaited<ReturnType<Engram['reflect']>> | null;
+  /** False if a connection-class error was seen (Ollama down/unconfigured). */
+  ollamaReachable: boolean;
+}
+
+/**
+ * True for errors that mean "the Ollama endpoint isn't answering" — connection
+ * refused, DNS miss, reset, or undici's wrapped `fetch failed`. Anything else
+ * (a genuine bug, a parse error) is re-thrown so it isn't silently swallowed
+ * under the "Ollama is down" banner.
+ */
+export function isConnectionError(err: unknown): boolean {
+  const codes = ['ECONNREFUSED', 'ENOTFOUND', 'ECONNRESET', 'EAI_AGAIN'];
+  const haystacks: string[] = [];
+  if (err instanceof Error) {
+    haystacks.push(err.message);
+    const cause = (err as { cause?: unknown }).cause;
+    if (cause instanceof Error) haystacks.push(cause.message);
+    const code = (cause as { code?: unknown } | undefined)?.code;
+    if (typeof code === 'string') haystacks.push(code);
+  } else if (typeof err === 'string') {
+    haystacks.push(err);
+  }
+  const joined = haystacks.join(' ');
+  return (
+    /fetch failed/i.test(joined) || codes.some((c) => joined.includes(c))
+  );
+}
+
+/**
+ * Most recent error recorded on the extraction queue, or null. Engram's
+ * extraction/reflection paths swallow generator failures (recording them rather
+ * than throwing — they must never crash a background drain), so reachability is
+ * read back from these structured signals, not from a thrown exception.
+ * Reaches the DB through the same narrow cast memoryStats() uses.
+ */
+function latestQueueError(engram: Engram): string | null {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = (engram as any).db as {
+    prepare: (sql: string) => {
+      get: () => { error: string | null } | undefined;
+    };
+  };
+  const row = db
+    .prepare(
+      `SELECT error FROM extraction_queue
+       WHERE error IS NOT NULL
+       ORDER BY last_attempt DESC LIMIT 1`,
+    )
+    .get();
+  return row?.error ?? null;
+}
+
+/**
+ * Run the requested consolidation steps and infer Ollama reachability from
+ * their results. Extraction runs before reflection; if extraction shows a
+ * connection-class failure we skip reflection (same endpoint, no point
+ * retrying this cycle). Neither call throws on an Ollama outage — extraction
+ * records the error on the queue row, reflect returns `status: 'failed'` — so
+ * we inspect those rather than catch.
+ */
+export async function runConsolidation(
+  engram: Engram,
+  plan: ConsolidationPlan,
+  config: SchedulingConfig = DEFAULT_SCHEDULING_CONFIG,
+): Promise<ConsolidationResult> {
+  let ollamaReachable = true;
+  let extracted: ConsolidationResult['extracted'] = null;
+  let reflected: ConsolidationResult['reflected'] = null;
+
+  if (plan.extract) {
+    extracted = await engram.processExtractions(config.extractBatchSize);
+    if (extracted.failed > 0 && isConnectionError(latestQueueError(engram))) {
+      ollamaReachable = false;
+    }
+  }
+
+  if (plan.reflect && ollamaReachable) {
+    reflected = await engram.reflect();
+    if (reflected.status === 'failed' && isConnectionError(reflected.error)) {
+      ollamaReachable = false;
+    }
+  }
+
+  return { extracted, reflected, ollamaReachable };
+}

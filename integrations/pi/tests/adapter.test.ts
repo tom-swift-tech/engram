@@ -8,7 +8,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { unlinkSync } from 'node:fs';
-import { Engram, type EmbeddingProvider } from 'engram';
+import {
+  Engram,
+  type EmbeddingProvider,
+  type GenerationProvider,
+} from 'engram';
 
 import {
   remember,
@@ -20,6 +24,11 @@ import {
   resumeSession,
   updateSession,
   snapshotSession,
+  consolidationDue,
+  planConsolidation,
+  runConsolidation,
+  isConnectionError,
+  DEFAULT_SCHEDULING_CONFIG,
 } from '../src/adapter.js';
 
 // Deterministic embedder (no Ollama, no model download).
@@ -331,5 +340,147 @@ describe('Pi adapter', () => {
         snapshotSession(engram, { sessionId: 'wm-does-not-exist' }),
       ).rejects.toThrow();
     });
+  });
+});
+
+// =============================================================================
+// Background consolidation scheduling (pure + effectful adapter surface)
+// =============================================================================
+
+class FakeGenerator implements GenerationProvider {
+  calls = 0;
+  constructor(private readonly impl: () => Promise<string>) {}
+  async generate(): Promise<string> {
+    this.calls += 1;
+    return this.impl();
+  }
+}
+
+describe('consolidation scheduling — pure cadence', () => {
+  const cfg = { extractEveryTurns: 3, reflectEveryTurns: 12, extractBatchSize: 10 };
+
+  it('consolidationDue is true only on an interval boundary', () => {
+    expect(consolidationDue(1, cfg)).toBe(false);
+    expect(consolidationDue(3, cfg)).toBe(true); // extract interval
+    expect(consolidationDue(6, cfg)).toBe(true);
+    expect(consolidationDue(12, cfg)).toBe(true); // reflect interval
+    expect(consolidationDue(7, cfg)).toBe(false);
+    expect(consolidationDue(0, cfg)).toBe(false);
+  });
+
+  it('planConsolidation gates extract on both interval and a non-empty queue', () => {
+    expect(planConsolidation(3, 5, cfg)).toEqual({ extract: true, reflect: false });
+    // interval hit but empty queue → no extract (don't wake Ollama for nothing)
+    expect(planConsolidation(3, 0, cfg)).toEqual({ extract: false, reflect: false });
+    // off-interval → nothing
+    expect(planConsolidation(4, 5, cfg)).toEqual({ extract: false, reflect: false });
+  });
+
+  it('planConsolidation reflects on the reflect interval (queue-independent)', () => {
+    // turn 12 hits both intervals; with pending>0 both fire
+    expect(planConsolidation(12, 2, cfg)).toEqual({ extract: true, reflect: true });
+    // turn 24 hits reflect (24%12) but not extract (24%3==0 too) — both again
+    expect(planConsolidation(12, 0, cfg)).toEqual({ extract: false, reflect: true });
+  });
+
+  it('a zero interval disables that cadence', () => {
+    const off = { extractEveryTurns: 0, reflectEveryTurns: 0, extractBatchSize: 10 };
+    expect(consolidationDue(99, off)).toBe(false);
+    expect(planConsolidation(99, 100, off)).toEqual({ extract: false, reflect: false });
+  });
+});
+
+describe('isConnectionError', () => {
+  it('classifies connection-class failures as Ollama-down', () => {
+    expect(isConnectionError(new Error('fetch failed'))).toBe(true);
+    expect(isConnectionError(new Error('connect ECONNREFUSED 127.0.0.1:11434'))).toBe(true);
+    const wrapped = new Error('fetch failed');
+    (wrapped as { cause?: unknown }).cause = Object.assign(new Error('x'), { code: 'ECONNREFUSED' });
+    expect(isConnectionError(wrapped)).toBe(true);
+  });
+
+  it('does not swallow genuine (non-connection) errors', () => {
+    expect(isConnectionError(new Error('JSON parse error'))).toBe(false);
+    expect(isConnectionError(new TypeError('bad shape'))).toBe(false);
+  });
+});
+
+describe('runConsolidation — effectful', () => {
+  let dbPath: string;
+  let engram: Engram;
+
+  afterEach(() => {
+    engram?.close();
+    cleanup(dbPath);
+  });
+
+  async function make(gen: GenerationProvider): Promise<Engram> {
+    dbPath = tmpDbPath();
+    engram = await Engram.create(dbPath, {
+      embedder: new TestEmbedder(),
+      generator: gen,
+    });
+    return engram;
+  }
+
+  it('no-op plan touches neither Ollama nor returns results', async () => {
+    const gen = new FakeGenerator(async () => '{}');
+    const e = await make(gen);
+    const res = await runConsolidation(e, { extract: false, reflect: false }, DEFAULT_SCHEDULING_CONFIG);
+    expect(res).toEqual({ extracted: null, reflected: null, ollamaReachable: true });
+    expect(gen.calls).toBe(0);
+  });
+
+  it('reports Ollama unreachable when extraction hits a connection error', async () => {
+    const gen = new FakeGenerator(async () => {
+      throw new Error('fetch failed');
+    });
+    const e = await make(gen);
+    // Retain queues an extraction job so processExtractions actually calls Ollama.
+    await remember(e, { text: 'Tom ships Engram on a homelab Proxmox cluster' });
+    expect(e.getQueueStats().pending).toBeGreaterThan(0);
+
+    const res = await runConsolidation(
+      e,
+      { extract: true, reflect: true },
+      DEFAULT_SCHEDULING_CONFIG,
+    );
+    expect(res.ollamaReachable).toBe(false);
+    // reflect must be skipped once extraction proves Ollama is down
+    expect(res.reflected).toBeNull();
+  });
+
+  it('reflect below the min-facts threshold stays reachable and skips the LLM', async () => {
+    const gen = new FakeGenerator(async () => {
+      throw new Error('should not be called below threshold');
+    });
+    const e = await make(gen);
+    await remember(e, { text: 'one lonely fact, well under the reflect threshold' });
+
+    const res = await runConsolidation(
+      e,
+      { extract: false, reflect: true },
+      DEFAULT_SCHEDULING_CONFIG,
+    );
+    expect(res.ollamaReachable).toBe(true);
+    expect(gen.calls).toBe(0); // early return, generator never invoked
+  });
+
+  it('does not cry wolf: a non-connection extraction failure leaves Ollama reachable', async () => {
+    // A malformed-response / parse-class failure is recorded on the queue but
+    // is NOT an outage — reachability must stay true so we never warn falsely.
+    const gen = new FakeGenerator(async () => {
+      throw new Error('totally unexpected parse explosion');
+    });
+    const e = await make(gen);
+    await remember(e, { text: 'a fact to enqueue extraction work' });
+
+    const res = await runConsolidation(
+      e,
+      { extract: true, reflect: false },
+      DEFAULT_SCHEDULING_CONFIG,
+    );
+    expect(res.extracted?.failed).toBeGreaterThan(0);
+    expect(res.ollamaReachable).toBe(true);
   });
 });

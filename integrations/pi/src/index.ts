@@ -7,8 +7,12 @@
 //     so /reload works predictably and registration is visible immediately).
 //   - On 'session_start': lazily open Engram (project-local .engram/pi.db) so
 //     the embedding model only loads when actually used.
-//   - On 'session_shutdown': close Engram. Pi may not always fire this (e.g.
-//     crash); SQLite WAL is durable across abrupt exits.
+//   - On 'turn_end': drive the background-consolidation cadence — every few
+//     turns drain the extraction queue / run reflection, fire-and-forget so the
+//     turn never blocks on Ollama. Skipped entirely if memory was never opened.
+//   - On 'session_shutdown': flush a final extract+reflect (time-bounded), then
+//     close Engram. Pi may not always fire this (e.g. crash); SQLite WAL is
+//     durable across abrupt exits.
 //
 // Slash commands:
 //   /remember <text>       store a fact
@@ -46,6 +50,11 @@ import {
   resumeSession,
   updateSession,
   snapshotSession,
+  consolidationDue,
+  planConsolidation,
+  runConsolidation,
+  DEFAULT_SCHEDULING_CONFIG,
+  type SchedulingConfig,
 } from './adapter.js';
 import {
   RememberParams,
@@ -82,6 +91,52 @@ let cachedDbPath: string | null = null;
 // Never persisted; lost on reload. Engram remains the only stateful party.
 let currentSessionId: string | null = null;
 
+// ---------------------------------------------------------------------------
+// Background consolidation scheduling (Phase 2)
+//
+// turn_end drives a turn counter; extraction/reflection fire fire-and-forget
+// off it so Ollama latency never blocks a turn. session_shutdown flushes once.
+// All state here is transient per run; Engram is the only durable party.
+// ---------------------------------------------------------------------------
+
+const SHUTDOWN_FLUSH_TIMEOUT_MS = 30_000;
+
+function envInt(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 0 ? n : fallback;
+}
+
+let schedulingConfig: SchedulingConfig = {
+  extractEveryTurns: envInt(
+    'ENGRAM_PI_EXTRACT_EVERY_TURNS',
+    DEFAULT_SCHEDULING_CONFIG.extractEveryTurns,
+  ),
+  reflectEveryTurns: envInt(
+    'ENGRAM_PI_REFLECT_EVERY_TURNS',
+    DEFAULT_SCHEDULING_CONFIG.reflectEveryTurns,
+  ),
+  extractBatchSize: envInt(
+    'ENGRAM_PI_EXTRACT_BATCH',
+    DEFAULT_SCHEDULING_CONFIG.extractBatchSize,
+  ),
+};
+
+let turnCounter = 0;
+let consolidationInFlight = false;
+let ollamaWarned = false;
+// Holds the most recent detached consolidation promise purely so tests can
+// await it deterministically (production never reads this).
+let pendingConsolidation: Promise<void> | null = null;
+
+function resetSchedulingState(): void {
+  turnCounter = 0;
+  consolidationInFlight = false;
+  ollamaWarned = false;
+  pendingConsolidation = null;
+}
+
 // Engine factory — overridable from tests to swap in a deterministic embedder
 // without paying the LocalEmbedder model download. Production never touches
 // this; the only setter is the test-only export below, prefixed `_`.
@@ -113,6 +168,7 @@ export function _setEngineFactoryForTesting(factory: EngineFactory): void {
   enginePromise = null;
   cachedDbPath = null;
   currentSessionId = null;
+  resetSchedulingState();
   engineFactory = factory;
 }
 
@@ -121,7 +177,28 @@ export function _resetEngineFactoryForTesting(): void {
   enginePromise = null;
   cachedDbPath = null;
   currentSessionId = null;
+  resetSchedulingState();
+  schedulingConfig = {
+    extractEveryTurns: DEFAULT_SCHEDULING_CONFIG.extractEveryTurns,
+    reflectEveryTurns: DEFAULT_SCHEDULING_CONFIG.reflectEveryTurns,
+    extractBatchSize: DEFAULT_SCHEDULING_CONFIG.extractBatchSize,
+  };
   engineFactory = (path) => Engram.open(path);
+}
+
+/** Test-only: shrink the cadence so a test can trigger cycles in a few turns. */
+export function _setSchedulingConfigForTesting(
+  partial: Partial<SchedulingConfig>,
+): void {
+  schedulingConfig = { ...schedulingConfig, ...partial };
+}
+
+/**
+ * Test-only: the most recent detached consolidation promise (or null). Lets
+ * tests await fire-and-forget work instead of racing it.
+ */
+export function _getPendingConsolidationForTesting(): Promise<void> | null {
+  return pendingConsolidation;
 }
 
 async function closeEngram(): Promise<void> {
@@ -156,6 +233,86 @@ function notifyOrLog(
     // eslint-disable-next-line no-console
     console.error(`${prefix} ${message}`);
   }
+}
+
+const OLLAMA_DOWN_MESSAGE =
+  'Engram: Ollama unreachable — background memory consolidation paused for this session.';
+
+/**
+ * Called from turn_end. Decides (purely) whether a cycle is due, then runs it
+ * detached so the turn never waits on Ollama. A single in-flight guard means a
+ * long extract/reflect spanning several turns won't stack up. Errors are
+ * contained; a connection failure warns the user once per session.
+ */
+function scheduleConsolidation(ctx: ExtensionContext): void {
+  turnCounter += 1;
+  if (consolidationInFlight) return;
+  // Cheap, DB-free pre-check: bail unless a cadence interval is actually hit.
+  if (!consolidationDue(turnCounter, schedulingConfig)) return;
+  // Preserve lazy-open: if memory was never used this session there's nothing
+  // to consolidate, and we must not pay the embedder-load cost for an idle run.
+  if (!enginePromise) return;
+
+  consolidationInFlight = true;
+  pendingConsolidation = (async () => {
+    try {
+      const engram = await getEngram();
+      const plan = planConsolidation(
+        turnCounter,
+        engram.getQueueStats().pending,
+        schedulingConfig,
+      );
+      if (!plan.extract && !plan.reflect) return;
+
+      const result = await runConsolidation(engram, plan, schedulingConfig);
+      if (!result.ollamaReachable && !ollamaWarned) {
+        ollamaWarned = true;
+        notifyOrLog(ctx, OLLAMA_DOWN_MESSAGE, 'warning');
+      }
+    } catch (err) {
+      // Background work must never surface as a turn failure.
+      // eslint-disable-next-line no-console
+      console.error(
+        'engram-pi: background consolidation failed:',
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      consolidationInFlight = false;
+    }
+  })();
+}
+
+/** Resolve after `ms`, regardless of the raced promise. */
+function timeout(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const t = setTimeout(resolve, ms);
+    // Don't keep the process alive just for the flush timer.
+    if (typeof t.unref === 'function') t.unref();
+  });
+}
+
+/**
+ * session_shutdown flush: wait out any in-flight cycle, then run one final
+ * drain + reflect, all bounded by SHUTDOWN_FLUSH_TIMEOUT_MS so a wedged Ollama
+ * can't hang the agent's exit. Best-effort and silent (the UI is gone).
+ */
+async function flushOnShutdown(): Promise<void> {
+  if (!enginePromise) return;
+  await Promise.race([
+    (async () => {
+      if (pendingConsolidation) {
+        await pendingConsolidation.catch(() => undefined);
+      }
+      const engram = await enginePromise!;
+      const pending = engram.getQueueStats().pending;
+      await runConsolidation(
+        engram,
+        { extract: pending > 0, reflect: true },
+        schedulingConfig,
+      ).catch(() => undefined);
+    })(),
+    timeout(SHUTDOWN_FLUSH_TIMEOUT_MS),
+  ]);
 }
 
 function formatRecallResults(
@@ -194,7 +351,14 @@ export default function engramPiExtension(pi: ExtensionAPI): void {
   });
 
   pi.on('session_shutdown', async () => {
+    await flushOnShutdown();
     await closeEngram();
+  });
+
+  // Background consolidation cadence. The handler returns synchronously (void);
+  // the actual extract/reflect runs detached so the turn never blocks on Ollama.
+  pi.on('turn_end', (_event, ctx) => {
+    scheduleConsolidation(ctx);
   });
 
   pi.on('before_agent_start', (event) => {
