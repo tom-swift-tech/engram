@@ -1,9 +1,9 @@
 # Engram — Open Work
 
-> Phase 1 of both harness adapters shipped. This file tracks what's deferred.
-> Historical plans (the Pi adapter Phase 1 plan, the original library build plan) live in git history.
+> Both harness adapters shipped; the Pi adapter is now through most of Phase 2.
+> This file tracks what's deferred. Historical plans live in git history.
 
-## Status as of 2026-06-19
+## Status as of 2026-06-22
 
 - **AQL Rust binary (Phase 1)** — merged via PR #1. Read-only query surface (RECALL, SCAN, LOOKUP, LOAD, AGGREGATE, ORDER BY, WITH LINKS, FOLLOW LINKS). Subcommands: `query`, `repl`, `mcp`. Crate at `engram-aql/`.
 - **Pi.dev extension (Phase 1)** — merged via PR #2. Four slash commands (`/remember`, `/recall`, `/memory`, `/forget`) and four LLM tools (`engram_remember`, `engram_recall`, `engram_memory_stats`, `engram_forget`). Lives at `integrations/pi/`.
@@ -14,19 +14,24 @@
 - **Recall ordering follow-ups (2026-06-10, PR #5 follow-up)** — memory-type rank added as the middle lexicographic sort term (tier, memoryTypeRank, score; `DEFAULT_MEMORY_TYPE_RANK`, `RecallOptions.memoryTypeRank`). Positional-read audit of the transports found one latent bug: Pi adapter `findToForget` read tier-major `results[0]` as best-relevance, preferentially nominating user directives for deletion — fixed to over-fetch and re-sort by score. Result-ordering contract documented in README + `RecallResponse.results`.
 - **Pi.dev extension — working-memory session bridge (2026-06-16)** — shipped. Adds `/session` slash command, three LLM tools (`engram_session_resume`, `engram_session_update`, `engram_session_snapshot`) wrapping the working-memory primitives, and a `before_agent_start` system-prompt addendum nudging the agent toward Engram. Closes the Phase 2 `engram_session` ↔ Pi session persistence item. Spec: `docs/superpowers/specs/2026-05-13-engram-pi-session-bridge-design.md`; plan: `docs/superpowers/plans/2026-05-13-engram-pi-session-bridge.md`.
 - **Node 24 support (2026-06-19)** — merged via PR #8. Bumped `better-sqlite3` `9.4.3` → `12.11.1`, which ships prebuilds for Node 20/22/24 (the old pin had no Node 24 prebuild and failed from-source on Windows). No source changes — the API Engram uses is unchanged across 9→12. CI now runs a `[20, 24]` matrix. `delete_branch_on_merge` enabled on the repo the same day.
-- **Main suite:** 370 tests across 21 files, green on Node 20 and Node 24. The 2 AQL cross-process suites (`aql-equivalence`, `aql-e2e-process`, 23 tests) need `cargo` and pass when it's present. Format + lint clean.
-- **Pi extension suite:** 45 tests across 4 files, green (run via `cd integrations/pi && npx vitest run`).
+- **Pi background consolidation (2026-06-19)** — merged via PR #10. Turn-based extract/reflect scheduling off `turn_end` (every 3 turns drain queue if pending; every 12 turns reflect) + a time-bounded `session_shutdown` flush. Fire-and-forget, overlap-guarded; warns once if Ollama is unreachable. Tunable via `ENGRAM_PI_EXTRACT_EVERY_TURNS` / `ENGRAM_PI_REFLECT_EVERY_TURNS` / `ENGRAM_PI_EXTRACT_BATCH`.
+- **CI covers `integrations/pi` (2026-06-19)** — merged via PR #11. The `check` job now installs/typechecks/builds/tests the Pi extension after the root build, on the `[20, 24]` matrix. Previously the Pi suite ran locally-only.
+- **Pi auto-retain (2026-06-22)** — merged via PR #12. Captures conversation messages as `experience` chunks off `message_end` (on by default; `ENGRAM_PI_AUTO_RETAIN=0` disables). All conversational roles captured; tool/bash output stored at the lowest trust tier so it can't outrank user directives. Gated (min length, skip `/commands`, truncate over `maxChars`, normalized dedup). Tunable via `ENGRAM_PI_AUTO_RETAIN_MIN_CHARS` / `ENGRAM_PI_AUTO_RETAIN_MAX_CHARS`.
+- **Main suite:** 370 tests across 21 files, green on Node 20 and Node 24. The 2 AQL cross-process suites (`aql-equivalence`, `aql-e2e-process`) need `cargo` and pass when it's present. Format + lint clean.
+- **Pi extension suite:** 74 tests across 6 files, green and CI-gated on Node 20 and 24 (run locally via `cd integrations/pi && npx vitest run`).
 
 ---
 
 ## Next session — start here
 
-Phase 1 across all three transports is shipped and the CLI + packaging just landed, so the highest-leverage next step is **proving the CLI loop end-to-end**, then picking up Pi Phase 2:
+The Pi adapter's big auto-behaviors (session bridge, consolidation, auto-retain) are all in and CI-gated. Remaining open work, roughly by leverage:
 
-1. **Validate the `engram` CLI skill against a live Pi agent** (Pi adapter section below) — the contracts are unit-tested but the real shell-out/stdin/exit-code loop hasn't run against an agent yet. This closes the loop on the work just shipped.
-2. **Reflect/extract scheduling from Pi** — the next substantive Pi Phase 2 feature; everything downstream (auto-retain, session mapping) benefits from settling the cadence/Ollama-availability questions first.
+1. **Validate against a live Pi agent** — the lifecycle behaviors (auto-retain on `message_end`, consolidation on `turn_end`, the `engram` CLI shell-out loop) are unit/smoke-tested but haven't run against a real running Pi agent end-to-end. This is the main confidence gap; needs a live Pi runtime.
+2. **AQL Phase 2 — write statements** (`engram-aql`): the largest remaining lift; design challenge is coordinating Rust-side writes with the TS retain pipeline (embeddings + extraction queue). See the AQL section below.
+3. **Pi packaging** — make `engram-pi` `pi install`-able (npm publish vs git-ref; swap the `file:../..` engram dep for a version range).
+4. **Pi memory-inspector UI widget** (`ctx.ui.custom()`) — nice-to-have.
 
-Environment note for whoever picks this up: the suite now runs on **Node 20 or 24** (see the 2026-06-19 status bullet) — a plain `npm ci` fetches the right `better-sqlite3` prebuild for either. A `cargo` toolchain is still needed for the 2 AQL cross-process suites.
+Environment note: the suite runs on **Node 20 or 24** — a plain `npm ci` fetches the right `better-sqlite3` prebuild for either. A `cargo` toolchain is still needed for the 2 AQL cross-process suites.
 
 ---
 

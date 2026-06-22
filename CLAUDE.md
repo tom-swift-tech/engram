@@ -152,7 +152,7 @@ engram/
 │   ├── mcp-server.ts            ← standalone MCP stdio server (engram-mcp bin)
 │   ├── cli.ts                   ← `engram` CLI: one subcommand per MCP tool, --json contract for Pi (engram bin)
 │   └── cli-args.ts              ← CLI argv parser + Engram.open option-builder + shared validation/clamp helpers
-├── tests/                        ← 17 suites (369 tests repo-wide via npm test; +67 from tools/openclaw-import)
+├── tests/                        ← TS suites incl. aql-* cross-process (370 tests via npm test; +74 from integrations/pi, +67 from tools/openclaw-import)
 │   ├── helpers.ts
 │   ├── retain.test.ts
 │   ├── retain-gate.test.ts
@@ -167,7 +167,10 @@ engram/
 │   ├── local-embedder.test.ts
 │   ├── agent-integration.test.ts
 │   ├── mcp-server.test.ts
-│   └── cli.test.ts               ← engram CLI: per-subcommand happy path, --json contract, stdin, exit codes (21 tests)
+│   ├── cli.test.ts               ← engram CLI: per-subcommand happy path, --json contract, stdin, exit codes (21 tests)
+│   ├── aql-schema.test.ts         ← AQL schema/parse checks
+│   ├── aql-equivalence.test.ts    ← L2: AQL results match TS recall/scan/load semantics
+│   └── aql-e2e-process.test.ts    ← L3: cross-process WAL handoff (spawns the Rust binary; needs cargo)
 ├── docs/
 │   ├── OPENCLAW-INTEGRATION.md   ← OpenClaw memory plugin setup guide
 │   └── PI-INTEGRATION.md         ← Pi.dev (pi-mono) extension setup guide
@@ -178,8 +181,8 @@ engram/
 │       ├── src/
 │       │   ├── index.ts          ← Pi binding: registers commands + LLM tools, lifecycle
 │       │   ├── adapter.ts        ← pure logic: takes Engram, returns plain objects
-│       │   └── types.ts          ← typebox schemas for the four LLM tools
-│       └── tests/                ← 16 tests (adapter against real Engram + smoke registrations)
+│       │   └── types.ts          ← typebox schemas for the seven LLM tools (core + session)
+│       └── tests/                ← 74 tests (adapter, scheduling, auto-retain, session-bridge, smoke + built-dist)
 ├── skills/
 │   ├── engram.md                  ← portable agent skill (covers all 8 MCP tools)
 │   ├── engram-session.md          ← working memory session skill
@@ -198,6 +201,10 @@ engram/
 │           ├── mapping.ts         ← category → memory type + trust score mapping
 │           ├── types.ts           ← shared interfaces
 │           └── tests/             ← 67 unit tests (classify/parser/mapping/dates)
+├── engram-aql/                   ← companion Rust crate (merged, PR #1): AQL read surface over the shared .engram
+│   ├── Cargo.toml
+│   ├── src/                       ← executor, memory_map, schema, result, error; mcp/, statements/, subcommand/, sql/
+│   └── tests/                     ← L1 Rust integration tests (recall/scan/lookup/load/aggregate/graph/pipeline/mcp_roundtrip)
 └── examples/
     └── basic-usage.ts
 ```
@@ -263,14 +270,19 @@ External `memory-engram` plugin in the OpenClaw workspace, consumed via `mcporte
 - Migration CLI: `tools/openclaw-import/` (one-shot bulk-load of OpenClaw markdown into `.engram`)
 - Known: ~10s latency from mcporter cold-start (fix: daemon mode or direct import)
 
-### Pi.dev (`pi-mono`, Phase 1)
+### Pi.dev (`pi-mono`)
 
-In-repo extension at `integrations/pi/`, loaded by Pi via Node.js + `jiti` (in-process, millisecond-latency). Exposes four slash commands (`/remember`, `/recall`, `/memory`, `/forget`) and four LLM tools (`engram_remember`, `engram_recall`, `engram_memory_stats`, `engram_forget`). Project-local DB at `.engram/pi.db`. See `docs/PI-INTEGRATION.md`.
+In-repo extension at `integrations/pi/`, loaded by Pi via Node.js + `jiti` (in-process, millisecond-latency). Project-local DB at `.engram/pi.db`. See `docs/PI-INTEGRATION.md`.
 
-- Adapter is pure (`integrations/pi/src/adapter.ts`); Pi binding (`index.ts`) registers commands/tools and handles lifecycle
-- Lifecycle hooks used: `session_start` (lazy DB open), `session_shutdown` (close)
-- 16 tests against real in-memory Engram + fake Pi API
-- Phase 2 deferred: reflection scheduling, auto-retain on `tool_call`/`message_end`, `engram_session` mapping to Pi's session persistence
+Surface: five slash commands (`/remember`, `/recall`, `/memory`, `/forget`, `/session`) and seven LLM tools (`engram_remember`, `engram_recall`, `engram_memory_stats`, `engram_forget`, `engram_session_resume`, `engram_session_update`, `engram_session_snapshot`).
+
+- Adapter is pure (`integrations/pi/src/adapter.ts`); Pi binding (`index.ts`) registers commands/tools and owns lifecycle + transient state
+- Lifecycle hooks: `session_start` (lazy DB open), `before_agent_start` (system-prompt addendum nudging memory use), `turn_end` (background extract/reflect scheduling), `message_end` (auto-retain), `session_shutdown` (flush + close)
+- **Working-memory session bridge:** `engram_session_*` tools wrap infer/update/snapshot of working sessions across turns; a transient `currentSessionId` backs the `/session` command
+- **Background consolidation:** every few turns drains the extraction queue / runs reflection, fire-and-forget so a turn never blocks on Ollama; warns once per session if Ollama is unreachable. Tunable via `ENGRAM_PI_EXTRACT_EVERY_TURNS` / `ENGRAM_PI_REFLECT_EVERY_TURNS` / `ENGRAM_PI_EXTRACT_BATCH`
+- **Auto-retain:** captures conversation messages as `experience` chunks off `message_end` (on by default; `ENGRAM_PI_AUTO_RETAIN=0` disables). Tool/bash output is stored at the lowest trust tier (`tool_result`) so it can never outrank a user directive at recall
+- 74 tests (pure adapter + binding lifecycle + built-dist smoke), gated in CI on Node 20 and 24
+- Deferred: memory-inspector UI widget (`ctx.ui.custom()`); `pi install`-able packaging
 
 ## Integration with valor-engine
 
@@ -299,19 +311,18 @@ const context = await myAgentMemory.recall(userMessage, { topK: 10 });
 const systemPrompt = buildPromptWithMemory(basePrompt, context);
 ```
 
-## Active Development — engram-aql (Rust)
+## engram-aql (Rust) — merged
 
-A second crate, `engram-aql`, lives on the `feat/engram-aql-rust` branch (not yet merged to main). It is a separate Rust process that shares the `.engram` SQLite file with TypeScript Engram via WAL: TS owns writes (retain, embedding, extraction, reflection); the Rust binary owns the AQL declarative read surface (`RECALL`, `SCAN`, `LOOKUP`, `LOAD`, `AGGREGATE`, `ORDER BY`, `WITH LINKS`, `FOLLOW LINKS`). Phase 1 is read-only — write statements (`STORE`, `UPDATE`, `FORGET`, `LINK`, `REFLECT`) are rejected at dispatch with a pointer to the existing TS MCP tools.
+A companion crate, `engram-aql/`, ships in this repo (merged via PR #1). It is a separate Rust process that shares the `.engram` SQLite file with TypeScript Engram via WAL: TS owns writes (retain, embedding, extraction, reflection); the Rust binary owns the AQL declarative read surface (`RECALL`, `SCAN`, `LOOKUP`, `LOAD`, `AGGREGATE`, `ORDER BY`, `WITH LINKS`, `FOLLOW LINKS`, `PIPELINE`). Phase 1 is read-only — write statements (`STORE`, `UPDATE`, `FORGET`, `LINK`, `REFLECT`) are rejected at dispatch with a pointer to the existing TS MCP tools.
 
 **Where to look:**
-- Worktree: `G:/Projects/SIT/engram-rs/` (branch `feat/engram-aql-rust`)
-- Crate: `engram-rs/engram-aql/` — `src/{executor,memory_map,schema,mcp,statements,subcommand}.rs`
+- Crate: `engram-aql/` — `src/{executor,memory_map,schema,result,error,lib,main}.rs` plus `src/{mcp,statements,subcommand,sql}/`
 - Subcommands: `engram-aql query <db> '<aql>'` (one-shot JSON), `engram-aql repl <db>` (interactive), `engram-aql mcp <db>` (stdio MCP server exposing `engram_aql` tool)
-- Test layers: L1 Rust integration tests in `engram-aql/tests/` (recall/scan/lookup/load/aggregate/graph/pipeline/write_rejection), L2 semantic equivalence + L3 cross-process suites in TS (`engram-rs/tests/aql-*.test.ts`) — these validate the cross-process WAL handoff against TS-created `.engram` files
-- Spec: `docs/superpowers/specs/2026-04-12-engram-aql-rust-binary-design.md` (supersedes the abandoned WASM-bridge approach)
-- Plan: `docs/superpowers/plans/2026-04-11-aql-engram-integration.md`
+- Tests: L1 Rust integration tests in `engram-aql/tests/` (recall/scan/lookup/load/aggregate/graph/pipeline/mcp_roundtrip); L2 semantic-equivalence + L3 cross-process suites in TS (`tests/aql-*.test.ts`) validate the cross-process WAL handoff against TS-created `.engram` files. The L3 suite spawns the Rust binary, so the AQL tests need `cargo` present (they're skipped/failing without it).
+- Spec: `docs/superpowers/specs/2026-04-12-engram-aql-rust-binary-design.md`
+- Plan: `docs/superpowers/plans/2026-04-12-engram-aql-rust-binary.md`
 
-**Working on AQL:** switch to the `engram-rs` worktree (`cd G:/Projects/SIT/engram-rs`) — the main worktree here is TypeScript-only.
+**Phase 2 (deferred, see `tasks/todo.md`):** write statements (must coordinate with the TS retain pipeline — embeddings + extraction queue) and query-side vector similarity (`LIKE $var` / `PATTERN $var`).
 
 ## Git
 
