@@ -63,9 +63,12 @@ Environment note: the suite runs on **Node 20 or 24** — a plain `npm ci` fetch
 
 ## Phase 2 — AQL Rust binary
 
-- [ ] **Write statements** — `STORE`, `UPDATE`, `FORGET`, `LINK` currently rejected at dispatch. Design challenge: writes need to coordinate with TS Engram's retain pipeline (embeddings, extraction queue). Options: (a) AQL writes call into TS via MCP, (b) AQL writes shell out to `engram-mcp`, (c) duplicate the retain pipeline in Rust (no — defeats the purpose).
+> **Design decided 2026-06-24** — `docs/superpowers/specs/2026-06-24-engram-aql-writes-and-vector-search-design.md`.
+> Decision: Rust stays DB-read-only; it lazily spawns a warm `engram-mcp` (TS) child and speaks MCP/JSON-RPC for the one thing it can't do itself — query embedding (`engram_embed`) and writes (delegate to existing `engram_retain`/`_supersede`/`_forget`). Vector search runs in Rust via a **native `vec_distance_cosine` scalar fn** (no `sqlite-vec` dep, no `vec0` virtual table — TS stores plain LE-f32 BLOBs). Embedding-compatibility (same `nomic-embed-text-v1.5` + query/document prefixes) is the constraint that forces the TS bridge.
 
-- [ ] **Vector similarity search** — `LIKE $var`, `PATTERN $var` were deferred from Phase 1. Adding query-side embedding (without write-side) means either calling out to TS for the embedding or vendoring an ONNX/candle path in Rust. Probably the former for symmetry with AQL writes.
+- [ ] **Phase 2a — Vector similarity search (reads)** — build the bridge + `engram_embed` TS tool + native cosine fn, then wire `LIKE`/`PATTERN` (the `WhereResult::VectorSearchDeferred` seam in `recall.rs`/`load.rs`). Recommended first: higher value, no writes, proves the bridge. Task breakdown in the spec.
+
+- [ ] **Phase 2b — Write statements** — reuse the same bridge: `STORE`→`engram_retain`, `UPDATE`→`engram_supersede`, `FORGET`→`engram_forget`, `REFLECT`→`engram_reflect`; remove their `write_reject` arms. `LINK` deferred (no canonical TS surface for manual relations — see spec Open Questions).
 
 ## Process / hygiene
 
