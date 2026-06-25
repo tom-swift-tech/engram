@@ -15,10 +15,11 @@ WITH LINKS, FOLLOW LINKS.
 Both processes access the same `.engram` file simultaneously via SQLite
 WAL mode.
 
-**Reads + vector search.** Write statements (STORE, UPDATE, FORGET, LINK,
-REFLECT) return an error directing the agent to use TypeScript Engram's
-existing MCP tools (delegated writes are Phase 2b). Phase 2a adds semantic
-search — see [Vector search](#vector-search-like--pattern) below.
+**Reads, vector search, and delegated writes.** `STORE`/`UPDATE`/`FORGET`/
+`REFLECT` are delegated to the TypeScript retain pipeline over the bridge —
+Rust never writes the file itself (see [Writes](#writes) below). Only `LINK`
+is rejected (no canonical TS manual-relation surface yet). Semantic search is
+covered under [Vector search](#vector-search-like--pattern).
 
 ## Installation
 
@@ -111,6 +112,46 @@ The first string-variable query pays a one-time cold start (~3–5 s) while Node
 loads the embedding model; subsequent queries in the same process reuse the warm
 child. A native `vec_distance_cosine` scalar function (no `sqlite-vec`
 dependency) does the ranking in Rust over the shared file.
+
+## Writes
+
+`STORE`/`UPDATE`/`FORGET`/`REFLECT` mutate memory, but `engram-aql` keeps its
+own SQLite connection read-only. Each write is translated into a call to the
+canonical TypeScript retain pipeline over the same `engram-mcp` bridge used for
+embedding, so the full pipeline (dedup, embedding, FTS, extraction) runs exactly
+as a direct `engram_retain` would. The Rust process never writes the file
+itself; writes therefore need `engram-mcp` discoverable (see discovery order
+above).
+
+```bash
+# STORE → engram_retain. Payload fields map to retain options; unspecified
+# sourceType/trustScore inherit retain's defaults (inferred / 0.5).
+engram-aql query ./agent.engram \
+  'STORE INTO SEMANTIC (text = "Terraform manages cloud infra", source = "notes", trust_score = 0.9)'
+
+# UPDATE → engram_supersede (old chunk soft-deleted, replaced by new text)
+engram-aql query ./agent.engram \
+  'UPDATE INTO SEMANTIC WHERE id = "<chunk-id>" (text = "corrected fact")'
+
+# FORGET → engram_forget (soft-delete matched chunks)
+engram-aql query ./agent.engram 'FORGET FROM SEMANTIC WHERE id = "<chunk-id>"'
+
+# REFLECT → engram_reflect (global reflection cycle)
+engram-aql query ./agent.engram 'REFLECT FROM EPISODIC ALL'
+```
+
+Notes:
+
+- Writes target **chunk-backed memory only** (`SEMANTIC` → world, `EPISODIC` →
+  experience). `PROCEDURAL`/`WORKING`/`TOOLS` are rejected.
+- `UPDATE`/`FORGET` resolve their target ids with a read-only query first, then
+  delegate per id; matching zero rows succeeds with a warning.
+- `REFLECT` runs a global cycle — `source` filters and `THEN` clauses are not
+  yet honored (warns when present).
+- `LINK` is still rejected: relations are extraction-derived and there is no
+  canonical TS surface for authoring them manually.
+- After a delegated write, a subsequent `RECALL` on the same process sees the
+  change immediately (cross-process SQLite WAL visibility).
 
 ## Architecture
 

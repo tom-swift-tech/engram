@@ -283,17 +283,32 @@ describe('engram-aql cross-process end-to-end (L3)', () => {
     }
   });
 
-  // ---- Write rejection (subprocess path) ----
+  // ---- Write delegation + LINK rejection (subprocess path) ----
+  //
+  // As of Phase 2b, STORE/UPDATE/FORGET/REFLECT are delegated to the TS retain
+  // pipeline over the bridge (round-trips covered by the gated Rust suite
+  // engram-aql/tests/write_delegate.rs). Only LINK stays rejected, and writes
+  // validate their payload up front — both deterministic without engram-mcp.
 
-  it('STORE statement is rejected with helpful error through subprocess', async () => {
+  it('LINK is rejected with a helpful error through subprocess', async () => {
+    await seedAndClose();
+    const result = aqlQuery(
+      dbPath,
+      'LINK FROM EPISODIC WHERE id = "x" TO SEMANTIC WHERE id = "y" TYPE "uses"',
+    );
+    expect(result.success).toBe(false);
+    expect(result.statement).toBe('Link');
+    expect(result.error?.toLowerCase()).toMatch(/link|relation/);
+  });
+
+  it('STORE without a text field fails validation through subprocess', async () => {
     await seedAndClose();
     const result = aqlQuery(
       dbPath,
       'STORE INTO EPISODIC (event = "deploy", outcome = "success")',
     );
     expect(result.success).toBe(false);
-    expect(result.statement).toBe('Store');
-    expect(result.error).toContain('engram_retain');
+    expect(result.error).toContain('text');
   });
 
   // ---- Re-open + corruption check ----

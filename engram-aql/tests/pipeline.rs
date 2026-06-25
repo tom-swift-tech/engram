@@ -33,24 +33,25 @@ fn pipeline_single_stage_runs() {
 }
 
 #[test]
-fn pipeline_fails_fast_on_write_stage() {
+fn pipeline_fails_fast_on_stage_error() {
     let conn = common::seeded_db();
     let exec = Executor::from_connection(conn).unwrap();
-    // 3 stages: RECALL (works), REFLECT (grammar-valid but execution-rejected as
-    // a write in Phase 1), RECALL (must not run — verifies fail-fast).
-    // Note: STORE is rejected at parse time by the grammar (not a valid
-    // pipeline_stage), so we use REFLECT which IS grammar-valid but is
-    // rejected by write_reject at execution time.
+    // 3 stages: RECALL (works), RECALL LIKE $missing (deterministic execution
+    // error — the variable is unbound), RECALL (must not run — verifies
+    // fail-fast). An unbound LIKE variable fails in the handler without any
+    // bridge, so this is deterministic regardless of engram-mcp availability.
+    // (As of Phase 2b, write stages like REFLECT are delegated rather than
+    // rejected, so they are no longer a deterministic failure source.)
     let result = exec
         .query(
-            "PIPELINE test TIMEOUT 5s RECALL FROM EPISODIC ALL LIMIT 1 | REFLECT FROM EPISODIC ALL | RECALL FROM SEMANTIC ALL LIMIT 1",
+            "PIPELINE test TIMEOUT 5s RECALL FROM EPISODIC ALL LIMIT 1 | RECALL FROM SEMANTIC LIKE $missing | RECALL FROM SEMANTIC ALL LIMIT 1",
         )
         .unwrap();
     assert!(!result.success);
     assert!(result.error.is_some());
     let err = result.error.unwrap();
     assert!(
-        err.contains("stage 2") || err.contains("REFLECT") || err.contains("Reflect"),
+        err.contains("stage 2") || err.contains("missing") || err.contains("not bound"),
         "unexpected error: {}",
         err
     );
