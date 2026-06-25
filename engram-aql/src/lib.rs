@@ -1,5 +1,6 @@
 //! engram-aql — AQL query executor for Engram memory files
 
+pub mod bridge;
 pub mod error;
 pub mod executor;
 pub mod mcp;

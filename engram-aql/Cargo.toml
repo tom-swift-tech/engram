@@ -34,7 +34,7 @@ rustyline = "14"
 comfy-table = "7"
 
 # Async runtime for MCP stdio server
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "io-util", "sync"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "io-util", "sync", "process"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
