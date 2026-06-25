@@ -273,6 +273,39 @@ fn aggregate_with_like_returns_warning_empty() {
     );
 }
 
+/// `LIKE`/`PATTERN` on a non-chunks memory type (PROCEDURAL → observations,
+/// which has no embeddings) must warn + return empty rather than silently
+/// scanning the chunks table.
+#[test]
+fn like_on_non_chunks_memory_type_warns_empty() {
+    let conn = common::fresh_db();
+    seed_vector_chunks(&conn); // chunks exist, but PROCEDURAL must not return them
+    let exec = Executor::from_connection(conn).unwrap();
+
+    let mut vars: BTreeMap<String, Value> = BTreeMap::new();
+    vars.insert("q".to_string(), json!([1.0, 0.0, 0.0, 0.0]));
+
+    let result = exec
+        .query_with_vars("RECALL FROM PROCEDURAL LIKE $q", vars)
+        .unwrap();
+
+    assert!(result.success, "error: {:?}", result.error);
+    assert_eq!(
+        result.count, 0,
+        "PROCEDURAL LIKE must not leak chunks rows; got {}",
+        result.count
+    );
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w.contains("SEMANTIC/EPISODIC") || w.contains("no embeddings")
+                || w.contains("stores none")),
+        "should warn vector search is chunks-only; warnings: {:?}",
+        result.warnings
+    );
+}
+
 // ---------------------------------------------------------------------------
 // String-bound test (gated — requires engram-mcp)
 // ---------------------------------------------------------------------------

@@ -246,6 +246,22 @@ fn execute_vector(
 ) -> AqlResult<QueryResult> {
     let conn = ctx.conn;
 
+    // Vector search is only meaningful on the `chunks` table (the only table
+    // with an `embedding` column). SEMANTIC/EPISODIC map to chunks; ALL
+    // degrades to chunks (already warned above). PROCEDURAL (observations) and
+    // WORKING (working_memory) have no embeddings — warn + return empty rather
+    // than silently scanning chunks for a non-chunks memory type.
+    if !matches!(table, EngramTable::Chunks | EngramTable::All) {
+        warnings.push(format!(
+            "LIKE/PATTERN vector search is only supported on SEMANTIC/EPISODIC memory \
+             (the chunks table has embeddings); {} stores none. No results returned.",
+            table.as_sql_name()
+        ));
+        let mut result = QueryResult::success("Recall", Vec::new());
+        result.warnings = warnings;
+        return Ok(result);
+    }
+
     // Modifier warnings (non-fatal)
     warnings.extend(collect_modifier_warnings(&stmt.modifiers));
 
