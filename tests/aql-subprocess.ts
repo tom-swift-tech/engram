@@ -88,9 +88,18 @@ export function ensureAqlBinary(): string {
  * caller to inspect. Throws only on infrastructure failures (missing binary,
  * empty stdout, invalid JSON).
  */
-export function aqlQuery(dbPath: string, query: string): AqlResult {
+export function aqlQuery(
+  dbPath: string,
+  query: string,
+  vars?: Record<string, unknown>,
+): AqlResult {
   const binary = ensureAqlBinary();
-  const result = spawnSync(binary, ['query', dbPath, query], {
+  // Each var becomes a repeated `--var NAME=VALUE`; VALUE is JSON-encoded so
+  // arrays bind as precomputed probes and strings stay strings.
+  const varArgs = vars
+    ? Object.entries(vars).flatMap(([k, v]) => ['--var', `${k}=${JSON.stringify(v)}`])
+    : [];
+  const result = spawnSync(binary, ['query', dbPath, query, ...varArgs], {
     encoding: 'utf-8',
     stdio: 'pipe',
   });
