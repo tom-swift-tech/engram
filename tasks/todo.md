@@ -64,6 +64,7 @@ Environment note: the suite runs on **Node 20 or 24** — a plain `npm ci` fetch
 ## Phase 2 — AQL Rust binary
 
 > **Design decided 2026-06-24** — `docs/superpowers/specs/2026-06-24-engram-aql-writes-and-vector-search-design.md`.
+> **Implementation plan (2026-06-25)** — `docs/superpowers/plans/2026-06-24-engram-aql-writes-and-vector-search.md` (TDD task breakdown; 2a vector reads first, then 2b writes).
 > Decision: Rust stays DB-read-only; it lazily spawns a warm `engram-mcp` (TS) child and speaks MCP/JSON-RPC for the one thing it can't do itself — query embedding (`engram_embed`) and writes (delegate to existing `engram_retain`/`_supersede`/`_forget`). Vector search runs in Rust via a **native `vec_distance_cosine` scalar fn** (no `sqlite-vec` dep, no `vec0` virtual table — TS stores plain LE-f32 BLOBs). Embedding-compatibility (same `nomic-embed-text-v1.5` + query/document prefixes) is the constraint that forces the TS bridge.
 
 - [ ] **Phase 2a — Vector similarity search (reads)** — build the bridge + `engram_embed` TS tool + native cosine fn, then wire `LIKE`/`PATTERN` (the `WhereResult::VectorSearchDeferred` seam in `recall.rs`/`load.rs`). Recommended first: higher value, no writes, proves the bridge. Task breakdown in the spec.
@@ -82,5 +83,7 @@ Environment note: the suite runs on **Node 20 or 24** — a plain `npm ci` fetch
 - Pi extension reference (slash commands + LLM tools): `docs/PI-INTEGRATION.md`
 - OpenClaw integration (external plugin + migration CLI): `docs/OPENCLAW-INTEGRATION.md`
 - Adapter map: `integrations/README.md`
-- AQL design (current): `docs/superpowers/specs/2026-04-12-engram-aql-rust-binary-design.md`
-- AQL implementation plan: `docs/superpowers/plans/2026-04-12-engram-aql-rust-binary.md`
+- AQL design (Phase 1): `docs/superpowers/specs/2026-04-12-engram-aql-rust-binary-design.md`
+- AQL implementation plan (Phase 1): `docs/superpowers/plans/2026-04-12-engram-aql-rust-binary.md`
+- AQL design (Phase 2 — writes + vector): `docs/superpowers/specs/2026-06-24-engram-aql-writes-and-vector-search-design.md`
+- AQL implementation plan (Phase 2 — writes + vector): `docs/superpowers/plans/2026-06-24-engram-aql-writes-and-vector-search.md`
