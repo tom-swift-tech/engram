@@ -18,7 +18,7 @@ use super::client::JsonRpcClient;
 /// }
 /// ```
 /// We unwrap the `content[0].text` inner JSON to reach `embedding`.
-pub async fn embed_query(client: &mut JsonRpcClient, text: &str) -> AqlResult<Vec<f32>> {
+pub fn embed_query(client: &mut JsonRpcClient, text: &str) -> AqlResult<Vec<f32>> {
     let params = json!({
         "name": "engram_embed",
         "arguments": {
@@ -27,7 +27,7 @@ pub async fn embed_query(client: &mut JsonRpcClient, text: &str) -> AqlResult<Ve
         }
     });
 
-    let result = client.call("tools/call", params).await?;
+    let result = client.call("tools/call", params)?;
 
     parse_embed_result(&result)
 }

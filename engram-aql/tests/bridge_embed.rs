@@ -32,8 +32,8 @@ fn make_temp_engram() -> NamedTempFile {
     file
 }
 
-#[tokio::test]
-async fn bridge_embed_query_returns_768_finite_floats() {
+#[test]
+fn bridge_embed_query_returns_768_finite_floats() {
     // ── gate ────────────────────────────────────────────────────────────────
     let cmd = resolve_engram_mcp_cmd(None);
     if cmd.is_none() {
@@ -49,14 +49,11 @@ async fn bridge_embed_query_returns_768_finite_floats() {
     let db_file = make_temp_engram();
     let db_path = db_file.path();
 
-    let mut bridge = Bridge::new(cmd, db_path)
-        .await
-        .expect("bridge should start");
+    let mut bridge = Bridge::new(cmd, db_path).expect("bridge should start");
 
     // ── embed: "deploy pipeline" ─────────────────────────────────────────────
     let vec1 = bridge
         .embed_query("deploy pipeline")
-        .await
         .expect("embed_query should succeed");
 
     assert_eq!(
@@ -73,7 +70,6 @@ async fn bridge_embed_query_returns_768_finite_floats() {
     // ── embed: different text yields a different vector ───────────────────────
     let vec2 = bridge
         .embed_query("completely unrelated topic about cooking")
-        .await
         .expect("second embed_query should succeed");
 
     assert_eq!(vec2.len(), 768);

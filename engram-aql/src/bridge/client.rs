@@ -2,11 +2,13 @@
 //!
 //! Protocol: line-delimited JSON (`\n` framing, flush after each write).
 //! Single-threaded and sequential: one outstanding request at a time, which
-//! matches the `engram-mcp` server model.
+//! matches the `engram-mcp` server model. All I/O is synchronous so the
+//! client can be called from sync contexts (e.g. `Executor::query`).
+
+use std::io::{BufRead, BufReader, Write};
+use std::process::{ChildStdin, ChildStdout};
 
 use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{ChildStdin, ChildStdout};
 
 use crate::error::{AqlError, AqlResult};
 use crate::mcp::protocol::{ClientRequest, ClientResponse};
@@ -21,10 +23,10 @@ pub struct JsonRpcClient {
 }
 
 impl JsonRpcClient {
-    pub fn new(stdin: ChildStdin, stdout: ChildStdout) -> Self {
+    pub fn new(stdin: ChildStdin, stdout: BufReader<ChildStdout>) -> Self {
         Self {
             stdin,
-            stdout: BufReader::new(stdout),
+            stdout,
             next_id: 1,
             eof: false,
         }
@@ -37,26 +39,32 @@ impl JsonRpcClient {
         id
     }
 
+    /// Write a line to the child's stdin. Used by `child.rs` for notifications
+    /// (which have no response) and internally for request framing.
+    pub fn write_line(&mut self, line: &str) -> std::io::Result<()> {
+        self.stdin.write_all(line.as_bytes())?;
+        self.stdin.write_all(b"\n")?;
+        self.stdin.flush()
+    }
+
     /// Send a JSON-RPC request and return the `result` value on success,
     /// or an `AqlError` if the response carries an `error` field or if I/O
     /// fails.
-    pub async fn call(&mut self, method: &str, params: Value) -> AqlResult<Value> {
+    pub fn call(&mut self, method: &str, params: Value) -> AqlResult<Value> {
         let id = self.next_id();
         let req = ClientRequest::new(id, method, params);
-        self.call_raw(req).await
+        self.call_raw(req)
     }
 
     /// Send a pre-built request and return the result value.
     ///
     /// Exposed to `child.rs` so the `initialize` call can reuse `next_id`.
-    pub async fn call_raw(&mut self, req: ClientRequest) -> AqlResult<Value> {
+    pub fn call_raw(&mut self, req: ClientRequest) -> AqlResult<Value> {
         let json = serde_json::to_string(&req)?;
-        self.stdin.write_all(json.as_bytes()).await?;
-        self.stdin.write_all(b"\n").await?;
-        self.stdin.flush().await?;
+        self.write_line(&json).map_err(AqlError::Io)?;
 
         let mut line = String::new();
-        let n = self.stdout.read_line(&mut line).await?;
+        let n = self.stdout.read_line(&mut line)?;
         if n == 0 {
             self.eof = true;
             return Err(AqlError::Io(std::io::Error::new(
@@ -80,20 +88,5 @@ impl JsonRpcClient {
                 "engram-mcp returned a response with neither result nor error".to_string(),
             )
         })
-    }
-
-    /// Send a JSON-RPC notification (no `id`, no response expected).
-    pub async fn notify(&mut self, method: &str, params: Value) -> AqlResult<()> {
-        // Notifications have no `id` field — use a plain inline struct.
-        let msg = serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": method,
-            "params": params
-        });
-        let json = serde_json::to_string(&msg)?;
-        self.stdin.write_all(json.as_bytes()).await?;
-        self.stdin.write_all(b"\n").await?;
-        self.stdin.flush().await?;
-        Ok(())
     }
 }

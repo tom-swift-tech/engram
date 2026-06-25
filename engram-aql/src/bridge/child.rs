@@ -1,9 +1,10 @@
 //! `engram-mcp` child process lifecycle — discovery, spawn, and MCP initialize.
 
+use std::io::BufReader;
 use std::path::Path;
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use serde_json::json;
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
 use crate::error::{AqlError, AqlResult};
 use crate::mcp::protocol::ClientRequest;
@@ -12,9 +13,9 @@ use super::client::JsonRpcClient;
 
 /// Opaque handle keeping the child process alive.
 ///
-/// When this value drops, `tokio::process::Child::kill` is called
-/// asynchronously. Callers that want a clean shutdown can `drop` the bridge,
-/// which drops this handle.
+/// When this value drops, `kill()` is attempted so the `engram-mcp` Node
+/// process does not outlive the bridge. Best-effort — callers that want a
+/// clean shutdown should drop the bridge explicitly.
 pub struct ChildProcess {
     inner: Child,
 }
@@ -22,7 +23,7 @@ pub struct ChildProcess {
 impl Drop for ChildProcess {
     fn drop(&mut self) {
         // Best-effort: ignore error (process may have already exited).
-        let _ = self.inner.start_kill();
+        let _ = self.inner.kill();
     }
 }
 
@@ -93,20 +94,15 @@ fn which_on_path(name: &str) -> bool {
 /// handshake. Returns the child handle and a ready JSON-RPC client.
 ///
 /// `cmd` is `[program, ...leading_args]` without the db path. The db path is
-/// appended as the final argument before `Command::spawn`.
+/// appended as the final argument before spawn.
 ///
-/// On broken pipe / EOF during `initialize`, returns an error immediately (no
-/// respawn at this stage — respawn is handled by `JsonRpcClient::call`).
-pub async fn spawn(cmd: Vec<String>, db_path: &Path) -> AqlResult<(ChildProcess, JsonRpcClient)> {
-    let (child, client) = try_spawn(&cmd, db_path).await?;
-    Ok((child, client))
-}
-
-async fn try_spawn(cmd: &[String], db_path: &Path) -> AqlResult<(ChildProcess, JsonRpcClient)> {
+/// On broken pipe / EOF during `initialize`, returns an actionable error.
+pub fn spawn(cmd: Vec<String>, db_path: &Path) -> AqlResult<(ChildProcess, JsonRpcClient)> {
     if cmd.is_empty() {
         return Err(AqlError::Io(std::io::Error::new(
             std::io::ErrorKind::NotFound,
-            "empty command",
+            "empty engram-mcp command — provide via (1) --engram-mcp-cmd, \
+             (2) ENGRAM_MCP_CMD env var, or (3) 'engram-mcp' on PATH",
         )));
     }
 
@@ -114,30 +110,27 @@ async fn try_spawn(cmd: &[String], db_path: &Path) -> AqlResult<(ChildProcess, J
     let leading_args = &cmd[1..];
     let db_str = db_path.to_string_lossy();
 
-    let mut command = Command::new(program);
-    command
+    let mut child = Command::new(program)
         .args(leading_args)
         .arg(db_str.as_ref())
         // Pipe stdin/stdout for JSON-RPC; inherit stderr so TS diagnostics
         // (e.g. "[engram-mcp] Serving ...") flow to the user's terminal.
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::inherit())
-        // Detach from controlling terminal on Unix to avoid SIGHUP propagation.
-        .kill_on_drop(true);
-
-    let mut child = command.spawn().map_err(|e| {
-        AqlError::Io(std::io::Error::new(
-            e.kind(),
-            format!(
-                "failed to spawn engram-mcp '{}': {}. \
-                 Provide the binary via (1) --engram-mcp-cmd <cmd>, \
-                 (2) ENGRAM_MCP_CMD env var (e.g. \"node /abs/path/dist/mcp-server.js\"), \
-                 or (3) ensure 'engram-mcp' is on PATH.",
-                program, e
-            ),
-        ))
-    })?;
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .map_err(|e| {
+            AqlError::Io(std::io::Error::new(
+                e.kind(),
+                format!(
+                    "failed to spawn engram-mcp '{}': {}. \
+                     Provide the binary via (1) --engram-mcp-cmd <cmd>, \
+                     (2) ENGRAM_MCP_CMD env var (e.g. \"node /abs/path/dist/mcp-server.js\"), \
+                     or (3) ensure 'engram-mcp' is on PATH.",
+                    program, e
+                ),
+            ))
+        })?;
 
     let stdin: ChildStdin = child.stdin.take().ok_or_else(|| {
         AqlError::Io(std::io::Error::new(
@@ -152,7 +145,7 @@ async fn try_spawn(cmd: &[String], db_path: &Path) -> AqlResult<(ChildProcess, J
         ))
     })?;
 
-    let mut client = JsonRpcClient::new(stdin, stdout);
+    let mut client = JsonRpcClient::new(stdin, BufReader::new(stdout));
 
     // MCP initialize handshake — must complete before the bridge is usable.
     let init_params = json!({
@@ -164,7 +157,7 @@ async fn try_spawn(cmd: &[String], db_path: &Path) -> AqlResult<(ChildProcess, J
         }
     });
     let init_req = ClientRequest::new(client.next_id(), "initialize", init_params);
-    let _init_result = client.call_raw(init_req).await.map_err(|e| {
+    client.call_raw(init_req).map_err(|e| {
         AqlError::Io(std::io::Error::new(
             std::io::ErrorKind::ConnectionRefused,
             format!("engram-mcp initialize failed: {}", e),
@@ -172,9 +165,13 @@ async fn try_spawn(cmd: &[String], db_path: &Path) -> AqlResult<(ChildProcess, J
     })?;
 
     // Send `notifications/initialized` (no response expected).
-    client
-        .notify("notifications/initialized", json!({}))
-        .await?;
+    let notif = json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/initialized",
+        "params": {}
+    });
+    let notif_json = serde_json::to_string(&notif)?;
+    client.write_line(&notif_json).map_err(AqlError::Io)?;
 
     Ok((ChildProcess { inner: child }, client))
 }

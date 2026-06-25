@@ -1,9 +1,10 @@
 //! `engram-mcp` JSON-RPC stdio bridge.
 //!
-//! Lazily spawns an `engram-mcp` (TypeScript) child process and exposes a
-//! thin `embed_query` helper over it. The bridge is single-threaded and
-//! sequential — one outstanding request at a time, which matches the server
-//! model in `mcp/mod.rs`.
+//! Spawns an `engram-mcp` (TypeScript) child process and exposes a thin
+//! `embed_query` helper over it. The bridge is single-threaded, sequential,
+//! and fully synchronous — `embed_query` blocks until the child responds,
+//! which lets it be called directly from sync `Executor::query` paths without
+//! any `block_on` shim.
 //!
 //! Discovery order for the `engram-mcp` binary:
 //!   1. Explicit command passed at construction (plumbed from `--engram-mcp-cmd`).
@@ -35,8 +36,8 @@ impl Bridge {
     ///
     /// `cmd` is the resolved command (program + args without the db path).
     /// The db path is appended as the final argument before spawn.
-    pub async fn new(cmd: Vec<String>, db_path: &Path) -> AqlResult<Self> {
-        let (child, client) = child::spawn(cmd, db_path).await?;
+    pub fn new(cmd: Vec<String>, db_path: &Path) -> AqlResult<Self> {
+        let (child, client) = child::spawn(cmd, db_path)?;
         Ok(Self {
             client,
             _child: child,
@@ -44,7 +45,7 @@ impl Bridge {
     }
 
     /// Embed `text` in query mode by calling `engram_embed` on the child.
-    pub async fn embed_query(&mut self, text: &str) -> AqlResult<Vec<f32>> {
-        embed::embed_query(&mut self.client, text).await
+    pub fn embed_query(&mut self, text: &str) -> AqlResult<Vec<f32>> {
+        embed::embed_query(&mut self.client, text)
     }
 }
