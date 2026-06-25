@@ -68,6 +68,12 @@ export interface RetainResult {
 export interface EmbeddingProvider {
   embed(text: string): Promise<Float32Array>;
   readonly dimensions: number;
+  /**
+   * Embed text in query mode (e.g. applies a query prefix for asymmetric models
+   * like nomic-embed-text). Optional — providers that don't distinguish
+   * query vs. document fall back to embed() in embedForMode().
+   */
+  embedQuery?(text: string): Promise<Float32Array>;
 }
 
 export { LocalEmbedder } from './local-embedder.js';

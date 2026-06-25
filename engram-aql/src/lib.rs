@@ -1,6 +1,8 @@
 //! engram-aql — AQL query executor for Engram memory files
 
+pub mod bridge;
 pub mod error;
+pub mod exec_ctx;
 pub mod executor;
 pub mod mcp;
 pub mod memory_map;
@@ -9,6 +11,7 @@ pub mod schema;
 pub mod sql;
 pub mod statements;
 pub mod subcommand;
+pub mod vector;
 
 pub use error::{AqlError, AqlResult, SchemaError};
 pub use executor::Executor;

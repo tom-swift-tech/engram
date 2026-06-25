@@ -32,9 +32,12 @@ pub fn execute(conn: &Connection, stmt: &LoadStmt) -> AqlResult<QueryResult> {
         }
         Predicate::Like { .. } | Predicate::Pattern { .. } => {
             let mut result = QueryResult::success("Load", Vec::new());
-            result
-                .warnings
-                .push("LIKE/PATTERN on TOOLS deferred to Phase 2".into());
+            result.warnings.push(
+                "LIKE/PATTERN vector search is not supported on TOOLS: the tools table stores \
+                 no embeddings. Rank tools with LOAD FROM TOOLS WHERE ... ORDER BY ranking, \
+                 or use RECALL FROM SEMANTIC/EPISODIC LIKE $var for semantic search."
+                    .into(),
+            );
             return Ok(result);
         }
     }

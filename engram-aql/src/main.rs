@@ -18,6 +18,12 @@ enum Command {
         db_path: std::path::PathBuf,
         /// AQL query string
         query: String,
+        /// Bind a variable for LIKE $name / PATTERN $name (repeatable).
+        /// VALUE is parsed as JSON, falling back to a plain string:
+        ///   --var q=hello            → string "hello" (embedded server-side)
+        ///   --var q='[0.1,0.2,0.3]'  → precomputed embedding probe
+        #[arg(long = "var", value_name = "NAME=VALUE")]
+        vars: Vec<String>,
     },
 
     /// Open an interactive REPL for ad-hoc queries
@@ -46,8 +52,12 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Query { db_path, query } => {
-            let success = engram_aql::subcommand::query::run(&db_path, &query)?;
+        Command::Query {
+            db_path,
+            query,
+            vars,
+        } => {
+            let success = engram_aql::subcommand::query::run(&db_path, &query, &vars)?;
             if !success {
                 std::process::exit(1);
             }

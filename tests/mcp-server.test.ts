@@ -10,6 +10,34 @@ import { Engram } from '../src/engram.js';
 import { ENGRAM_TOOLS, createEngramToolHandler } from '../src/mcp-tools.js';
 import type { EngramToolName } from '../src/mcp-tools.js';
 import { MockEmbedder, tmpDbPath, cleanupDb } from './helpers.js';
+import type { EmbeddingProvider } from '../src/retain.js';
+
+// ---------------------------------------------------------------------------
+// MockEmbedderWithQuery — 768-dim mock that implements embedQuery with a
+// distinct document prefix so query vs document produce different vectors.
+// Avoids any model download while validating the prefix path is wired up.
+// ---------------------------------------------------------------------------
+
+class MockEmbedderWithQuery implements EmbeddingProvider {
+  readonly dimensions = 768;
+
+  async embed(text: string): Promise<Float32Array> {
+    return this._vectorize('doc:' + text);
+  }
+
+  async embedQuery(text: string): Promise<Float32Array> {
+    return this._vectorize('qry:' + text);
+  }
+
+  private _vectorize(text: string): Float32Array {
+    const vec = new Float32Array(this.dimensions);
+    for (let i = 0; i < text.length; i++) {
+      vec[i % this.dimensions] += text.charCodeAt(i) / 256;
+    }
+    const mag = Math.sqrt(vec.reduce((s, v) => s + v * v, 0));
+    return mag > 0 ? new Float32Array(vec.map((v) => v / mag)) : vec;
+  }
+}
 
 describe('MCP Server', () => {
   let engram: Engram;
@@ -63,9 +91,9 @@ describe('MCP Server', () => {
     cleanupDb(dbPath);
   });
 
-  it('ListTools returns all 8 tool schemas', async () => {
+  it('ListTools returns all 9 tool schemas', async () => {
     const result = await client.listTools();
-    expect(result.tools.length).toBe(8);
+    expect(result.tools.length).toBe(9);
     const names = result.tools.map((t) => t.name);
     expect(names).toContain('engram_retain');
     expect(names).toContain('engram_recall');
@@ -75,6 +103,7 @@ describe('MCP Server', () => {
     expect(names).toContain('engram_supersede');
     expect(names).toContain('engram_session');
     expect(names).toContain('engram_queue_stats');
+    expect(names).toContain('engram_embed');
   });
 
   it('engram_retain stores a chunk and returns a chunkId', async () => {
@@ -253,5 +282,153 @@ describe('MCP Server', () => {
     expect(result.isError).toBe(true);
     const content = result.content as Array<{ type: string; text: string }>;
     expect(content[0].text).toContain('query');
+  });
+});
+
+// =============================================================================
+// engram_embed tool
+// =============================================================================
+
+describe('engram_embed MCP tool', () => {
+  let engram: Engram;
+  let client: Client;
+  let server: Server;
+  let dbPath: string;
+
+  beforeAll(async () => {
+    dbPath = tmpDbPath();
+    engram = await Engram.create(dbPath, {
+      embedder: new MockEmbedderWithQuery(),
+    });
+
+    const handleTool = createEngramToolHandler(engram);
+
+    server = new Server(
+      { name: 'engram', version: '0.1.0' },
+      { capabilities: { tools: {} } },
+    );
+
+    server.setRequestHandler(ListToolsRequestSchema, async () => ({
+      tools: ENGRAM_TOOLS.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        inputSchema: tool.inputSchema,
+      })),
+    }));
+
+    server.setRequestHandler(CallToolRequestSchema, async (request) => {
+      const { name, arguments: toolArgs } = request.params;
+      return handleTool(
+        name as EngramToolName,
+        (toolArgs ?? {}) as Record<string, unknown>,
+      );
+    });
+
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+
+    client = new Client(
+      { name: 'test-client', version: '1.0.0' },
+      { capabilities: {} },
+    );
+
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+  });
+
+  afterAll(async () => {
+    await client.close();
+    await server.close();
+    engram.close();
+    cleanupDb(dbPath);
+  });
+
+  it('ListTools includes engram_embed', async () => {
+    const result = await client.listTools();
+    const names = result.tools.map((t) => t.name);
+    expect(names).toContain('engram_embed');
+  });
+
+  it('returns dimensions matching the configured embedder (768)', async () => {
+    const result = await client.callTool({
+      name: 'engram_embed',
+      arguments: { text: 'deploy pipeline', mode: 'query' },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const content = result.content as Array<{ type: string; text: string }>;
+    const parsed = JSON.parse(content[0].text) as {
+      embedding: number[];
+      dimensions: number;
+    };
+    expect(parsed.dimensions).toBe(768);
+    expect(parsed.embedding.length).toBe(parsed.dimensions);
+  });
+
+  it('all embedding values are finite numbers', async () => {
+    const result = await client.callTool({
+      name: 'engram_embed',
+      arguments: { text: 'deploy pipeline', mode: 'query' },
+    });
+
+    const content = result.content as Array<{ type: string; text: string }>;
+    const parsed = JSON.parse(content[0].text) as {
+      embedding: number[];
+      dimensions: number;
+    };
+    for (const v of parsed.embedding) {
+      expect(Number.isFinite(v)).toBe(true);
+    }
+  });
+
+  it('mode=query and mode=document produce different vectors (prefix distinction)', async () => {
+    const queryResult = await client.callTool({
+      name: 'engram_embed',
+      arguments: { text: 'deploy pipeline', mode: 'query' },
+    });
+    const docResult = await client.callTool({
+      name: 'engram_embed',
+      arguments: { text: 'deploy pipeline', mode: 'document' },
+    });
+
+    const qContent = queryResult.content as Array<{
+      type: string;
+      text: string;
+    }>;
+    const dContent = docResult.content as Array<{ type: string; text: string }>;
+    const qVec = (JSON.parse(qContent[0].text) as { embedding: number[] })
+      .embedding;
+    const dVec = (JSON.parse(dContent[0].text) as { embedding: number[] })
+      .embedding;
+
+    // Vectors must differ — proves the prefix path is applied
+    const identical = qVec.every((v, i) => v === dVec[i]);
+    expect(identical).toBe(false);
+  });
+
+  it('mode defaults to query when omitted', async () => {
+    const result = await client.callTool({
+      name: 'engram_embed',
+      arguments: { text: 'no mode specified' },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const content = result.content as Array<{ type: string; text: string }>;
+    const parsed = JSON.parse(content[0].text) as {
+      embedding: number[];
+      dimensions: number;
+    };
+    expect(parsed.embedding.length).toBe(768);
+  });
+
+  it('returns isError when text is missing', async () => {
+    const result = await client.callTool({
+      name: 'engram_embed',
+      arguments: { mode: 'query' },
+    });
+
+    expect(result.isError).toBe(true);
+    const content = result.content as Array<{ type: string; text: string }>;
+    expect(content[0].text).toContain('text');
   });
 });

@@ -3,13 +3,13 @@
 use std::time::Instant;
 
 use aql_parser::ast::{PipelineStmt, Statement};
-use rusqlite::Connection;
 use serde_json::Value as JsonValue;
 
 use crate::error::AqlResult;
+use crate::exec_ctx::ExecCtx;
 use crate::result::QueryResult;
 
-pub fn execute(conn: &Connection, stmt: &PipelineStmt) -> AqlResult<QueryResult> {
+pub fn execute(ctx: &ExecCtx<'_>, stmt: &PipelineStmt) -> AqlResult<QueryResult> {
     let start = Instant::now();
     let timeout_ms = stmt.timeout.map(|d| d.as_millis());
 
@@ -47,7 +47,7 @@ pub fn execute(conn: &Connection, stmt: &PipelineStmt) -> AqlResult<QueryResult>
             ));
         }
 
-        let stage_result = crate::statements::dispatch(conn, stage_stmt)?;
+        let stage_result = crate::statements::dispatch(ctx, stage_stmt)?;
 
         if !stage_result.success {
             return Ok(build_failure(

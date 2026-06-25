@@ -699,6 +699,28 @@ export class Engram {
   }
 
   /**
+   * Embed text for a given retrieval mode.
+   *
+   * `query` applies the query prefix for asymmetric models like nomic-embed-text
+   * (better recall quality for search probes). `document` matches how retain()
+   * stores text. Falls back to embed() when embedQuery is not implemented by the
+   * configured provider (e.g. OllamaEmbeddings, MockEmbedder).
+   *
+   * Used by the engram_embed MCP tool so engram-aql can obtain model-compatible
+   * query vectors for AQL LIKE/PATTERN vector search without reproducing the
+   * embedding pipeline in Rust.
+   */
+  async embedForMode(
+    text: string,
+    mode: 'query' | 'document',
+  ): Promise<Float32Array> {
+    if (mode === 'query' && typeof this.embedder.embedQuery === 'function') {
+      return this.embedder.embedQuery(text);
+    }
+    return this.embedder.embed(text);
+  }
+
+  /**
    * Find active working memory sessions similar to the given embedding.
    * Returns candidates sorted by similarity (highest first).
    *
