@@ -313,7 +313,7 @@ const systemPrompt = buildPromptWithMemory(basePrompt, context);
 
 ## engram-aql (Rust) — merged
 
-A companion crate, `engram-aql/`, ships in this repo (merged via PR #1). It is a separate Rust process that shares the `.engram` SQLite file with TypeScript Engram via WAL: TS owns writes (retain, embedding, extraction, reflection); the Rust binary owns the AQL declarative read surface (`RECALL`, `SCAN`, `LOOKUP`, `LOAD`, `AGGREGATE`, `ORDER BY`, `WITH LINKS`, `FOLLOW LINKS`, `PIPELINE`). Phase 1 is read-only — write statements (`STORE`, `UPDATE`, `FORGET`, `LINK`, `REFLECT`) are rejected at dispatch with a pointer to the existing TS MCP tools.
+A companion crate, `engram-aql/`, ships in this repo (merged via PR #1). It is a separate Rust process that shares the `.engram` SQLite file with TypeScript Engram via WAL: TS owns writes (retain, embedding, extraction, reflection); the Rust binary owns the AQL declarative read surface (`RECALL`, `SCAN`, `LOOKUP`, `LOAD`, `AGGREGATE`, `ORDER BY`, `WITH LINKS`, `FOLLOW LINKS`, `PIPELINE`). Write statements (`STORE`, `UPDATE`, `FORGET`, `LINK`, `REFLECT`) are rejected at dispatch with a pointer to the existing TS MCP tools (Phase 2b). Phase 2a adds query-side vector similarity: `RECALL ... LIKE $var` / `PATTERN $var THRESHOLD t` rank chunks by cosine distance via a native `vec_distance_cosine` scalar fn registered on the Rust connection (no `sqlite-vec` dependency in Rust — it decodes the same LE-f32 BLOBs TS writes). The probe is resolved from a bound variable: a query string is embedded through a lazily-spawned, warm `engram-mcp` child (the new `engram_embed` MCP tool, so the embedding is model-compatible with stored vectors), or a precomputed embedding array is used directly (no child spawn). Variables are passed via the `engram_aql` MCP tool's `variables` object or the `query` CLI's repeatable `--var name=value`.
 
 **Where to look:**
 - Crate: `engram-aql/` — `src/{executor,memory_map,schema,result,error,lib,main}.rs` plus `src/{mcp,statements,subcommand,sql}/`
@@ -322,7 +322,9 @@ A companion crate, `engram-aql/`, ships in this repo (merged via PR #1). It is a
 - Spec: `docs/superpowers/specs/2026-04-12-engram-aql-rust-binary-design.md`
 - Plan: `docs/superpowers/plans/2026-04-12-engram-aql-rust-binary.md`
 
-**Phase 2 (deferred, see `tasks/todo.md`):** write statements (must coordinate with the TS retain pipeline — embeddings + extraction queue) and query-side vector similarity (`LIKE $var` / `PATTERN $var`).
+**Phase 2a (vector search) — done.** `LIKE`/`PATTERN` semantic search wired in RECALL (`statements/recall.rs`); native `vec_distance_cosine` + LE-f32 codec (`src/vector/`); warm `engram-mcp` bridge for query embedding (`src/bridge/`, synchronous `std::process`); `ExecCtx` variable threading (`src/exec_ctx.rs`); `variables` surface in the MCP tool + `--var` in the `query` CLI. `LIKE`/`PATTERN` only apply to chunks-backed memory (SEMANTIC/EPISODIC); on PROCEDURAL/WORKING/TOOLS they warn (no embeddings). L2 equivalence (`tests/aql-vector-equivalence.test.ts`) proves the native cosine matches sqlite-vec ordering. Design: `docs/superpowers/specs/2026-06-24-engram-aql-writes-and-vector-search-design.md`; plan: `docs/superpowers/plans/2026-06-24-engram-aql-writes-and-vector-search.md`.
+
+**Phase 2b (deferred, see `tasks/todo.md`):** write statements — `STORE`/`UPDATE`/`FORGET`/`REFLECT` delegate to the TS retain pipeline (`engram_retain`/`_supersede`/`_forget`/`_reflect`) over the same bridge; `LINK` needs a canonical TS manual-relation surface first.
 
 ## Git
 
