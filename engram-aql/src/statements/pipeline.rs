@@ -47,7 +47,21 @@ pub fn execute(ctx: &ExecCtx<'_>, stmt: &PipelineStmt) -> AqlResult<QueryResult>
             ));
         }
 
-        let stage_result = crate::statements::dispatch(ctx, stage_stmt)?;
+        // A stage's user-facing validation error (InvalidQuery) is reported as
+        // a graceful stage failure with stage context, mirroring how
+        // `Executor::query_with_vars` surfaces InvalidQuery. Genuine infra
+        // errors (SQLite, I/O) still propagate as hard errors.
+        let stage_result = match crate::statements::dispatch(ctx, stage_stmt) {
+            Ok(r) => r,
+            Err(crate::error::AqlError::InvalidQuery(msg)) => {
+                return Ok(build_failure(
+                    "Pipeline",
+                    format!("pipeline failed at stage {}: {}", i + 1, msg),
+                    stages_completed,
+                ));
+            }
+            Err(e) => return Err(e),
+        };
 
         if !stage_result.success {
             return Ok(build_failure(

@@ -1,4 +1,9 @@
-//! Rejection handler for write statements in Phase 1.
+//! Rejection handler for `LINK`.
+//!
+//! As of Phase 2b, `STORE`/`UPDATE`/`FORGET`/`REFLECT` are delegated to the TS
+//! retain pipeline (see `write_delegate`). `LINK` remains rejected: entities and
+//! relations are extraction-derived, and there is no canonical TS tool for
+//! authoring manual relations yet (see the spec's Open Questions).
 
 use aql_parser::ast::Statement;
 
@@ -6,31 +11,17 @@ use crate::result::QueryResult;
 
 pub fn reject(stmt: &Statement) -> QueryResult {
     let (name, hint) = match stmt {
-        Statement::Store(_) => (
-            "Store",
-            "STORE is not supported in engram-aql read-only mode. \
-             Use `engram_retain` via the TypeScript MCP server.",
-        ),
-        Statement::Update(_) => (
-            "Update",
-            "UPDATE is not supported in engram-aql read-only mode. \
-             Use `engram_supersede` via the TypeScript MCP server.",
-        ),
-        Statement::Forget(_) => (
-            "Forget",
-            "FORGET is not supported in engram-aql read-only mode. \
-             Use `engram_forget` via the TypeScript MCP server.",
-        ),
         Statement::Link(_) => (
             "Link",
-            "LINK is not supported in Phase 1. Planned for Phase 2.",
+            "LINK is not supported: entities/relations are extraction-derived, and there is no \
+             canonical TypeScript tool for manual relation authoring yet. Track this in the \
+             engram-aql Phase 2 design (Open Questions).",
         ),
-        Statement::Reflect(_) => (
-            "Reflect",
-            "REFLECT requires LLM access and is not available in engram-aql. \
-             Use `engram_reflect` via the TypeScript MCP server.",
+        _ => (
+            "Unknown",
+            "statement type not recognized for rejection (this is a bug — writes other than \
+             LINK are delegated via write_delegate)",
         ),
-        _ => ("Unknown", "statement type not recognized for rejection"),
     };
 
     QueryResult::error(name, hint)
