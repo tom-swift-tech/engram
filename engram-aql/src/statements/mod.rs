@@ -22,11 +22,11 @@ use crate::result::QueryResult;
 /// type requires updating only this function.
 ///
 /// Handlers that don't need `vars` or `bridge` receive `ctx.conn` directly.
-/// Task 5/6 will pass `ctx` into the `recall` and `load` handlers once the
-/// vector-search path is wired.
+/// Task 6 will pass `ctx` into the `load` handler once write-side vector
+/// search is wired.
 pub(crate) fn dispatch(ctx: &ExecCtx<'_>, stmt: &Statement) -> AqlResult<QueryResult> {
     match stmt {
-        Statement::Recall(r) => recall::execute(ctx.conn, r),
+        Statement::Recall(r) => recall::execute(ctx, r),
         Statement::Lookup(l) => lookup::execute(ctx.conn, l),
         Statement::Scan(s) => scan::execute(ctx.conn, s),
         Statement::Load(l) => load::execute(ctx.conn, l),

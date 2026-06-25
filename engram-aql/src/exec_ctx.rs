@@ -61,11 +61,16 @@ impl BridgeHandle {
             )
         })?;
 
-        let mut guard = self.inner.borrow_mut();
-        if guard.is_none() {
-            *guard = Some(Bridge::new(cmd.clone(), &self.db_path)?);
+        if self.inner.borrow().is_none() {
+            *self.inner.borrow_mut() = Some(Bridge::new(cmd.clone(), &self.db_path)?);
         }
-        guard.as_mut().unwrap().embed_query(text)
+        self.inner
+            .borrow_mut()
+            .as_mut()
+            .ok_or_else(|| {
+                AqlError::InvalidQuery("engram-mcp bridge unexpectedly unavailable".to_string())
+            })?
+            .embed_query(text)
     }
 }
 
