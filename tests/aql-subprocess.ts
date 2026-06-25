@@ -97,7 +97,10 @@ export function aqlQuery(
   // Each var becomes a repeated `--var NAME=VALUE`; VALUE is JSON-encoded so
   // arrays bind as precomputed probes and strings stay strings.
   const varArgs = vars
-    ? Object.entries(vars).flatMap(([k, v]) => ['--var', `${k}=${JSON.stringify(v)}`])
+    ? Object.entries(vars).flatMap(([k, v]) => [
+        '--var',
+        `${k}=${JSON.stringify(v)}`,
+      ])
     : [];
   const result = spawnSync(binary, ['query', dbPath, query, ...varArgs], {
     encoding: 'utf-8',

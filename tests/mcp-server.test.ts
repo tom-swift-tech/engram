@@ -391,14 +391,15 @@ describe('engram_embed MCP tool', () => {
       arguments: { text: 'deploy pipeline', mode: 'document' },
     });
 
-    const qContent = queryResult.content as Array<{ type: string; text: string }>;
+    const qContent = queryResult.content as Array<{
+      type: string;
+      text: string;
+    }>;
     const dContent = docResult.content as Array<{ type: string; text: string }>;
-    const qVec = (
-      JSON.parse(qContent[0].text) as { embedding: number[] }
-    ).embedding;
-    const dVec = (
-      JSON.parse(dContent[0].text) as { embedding: number[] }
-    ).embedding;
+    const qVec = (JSON.parse(qContent[0].text) as { embedding: number[] })
+      .embedding;
+    const dVec = (JSON.parse(dContent[0].text) as { embedding: number[] })
+      .embedding;
 
     // Vectors must differ — proves the prefix path is applied
     const identical = qVec.every((v, i) => v === dVec[i]);
