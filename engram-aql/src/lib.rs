@@ -2,6 +2,7 @@
 
 pub mod bridge;
 pub mod error;
+pub mod exec_ctx;
 pub mod executor;
 pub mod mcp;
 pub mod memory_map;

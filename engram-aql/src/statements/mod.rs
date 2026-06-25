@@ -9,23 +9,27 @@ pub mod scan;
 pub mod write_reject;
 
 use aql_parser::ast::Statement;
-use rusqlite::Connection;
 
 use crate::error::AqlResult;
+use crate::exec_ctx::ExecCtx;
 use crate::result::QueryResult;
 
 /// Dispatch a single AQL statement to its handler.
 ///
-/// This is the shared dispatcher used by both `Executor::query` and
+/// This is the shared dispatcher used by both `Executor::query_with_vars` and
 /// `pipeline::execute`. Extracting it here keeps a single source of truth
 /// for which statement maps to which handler — adding a new statement
 /// type requires updating only this function.
-pub(crate) fn dispatch(conn: &Connection, stmt: &Statement) -> AqlResult<QueryResult> {
+///
+/// Handlers that don't need `vars` or `bridge` receive `ctx.conn` directly.
+/// Task 5/6 will pass `ctx` into the `recall` and `load` handlers once the
+/// vector-search path is wired.
+pub(crate) fn dispatch(ctx: &ExecCtx<'_>, stmt: &Statement) -> AqlResult<QueryResult> {
     match stmt {
-        Statement::Recall(r) => recall::execute(conn, r),
-        Statement::Lookup(l) => lookup::execute(conn, l),
-        Statement::Scan(s) => scan::execute(conn, s),
-        Statement::Load(l) => load::execute(conn, l),
+        Statement::Recall(r) => recall::execute(ctx.conn, r),
+        Statement::Lookup(l) => lookup::execute(ctx.conn, l),
+        Statement::Scan(s) => scan::execute(ctx.conn, s),
+        Statement::Load(l) => load::execute(ctx.conn, l),
 
         // Writes are rejected at dispatch time (Phase 1 read-only)
         Statement::Store(_)
@@ -37,6 +41,6 @@ pub(crate) fn dispatch(conn: &Connection, stmt: &Statement) -> AqlResult<QueryRe
         // Pipeline runs via the pipeline handler. Nested pipelines are
         // allowed by this dispatcher but the pipeline handler rejects them
         // (see pipeline::execute).
-        Statement::Pipeline(p) => pipeline::execute(conn, p),
+        Statement::Pipeline(p) => pipeline::execute(ctx, p),
     }
 }
