@@ -254,6 +254,27 @@ export const ENGRAM_TOOLS = [
       properties: {},
     },
   },
+
+  {
+    name: 'engram_embed' as const,
+    description:
+      "Embed text into the bank's native vector space. mode=\"query\" applies the query prefix for asymmetric models like nomic-embed-text (better recall quality for search probes); mode=\"document\" matches how retain() stores text. Used by engram-aql for AQL LIKE/PATTERN vector search so Rust can obtain a model-compatible query vector without reproducing the embedding pipeline.",
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        text: {
+          type: 'string',
+          description: 'Text to embed',
+        },
+        mode: {
+          type: 'string',
+          enum: ['query', 'document'],
+          description: 'query | document (default: query)',
+        },
+      },
+      required: ['text'],
+    },
+  },
 ] as const;
 
 export type EngramToolName = (typeof ENGRAM_TOOLS)[number]['name'];
@@ -470,6 +491,23 @@ export function createEngramToolHandler(engram: Engram) {
           const stats = engram.getQueueStats();
           return {
             content: [{ type: 'text', text: JSON.stringify(stats, null, 2) }],
+          };
+        }
+
+        case 'engram_embed': {
+          const textCheck = requireString(input.text, 'text');
+          if ('error' in textCheck) return textCheck.error;
+          const mode = (
+            input.mode === 'document' ? 'document' : 'query'
+          ) as 'query' | 'document';
+          const vec = await engram.embedForMode(textCheck.value, mode);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({ embedding: Array.from(vec), dimensions: vec.length }),
+              },
+            ],
           };
         }
       }
