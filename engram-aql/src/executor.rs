@@ -9,14 +9,23 @@ use crate::error::AqlResult;
 use crate::result::QueryResult;
 use crate::schema::verify_schema;
 use crate::statements;
+use crate::vector::cosine::register_vec_distance_cosine;
 
 pub struct Executor {
     conn: Connection,
 }
 
 impl Executor {
-    /// Build an Executor from an existing connection. Verifies schema.
+    /// Build an Executor from an existing connection. Registers scalar
+    /// functions and verifies schema.
+    ///
+    /// Registering `vec_distance_cosine` here (rather than only in `open`)
+    /// ensures in-memory test connections built via `from_connection` also
+    /// have the function available. Scalar function registration does not
+    /// mutate the database — the Phase 1 `SQLITE_OPEN_READ_ONLY` discipline
+    /// is preserved.
     pub fn from_connection(conn: Connection) -> AqlResult<Self> {
+        register_vec_distance_cosine(&conn)?;
         verify_schema(&conn)?;
         Ok(Self { conn })
     }

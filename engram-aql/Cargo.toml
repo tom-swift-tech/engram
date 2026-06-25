@@ -19,8 +19,10 @@ path = "src/lib.rs"
 # AQL parser — vendored, see vendor/VENDORED_FROM.md
 aql-parser = { path = "vendor/aql-parser" }
 
-# SQLite access with bundled SQLite amalgamation
-rusqlite = { version = "0.31", features = ["bundled", "chrono", "serde_json"] }
+# SQLite access with bundled SQLite amalgamation.
+# `functions` enables create_scalar_function / FunctionFlags / UserFunctionError,
+# required for the native vec_distance_cosine scalar fn.
+rusqlite = { version = "0.31", features = ["bundled", "chrono", "serde_json", "functions"] }
 
 # CLI parsing
 clap = { version = "4.5", features = ["derive"] }
