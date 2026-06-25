@@ -12,11 +12,14 @@
 //!      `node /abs/path/to/dist/mcp-server.js`).
 //!   3. `engram-mcp` on PATH.
 
+pub mod call;
 pub mod child;
 pub mod client;
 pub mod embed;
 
 use std::path::Path;
+
+use serde_json::Value;
 
 use crate::error::AqlResult;
 use child::ChildProcess;
@@ -47,5 +50,10 @@ impl Bridge {
     /// Embed `text` in query mode by calling `engram_embed` on the child.
     pub fn embed_query(&mut self, text: &str) -> AqlResult<Vec<f32>> {
         embed::embed_query(&mut self.client, text)
+    }
+
+    /// Call an arbitrary MCP tool on the child (used for write delegation).
+    pub fn call_tool(&mut self, name: &str, arguments: Value) -> AqlResult<Value> {
+        call::call_tool(&mut self.client, name, arguments)
     }
 }
