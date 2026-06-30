@@ -95,7 +95,7 @@ pub fn update(ctx: &ExecCtx<'_>, stmt: &UpdateStmt) -> AqlResult<QueryResult> {
         )
     })?;
 
-    let ids = resolve_chunk_ids(ctx, stmt.memory_type, &stmt.conditions)?;
+    let (ids, truncated) = resolve_chunk_ids(ctx, stmt.memory_type, &stmt.conditions)?;
     let mut data = Vec::with_capacity(ids.len());
     for id in &ids {
         let mut args = extra.clone();
@@ -110,6 +110,8 @@ pub fn update(ctx: &ExecCtx<'_>, stmt: &UpdateStmt) -> AqlResult<QueryResult> {
     let mut result = QueryResult::success("Update", data);
     if ids.is_empty() {
         warnings.push("UPDATE matched no active chunks; nothing superseded".to_string());
+    } else if truncated {
+        warnings.push(truncation_warning("UPDATE", "superseded"));
     }
     result.warnings = warnings;
     Ok(result)
@@ -117,7 +119,7 @@ pub fn update(ctx: &ExecCtx<'_>, stmt: &UpdateStmt) -> AqlResult<QueryResult> {
 
 /// `FORGET FROM <type> WHERE ...` → `engram_forget` per matched id.
 pub fn forget(ctx: &ExecCtx<'_>, stmt: &ForgetStmt) -> AqlResult<QueryResult> {
-    let ids = resolve_chunk_ids(ctx, stmt.memory_type, &stmt.conditions)?;
+    let (ids, truncated) = resolve_chunk_ids(ctx, stmt.memory_type, &stmt.conditions)?;
     let mut data = Vec::with_capacity(ids.len());
     for id in &ids {
         data.push(
@@ -131,6 +133,8 @@ pub fn forget(ctx: &ExecCtx<'_>, stmt: &ForgetStmt) -> AqlResult<QueryResult> {
         result
             .warnings
             .push("FORGET matched no active chunks; nothing forgotten".to_string());
+    } else if truncated {
+        result.warnings.push(truncation_warning("FORGET", "forgotten"));
     }
     Ok(result)
 }
@@ -182,13 +186,21 @@ fn retain_option_name(field: &str) -> Option<&'static str> {
     }
 }
 
+/// Upper bound on how many chunks a single `UPDATE`/`FORGET` will target.
+/// Matches > this many are truncated (ordered by `id` for determinism) and
+/// the caller attaches a warning rather than silently dropping the rest.
+const WRITE_TARGET_LIMIT: usize = 1000;
+
 /// Resolve the active chunk ids matching `conditions` for a write target.
 /// Read-only — the resolved ids are then handed to the TS tools to mutate.
+///
+/// Returns the (possibly truncated) id list plus whether truncation occurred,
+/// so callers can warn instead of reporting silent partial completion.
 fn resolve_chunk_ids(
     ctx: &ExecCtx<'_>,
     memory_type: MemoryType,
     conditions: &[Condition],
-) -> AqlResult<Vec<String>> {
+) -> AqlResult<(Vec<String>, bool)> {
     let chunk_type = chunk_write_type(memory_type)?;
 
     let mut params: Vec<RusqValue> = vec![RusqValue::Text(chunk_type.to_string())];
@@ -198,9 +210,12 @@ fn resolve_chunk_ids(
         where_parts.push(condition_to_sql(cond, EngramTable::Chunks, &mut params));
     }
 
+    // Fetch one row past the cap so we can detect (rather than silently
+    // produce) truncation; ORDER BY id keeps which rows get dropped stable.
     let sql = format!(
-        "SELECT id FROM chunks WHERE {} LIMIT 1000",
-        where_parts.join(" AND ")
+        "SELECT id FROM chunks WHERE {} ORDER BY id LIMIT {}",
+        where_parts.join(" AND "),
+        WRITE_TARGET_LIMIT + 1
     );
     let mut prepared = ctx.conn.prepare(&sql)?;
     let rows = prepared.query_map(rusqlite::params_from_iter(params.iter()), |row| {
@@ -211,7 +226,20 @@ fn resolve_chunk_ids(
     for r in rows {
         ids.push(r?);
     }
-    Ok(ids)
+
+    let truncated = ids.len() > WRITE_TARGET_LIMIT;
+    ids.truncate(WRITE_TARGET_LIMIT);
+    Ok((ids, truncated))
+}
+
+/// Build the warning attached when a write matched more than
+/// `WRITE_TARGET_LIMIT` chunks and only the first batch was processed.
+fn truncation_warning(stmt: &str, verb: &str) -> String {
+    format!(
+        "{stmt} matched more than {WRITE_TARGET_LIMIT} active chunks; only the first \
+         {WRITE_TARGET_LIMIT} (ordered by id) were {verb}. Narrow the WHERE clause to \
+         cover the rest."
+    )
 }
 
 /// Convert an AQL literal/variable into a JSON value for a tool argument.
@@ -269,5 +297,59 @@ mod tests {
         let v = aql_value_to_json(&AqlValue::Variable("q".to_string()), &vars).unwrap();
         assert_eq!(v, json!("hello"));
         assert!(aql_value_to_json(&AqlValue::Variable("missing".to_string()), &vars).is_err());
+    }
+
+    /// Build a minimal in-memory `chunks` table (only the columns
+    /// `resolve_chunk_ids` reads) seeded with `count` active "world" rows.
+    fn seeded_ctx(count: usize) -> (rusqlite::Connection, BTreeMap<String, JsonValue>) {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE chunks (id TEXT PRIMARY KEY, is_active INTEGER, memory_type TEXT);",
+        )
+        .unwrap();
+        for i in 0..count {
+            conn.execute(
+                "INSERT INTO chunks (id, is_active, memory_type) VALUES (?1, 1, 'world')",
+                rusqlite::params![format!("c{i:05}")],
+            )
+            .unwrap();
+        }
+        (conn, BTreeMap::new())
+    }
+
+    #[test]
+    fn resolve_chunk_ids_under_cap_is_not_truncated() {
+        let (conn, vars) = seeded_ctx(5);
+        let bridge = crate::exec_ctx::BridgeHandle::new(None, std::path::Path::new("test.db"));
+        let ctx = ExecCtx {
+            conn: &conn,
+            vars: &vars,
+            bridge: &bridge,
+        };
+        let (ids, truncated) = resolve_chunk_ids(&ctx, MemoryType::Semantic, &[]).unwrap();
+        assert_eq!(ids.len(), 5);
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn resolve_chunk_ids_over_cap_is_truncated_and_flagged() {
+        let (conn, vars) = seeded_ctx(WRITE_TARGET_LIMIT + 5);
+        let bridge = crate::exec_ctx::BridgeHandle::new(None, std::path::Path::new("test.db"));
+        let ctx = ExecCtx {
+            conn: &conn,
+            vars: &vars,
+            bridge: &bridge,
+        };
+        let (ids, truncated) = resolve_chunk_ids(&ctx, MemoryType::Semantic, &[]).unwrap();
+        assert_eq!(ids.len(), WRITE_TARGET_LIMIT);
+        assert!(truncated);
+    }
+
+    #[test]
+    fn truncation_warning_names_statement_and_verb() {
+        let msg = truncation_warning("UPDATE", "superseded");
+        assert!(msg.contains("UPDATE"));
+        assert!(msg.contains("superseded"));
+        assert!(msg.contains(&WRITE_TARGET_LIMIT.to_string()));
     }
 }

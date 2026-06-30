@@ -63,6 +63,11 @@ impl BridgeHandle {
     /// Returns `InvalidQuery` (not `Io`) when `engram-mcp` is not discoverable
     /// so the error surfaces cleanly in `QueryResult.error` rather than
     /// propagating as a hard Err.
+    ///
+    /// On any error from `f` the cached bridge is evicted (dropping it kills
+    /// the child process) so the next call respawns a fresh one instead of
+    /// repeatedly handing out a child that already EOF'd, errored, or timed
+    /// out — `JsonRpcClient::eof` is how `call_raw` signals "don't reuse me".
     fn with_bridge<T>(&self, f: impl FnOnce(&mut Bridge) -> AqlResult<T>) -> AqlResult<T> {
         let cmd = self.cmd.as_ref().ok_or_else(|| {
             AqlError::InvalidQuery(
@@ -81,7 +86,11 @@ impl BridgeHandle {
         let bridge = guard.as_mut().ok_or_else(|| {
             AqlError::InvalidQuery("engram-mcp bridge unexpectedly unavailable".to_string())
         })?;
-        f(bridge)
+        let result = f(bridge);
+        if result.is_err() {
+            *guard = None;
+        }
+        result
     }
 }
 
