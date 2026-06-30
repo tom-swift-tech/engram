@@ -120,7 +120,7 @@ Agent memory files use the `.engram` extension (they're SQLite files):
 |-----------|---------|-----------|
 | better-sqlite3 | SQLite driver for Node.js | Yes |
 | sqlite-vec | Vector similarity search extension | Yes (for semantic recall) |
-| @xenova/transformers | In-process embeddings (retain + recall) | Yes (default embedding path) |
+| @huggingface/transformers | In-process embeddings (retain + recall) | Yes (default embedding path) |
 | Ollama | Local LLM for extraction + reflection | Yes (for extract + reflect) |
 | llama3.1:8b | Fast model for extraction + reflection | Recommended |
 | nomic-embed-text (Ollama) | Ollama embedding model | Only when `useOllamaEmbeddings: true` |
@@ -146,13 +146,13 @@ engram/
 │   ├── extract-cpu.ts           ← zero-LLM inline entity extraction (Tier 1)
 │   ├── temporal-parser.ts       ← natural language date parsing for temporal recall
 │   ├── generation.ts            ← pluggable generation providers (Ollama, OpenAI-compat, Anthropic)
-│   ├── local-embedder.ts        ← in-process embeddings via @xenova/transformers
+│   ├── local-embedder.ts        ← in-process embeddings via @huggingface/transformers
 │   ├── working-memory-types.ts  ← types for working memory session management
 │   ├── mcp-tools.ts             ← MCP tool definitions (8 tools: retain/recall/reflect/extract/forget/supersede/session/queue_stats)
 │   ├── mcp-server.ts            ← standalone MCP stdio server (engram-mcp bin)
 │   ├── cli.ts                   ← `engram` CLI: one subcommand per MCP tool, --json contract for Pi (engram bin)
 │   └── cli-args.ts              ← CLI argv parser + Engram.open option-builder + shared validation/clamp helpers
-├── tests/                        ← TS suites incl. aql-* cross-process (370 tests via npm test; +74 from integrations/pi, +67 from tools/openclaw-import)
+├── tests/                        ← TS suites incl. aql-* cross-process (379 tests via npm test; +74 from integrations/pi, +67 from tools/openclaw-import)
 │   ├── helpers.ts
 │   ├── retain.test.ts
 │   ├── retain-gate.test.ts
@@ -352,6 +352,6 @@ git init && git branch -M main
 
 - [x] **Reflect schedule**: Library default is manual (call `engram.reflect()` or the CLI). `ReflectScheduler` class ships for timer-based use. Recommendation for valor-engine: `ReflectScheduler` with a 6-hour default, configurable per operative.
 
-- [x] **Embedding model**: `Xenova/nomic-embed-text-v1.5` (768d) runs in-process via `@xenova/transformers` as default — no Ollama required for retain/recall. Override via `embedModel` option. `Xenova/all-MiniLM-L6-v2` (384d) is a valid alternative for lower disk/memory use. Opt into Ollama embeddings via `useOllamaEmbeddings: true` (e.g., for GPU acceleration). Existing `.engram` files with Ollama-generated vectors are fully compatible — same model weights, same 768-dim space.
+- [x] **Embedding model**: `nomic-ai/nomic-embed-text-v1.5` (768d) runs in-process via `@huggingface/transformers` (v3+, the maintained successor to the deprecated `@xenova/transformers`) as default — no Ollama required for retain/recall, and no Hugging Face token (the `nomic-ai` upstream repo is public). Override via `embedModel` option. `Xenova/all-MiniLM-L6-v2` (384d) is a valid alternative for lower disk/memory use. The legacy `Xenova/nomic-embed-text-v1.5` mirror is now gated (401 without a token) so it's no longer the default, but ships identical 768-dim weights — existing `.engram` files stay valid. Opt into Ollama embeddings via `useOllamaEmbeddings: true` (e.g., for GPU acceleration). Existing `.engram` files with Ollama-generated vectors are fully compatible — same model weights, same 768-dim space.
 
 - [ ] **`.engram` MIME type**: Deferred. Extension is established; OS MIME registration is future work if IDE/tooling support becomes valuable.

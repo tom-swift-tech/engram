@@ -96,7 +96,7 @@ Engram's pipeline mirrors how biological memory actually works:
 
 **Engram has zero mandatory external dependencies.** Out of the box, `npm install engram` gives you:
 
-- **Embeddings** via Transformers.js — runs in-process, no server needed. The model (`Xenova/nomic-embed-text-v1.5`, ~30MB) downloads automatically on first use.
+- **Embeddings** via Transformers.js — runs in-process, no server needed. The model (`nomic-ai/nomic-embed-text-v1.5`, ~30MB) downloads automatically on first use.
 - **Tier 1 entity extraction** via CPU pattern matching — runs inline with every `retain()` call, building the knowledge graph immediately.
 - **Four-way recall** — semantic, keyword, graph, and temporal retrieval all work with zero external services.
 
@@ -162,7 +162,7 @@ const agent = await Engram.create('./agent.engram', {
   ollamaUrl?: string,              // default: 'http://localhost:11434'
   reflectMission?: string,         // guides reflection synthesis
   retainMission?: string,          // guides retention prioritization
-  embedModel?: string,             // default: 'Xenova/nomic-embed-text-v1.5'
+  embedModel?: string,             // default: 'nomic-ai/nomic-embed-text-v1.5'
   reflectModel?: string,           // default: 'llama3.1:8b'
   useOllamaEmbeddings?: boolean,   // use Ollama instead of local (default: false)
   disposition?: {                  // behavioral tuning for reflection
@@ -683,7 +683,7 @@ try {
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| "Engram active" but zero chunks | Embedding model failed to load | Verify `@xenova/transformers` installed and `~/.cache/xenova/` writable |
+| "Engram active" but zero chunks | Embedding model failed to load | Verify `@huggingface/transformers` installed and `node_modules/@huggingface/transformers/.cache/` writable |
 | Health check passes, retain still empty | `shouldRetain`/`formatForPrompt` dynamically imported in framework | Pass function references from agent level, not via `import('engram')` |
 | Reflection runs but produces nothing | Zero chunks in database | Fix retain first |
 | Extraction queue stays at 0 | `skipExtraction: true` or non-world/experience types | Only `world` and `experience` queue for extraction |
@@ -697,21 +697,16 @@ try {
 |-----------|---------|-----------|
 | better-sqlite3 | SQLite driver | Yes |
 | sqlite-vec | Vector similarity search | Yes |
-| @xenova/transformers | In-process embeddings | Yes (default) |
+| @huggingface/transformers | In-process embeddings | Yes (default) |
 | @modelcontextprotocol/sdk | MCP server support | Yes |
 | Ollama + llama3.1:8b | Tier 2 extraction + reflection | **No** — core pipeline works without it |
 | nomic-embed-text (Ollama) | Ollama embeddings | Only with `useOllamaEmbeddings: true` |
 
-### Using `@huggingface/transformers` instead of `@xenova/transformers`
+### Embedding model and cache
 
-Engram defaults to `@xenova/transformers` (v2) because it works without authentication. The official `@huggingface/transformers` (v3+) supports newer models but requires a [Hugging Face token](https://huggingface.co/settings/tokens):
+Engram embeds in-process via `@huggingface/transformers` (v3+, the maintained successor to the deprecated `@xenova/transformers` — same library, new org). The default model is `nomic-ai/nomic-embed-text-v1.5` from the **public upstream nomic-ai repo, so no Hugging Face token is required**. It downloads once (~30MB quantized) to `node_modules/@huggingface/transformers/.cache/` on first use and loads from cache thereafter.
 
-```bash
-npm uninstall @xenova/transformers && npm install @huggingface/transformers
-export HF_TOKEN=hf_...
-```
-
-Update the import in `src/local-embedder.ts` and use official model IDs (no `Xenova/` prefix). Existing `.engram` files don't need re-embedding — the vectors are compatible.
+> The legacy `Xenova/nomic-embed-text-v1.5` mirror is now **gated** on the HF hub (401 without a token), which is why it's no longer the default. It ships identical 768-dim weights, so existing `.engram` files stay valid either way. Override the model via the `embedModel` option; for an unregistered model also pass an explicit `dimensions` so Engram records the correct vector size.
 
 ## File Format
 
