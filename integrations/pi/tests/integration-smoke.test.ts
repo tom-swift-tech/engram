@@ -254,6 +254,82 @@ describe('engram-pi integration smoke (built dist + real Engram)', () => {
     expect(existsSync(join(projectDir, '.engram', 'pi.db'))).toBe(true);
   });
 
+  it('fresh session (reason: "new"): before_agent_start injects starting context from prior memory', async () => {
+    // Seed memory in a "previous session" before the fresh one starts.
+    await captured.commands.get('remember')!.handler(
+      'The staging cluster runs on Talos Linux, fronted by an nginx ingress',
+      makeCtx(makeFakeUi()),
+    );
+
+    const start = captured.handlers.get('session_start')!;
+    await start({ type: 'session_start', reason: 'new' }, makeCtx(makeFakeUi()));
+
+    const beforeAgentStart = captured.handlers.get('before_agent_start')!;
+    const result = (await beforeAgentStart(
+      {
+        type: 'before_agent_start',
+        prompt: 'what does the staging cluster run on?',
+        systemPrompt: 'BASE PROMPT',
+      },
+      makeCtx(makeFakeUi()),
+    )) as { systemPrompt?: string } | undefined;
+
+    expect(result?.systemPrompt).toContain('BASE PROMPT');
+    expect(result?.systemPrompt).toContain('## Relevant memory from prior work');
+    expect(result?.systemPrompt).toContain('Talos Linux');
+    // Still appends the session addendum — startup recall is additive, not a replacement.
+    expect(result?.systemPrompt).toContain('engram_session_resume');
+  });
+
+  it('fresh session: startup recall only fires on the first before_agent_start, not later turns', async () => {
+    await captured.commands.get('remember')!.handler(
+      'The staging cluster runs on Talos Linux',
+      makeCtx(makeFakeUi()),
+    );
+
+    const start = captured.handlers.get('session_start')!;
+    await start({ type: 'session_start', reason: 'new' }, makeCtx(makeFakeUi()));
+
+    const beforeAgentStart = captured.handlers.get('before_agent_start')!;
+    const first = (await beforeAgentStart(
+      { type: 'before_agent_start', prompt: 'staging cluster os?', systemPrompt: 'TURN 1' },
+      makeCtx(makeFakeUi()),
+    )) as { systemPrompt?: string } | undefined;
+    expect(first?.systemPrompt).toContain('## Relevant memory from prior work');
+
+    const second = (await beforeAgentStart(
+      { type: 'before_agent_start', prompt: 'staging cluster os?', systemPrompt: 'TURN 2' },
+      makeCtx(makeFakeUi()),
+    )) as { systemPrompt?: string } | undefined;
+    expect(second?.systemPrompt).toContain('TURN 2');
+    expect(second?.systemPrompt).not.toContain('## Relevant memory from prior work');
+  });
+
+  it('resumed session (reason: "resume"): before_agent_start does not inject starting context', async () => {
+    await captured.commands.get('remember')!.handler(
+      'The staging cluster runs on Talos Linux',
+      makeCtx(makeFakeUi()),
+    );
+
+    const start = captured.handlers.get('session_start')!;
+    await start({ type: 'session_start', reason: 'resume' }, makeCtx(makeFakeUi()));
+
+    const beforeAgentStart = captured.handlers.get('before_agent_start')!;
+    const result = (await beforeAgentStart(
+      {
+        type: 'before_agent_start',
+        prompt: 'what does the staging cluster run on?',
+        systemPrompt: 'BASE PROMPT',
+      },
+      makeCtx(makeFakeUi()),
+    )) as { systemPrompt?: string } | undefined;
+
+    expect(result?.systemPrompt).toContain('BASE PROMPT');
+    expect(result?.systemPrompt).not.toContain('## Relevant memory from prior work');
+    // Addendum still present — only the recall injection is reason-gated.
+    expect(result?.systemPrompt).toContain('engram_session_resume');
+  });
+
   it('round-trip: /remember then /recall finds the stored fact', async () => {
     const rememberUi = makeFakeUi();
     await captured.commands.get('remember')!.handler(

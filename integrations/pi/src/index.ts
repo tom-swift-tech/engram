@@ -16,6 +16,11 @@
 //   - On 'session_shutdown': flush a final extract+reflect (time-bounded), then
 //     close Engram. Pi may not always fire this (e.g. crash); SQLite WAL is
 //     durable across abrupt exits.
+//   - On 'before_agent_start', ONLY for the first turn of a genuinely fresh
+//     session ('session_start' fired with reason: 'new'): recall against the
+//     user's prompt and prepend the formatted result to the system prompt as
+//     starting context. One-shot — not repeated on later turns in the same
+//     session. ENGRAM_PI_STARTUP_RECALL=0 disables it.
 //
 // Slash commands:
 //   /remember <text>       store a fact
@@ -63,6 +68,7 @@ import {
   DEFAULT_AUTO_RETAIN_CONFIG,
   type AutoRetainConfig,
   type RetainableMessage,
+  startupRecall,
 } from './adapter.js';
 import {
   RememberParams,
@@ -98,6 +104,12 @@ let cachedDbPath: string | null = null;
 // /session slash command can answer "what are you currently working on?"
 // Never persisted; lost on reload. Engram remains the only stateful party.
 let currentSessionId: string | null = null;
+
+// Set by session_start when reason === 'new'; consumed (and cleared) by the
+// very next before_agent_start. Fresh per Pi session, never persisted —
+// exactly the one-shot "is this the first turn of a new session" signal
+// startup recall needs, since before_agent_start otherwise fires every turn.
+let sessionIsFresh = false;
 
 // ---------------------------------------------------------------------------
 // Background consolidation scheduling (Phase 2)
@@ -171,6 +183,33 @@ let autoRetainConfig: AutoRetainConfig = {
 // Most recent detached auto-retain promise, for deterministic test awaits.
 let pendingAutoRetain: Promise<void> | null = null;
 
+// ---------------------------------------------------------------------------
+// Startup recall (fresh-session starting context)
+//
+// One-shot recall against the first prompt of a genuinely new session
+// ('session_start' fired with reason: 'new'), injected into that turn's
+// system prompt. On by default; ENGRAM_PI_STARTUP_RECALL=0 disables it.
+// ---------------------------------------------------------------------------
+
+interface StartupRecallConfig {
+  maxChars: number;
+  topK: number;
+}
+
+const DEFAULT_STARTUP_RECALL_CONFIG: StartupRecallConfig = {
+  maxChars: 1200,
+  topK: 8,
+};
+
+let startupRecallEnabled = envBoolDefaultTrue('ENGRAM_PI_STARTUP_RECALL');
+let startupRecallConfig: StartupRecallConfig = {
+  maxChars: envInt(
+    'ENGRAM_PI_STARTUP_RECALL_MAX_CHARS',
+    DEFAULT_STARTUP_RECALL_CONFIG.maxChars,
+  ),
+  topK: envInt('ENGRAM_PI_STARTUP_RECALL_TOPK', DEFAULT_STARTUP_RECALL_CONFIG.topK),
+};
+
 // Engine factory — overridable from tests to swap in a deterministic embedder
 // without paying the LocalEmbedder model download. Production never touches
 // this; the only setter is the test-only export below, prefixed `_`.
@@ -202,6 +241,7 @@ export function _setEngineFactoryForTesting(factory: EngineFactory): void {
   enginePromise = null;
   cachedDbPath = null;
   currentSessionId = null;
+  sessionIsFresh = false;
   resetSchedulingState();
   pendingAutoRetain = null;
   engineFactory = factory;
@@ -212,6 +252,7 @@ export function _resetEngineFactoryForTesting(): void {
   enginePromise = null;
   cachedDbPath = null;
   currentSessionId = null;
+  sessionIsFresh = false;
   resetSchedulingState();
   schedulingConfig = {
     extractEveryTurns: DEFAULT_SCHEDULING_CONFIG.extractEveryTurns,
@@ -224,6 +265,11 @@ export function _resetEngineFactoryForTesting(): void {
     maxChars: DEFAULT_AUTO_RETAIN_CONFIG.maxChars,
   };
   pendingAutoRetain = null;
+  startupRecallEnabled = true;
+  startupRecallConfig = {
+    maxChars: DEFAULT_STARTUP_RECALL_CONFIG.maxChars,
+    topK: DEFAULT_STARTUP_RECALL_CONFIG.topK,
+  };
   engineFactory = (path) => Engram.open(path);
 }
 
@@ -251,6 +297,25 @@ export function _setAutoRetainConfigForTesting(opts: {
   if (opts.enabled !== undefined) autoRetainEnabled = opts.enabled;
   if (opts.minChars !== undefined) autoRetainConfig.minChars = opts.minChars;
   if (opts.maxChars !== undefined) autoRetainConfig.maxChars = opts.maxChars;
+}
+
+/** Test-only: toggle startup recall and/or override its topK/budget. */
+export function _setStartupRecallConfigForTesting(opts: {
+  enabled?: boolean;
+  maxChars?: number;
+  topK?: number;
+}): void {
+  if (opts.enabled !== undefined) startupRecallEnabled = opts.enabled;
+  if (opts.maxChars !== undefined) startupRecallConfig.maxChars = opts.maxChars;
+  if (opts.topK !== undefined) startupRecallConfig.topK = opts.topK;
+}
+
+/**
+ * Test-only: force the "next before_agent_start is a fresh session" flag
+ * without going through a real session_start event.
+ */
+export function _setSessionFreshForTesting(fresh: boolean): void {
+  sessionIsFresh = fresh;
 }
 
 /** Test-only: the most recent detached auto-retain promise (or null). */
@@ -424,7 +489,12 @@ export default function engramPiExtension(pi: ExtensionAPI): void {
   // Lifecycle
   // ---------------------------------------------------------------------------
 
-  pi.on('session_start', (_event, ctx) => {
+  pi.on('session_start', (event, ctx) => {
+    // 'new' is the only reason that means a genuinely fresh session — 'resume',
+    // 'fork', 'reload', and 'startup' are all continuations of prior work
+    // (already covered by the working-memory session bridge / SESSION_ADDENDUM
+    // nudge), not a blank slate that needs starting context injected.
+    sessionIsFresh = event.reason === 'new';
     notifyOrLog(
       ctx,
       `Engram extension ready. DB will open at ${resolve(process.cwd(), DEFAULT_DB_RELATIVE)} on first use.`,
@@ -448,10 +518,38 @@ export default function engramPiExtension(pi: ExtensionAPI): void {
     if (message) scheduleAutoRetain(message);
   });
 
-  pi.on('before_agent_start', (event) => {
+  pi.on('before_agent_start', async (event) => {
+    // Consume the fresh-session flag immediately — regardless of what happens
+    // below, only the first turn of a new session is ever eligible. This is
+    // what keeps startup recall one-shot instead of running every turn.
+    const isFreshSessionStart = sessionIsFresh;
+    sessionIsFresh = false;
+
+    let startingContext: string | null = null;
+    if (isFreshSessionStart && startupRecallEnabled) {
+      try {
+        const engram = await getEngram();
+        startingContext = await startupRecall(engram, {
+          prompt: event.prompt,
+          maxChars: startupRecallConfig.maxChars,
+          topK: startupRecallConfig.topK,
+        });
+      } catch (err) {
+        // Never block the turn over this — proceed without starting context.
+        // eslint-disable-next-line no-console
+        console.error(
+          'engram-pi: startup recall failed:',
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+
     try {
+      const addition = startingContext
+        ? `\n${startingContext}\n${SESSION_ADDENDUM}`
+        : `\n${SESSION_ADDENDUM}`;
       return {
-        systemPrompt: `${event.systemPrompt}\n${SESSION_ADDENDUM}`,
+        systemPrompt: `${event.systemPrompt}${addition}`,
       };
     } catch (err) {
       // Never break a turn over the addendum — return nothing so Pi keeps

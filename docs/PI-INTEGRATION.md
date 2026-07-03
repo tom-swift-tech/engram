@@ -2,7 +2,9 @@
 
 [Pi](https://pi.dev) (the `pi-mono` coding agent by [@earendil-works](https://github.com/earendil-works/pi)) is a TypeScript coding agent CLI with a first-class extension system. This guide covers installing Engram as a Pi extension so you get persistent semantic memory across Pi sessions.
 
-**Status:** Phase 1 + working-memory bridge + background consolidation + auto-retain. Slash commands and LLM tools for `remember / recall / memory / forget / session` are implemented and tested; LLM-callable `engram_session_resume / _update / _snapshot` tools plus a `before_agent_start` system-prompt addendum land Phase 2's session bridge; turn-based extraction/reflection scheduling runs automatically off `turn_end` / `session_shutdown`; conversation messages are auto-retained off `message_end`. Remaining Phase 2: a memory-inspector UI widget and `pi install`-able packaging.
+**Status:** Phase 1 + working-memory bridge + background consolidation + auto-retain + startup recall. Slash commands and LLM tools for `remember / recall / memory / forget / session` are implemented and tested; LLM-callable `engram_session_resume / _update / _snapshot` tools plus a `before_agent_start` system-prompt addendum land Phase 2's session bridge; turn-based extraction/reflection scheduling runs automatically off `turn_end` / `session_shutdown`; conversation messages are auto-retained off `message_end`; the first turn of a fresh session gets a one-shot recall injected as starting context. Remaining Phase 2: a memory-inspector UI widget and `pi install`-able packaging.
+
+**Scope note:** Engram gives Pi durable project memory — decisions, conventions, session continuity across restarts — not code-symbol search. Retrieval (embeddings + FTS5) is tuned for natural language, not identifiers, and nothing invalidates a stored memory when the code it describes changes. Keep using grep/ctags/your editor's index for "find this symbol"; reach for Engram for "what did we decide and why." See the README's [Where Engram fits](../README.md#where-engram-fits) for the fuller version of this tradeoff.
 
 ## Architecture
 
@@ -160,6 +162,27 @@ Capture runs **fire-and-forget** (retain embeds in-process in ~ms, no LLM) and n
 | `ENGRAM_PI_AUTO_RETAIN_MAX_CHARS` | `4000` | Truncate captured text to this length |
 
 Combined with background consolidation, captured messages flow through the pipeline automatically: retain → extraction queue → entity graph → reflection.
+
+## Startup recall (automatic, on by default)
+
+Memory is captured automatically (auto-retain, above) but until now it was **read manually** — the agent had to decide to call `engram_recall` itself. Startup recall closes that gap for the one moment it matters most: the start of a brand-new session.
+
+On `session_start` with `reason: 'new'` (a genuinely fresh session — not `resume`/`reload`/`fork`, which are continuations of prior work already covered by the working-memory session bridge), the **very next** `before_agent_start` recalls against the user's first prompt and prepends the formatted result to the system prompt as starting context:
+
+```
+## Relevant memory from prior work
+
+- The staging cluster runs on Talos Linux, fronted by an nginx ingress [pi:slash-command]
+...
+```
+
+This is deliberately **one-shot, not per-turn**: the fresh-session flag is consumed the moment `before_agent_start` fires, so later turns in the same session don't pay recall latency or risk injecting stale matches into unrelated follow-ups. If nothing relevant is found, nothing is added — no empty header.
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `ENGRAM_PI_STARTUP_RECALL` | on | Set to `0`/`false`/`off` to disable startup recall |
+| `ENGRAM_PI_STARTUP_RECALL_MAX_CHARS` | `1200` | Character budget for the injected block (same convention as `formatForPrompt`'s `maxChars` — a char-count proxy, not a real token count) |
+| `ENGRAM_PI_STARTUP_RECALL_TOPK` | `8` | Max candidates considered before formatting/truncation |
 
 ## Database location and Git
 

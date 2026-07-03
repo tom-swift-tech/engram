@@ -13,6 +13,7 @@
 
 import type { Engram } from 'engram';
 import type { RetainResult, RecallResponse } from 'engram';
+import { formatForPrompt } from 'engram';
 
 export interface RememberInput {
   text: string;
@@ -78,6 +79,50 @@ export async function recall(
     topK: input.topK ?? 5,
     minTrust: input.minTrust,
   });
+}
+
+export interface StartupRecallInput {
+  /** The user's first prompt in a fresh session — used as the recall query. */
+  prompt: string;
+  /** Max results considered before formatting/truncation; default 8 */
+  topK?: number;
+  /** Character budget for the formatted block; default 1200 (matches session-resume's relatedContext budget) */
+  maxChars?: number;
+}
+
+const STARTUP_RECALL_HEADER = '## Relevant memory from prior work';
+
+/**
+ * One-shot "starting context" for a fresh session: recall against the user's
+ * first message and format the result for system-prompt injection. Returns
+ * null when there's nothing relevant (or nothing to say) — the caller should
+ * then fall back to appending no extra context rather than an empty header.
+ *
+ * Deliberately NOT called on every turn — see index.ts's `sessionIsFresh`
+ * gating. Repeating this per-turn would add recall latency to every message
+ * and risks injecting stale/irrelevant matches into unrelated follow-ups.
+ */
+export async function startupRecall(
+  engram: Engram,
+  input: StartupRecallInput,
+): Promise<string | null> {
+  const prompt = input.prompt.trim();
+  if (!prompt) return null;
+
+  const response = await engram.recall(prompt, { topK: input.topK ?? 8 });
+  if (
+    response.results.length === 0 &&
+    response.opinions.length === 0 &&
+    response.observations.length === 0
+  ) {
+    return null;
+  }
+
+  const formatted = formatForPrompt(response, {
+    maxChars: input.maxChars ?? 1200,
+    header: STARTUP_RECALL_HEADER,
+  });
+  return formatted.trim() ? formatted : null;
 }
 
 export function memoryStats(engram: Engram): MemoryStats {

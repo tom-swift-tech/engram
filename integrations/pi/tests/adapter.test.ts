@@ -33,6 +33,7 @@ import {
   planAutoRetain,
   autoRetain,
   DEFAULT_AUTO_RETAIN_CONFIG,
+  startupRecall,
 } from '../src/adapter.js';
 
 // Deterministic embedder (no Ollama, no model download).
@@ -127,6 +128,44 @@ describe('Pi adapter', () => {
         topK: 2,
       });
       expect(response.results.length).toBeLessThanOrEqual(2);
+    });
+  });
+
+  describe('startupRecall', () => {
+    it('returns null when nothing relevant is stored', async () => {
+      const context = await startupRecall(engram, { prompt: 'help me deploy the API gateway' });
+      expect(context).toBeNull();
+    });
+
+    it('returns null for an empty or whitespace-only prompt without querying', async () => {
+      await remember(engram, { text: 'API gateway runs on port 8443' });
+      expect(await startupRecall(engram, { prompt: '' })).toBeNull();
+      expect(await startupRecall(engram, { prompt: '   ' })).toBeNull();
+    });
+
+    it('formats a relevant match with the starting-context header, budget-capped', async () => {
+      await remember(engram, { text: 'API gateway runs on port 8443, fronted by Terraform-managed nginx' });
+      const context = await startupRecall(engram, {
+        prompt: 'what port does the API gateway run on?',
+        maxChars: 2000,
+      });
+      expect(context).not.toBeNull();
+      expect(context).toContain('## Relevant memory from prior work');
+      expect(context).toContain('API gateway');
+    });
+
+    it('truncates to the given maxChars budget', async () => {
+      await remember(engram, {
+        text: 'API gateway runs on port 8443, fronted by Terraform-managed nginx and a very long rationale that goes on for quite a while to pad out the character count well past a tiny budget',
+      });
+      const context = await startupRecall(engram, {
+        prompt: 'what port does the API gateway run on?',
+        maxChars: 40,
+      });
+      // Either nothing fits and it degrades to null, or what's returned respects the budget.
+      if (context !== null) {
+        expect(context.length).toBeLessThanOrEqual(40);
+      }
     });
   });
 

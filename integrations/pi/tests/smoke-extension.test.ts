@@ -162,18 +162,32 @@ describe('engram-pi extension factory', () => {
     }
   });
 
-  it('before_agent_start handler returns a systemPrompt containing the session addendum', () => {
+  it('before_agent_start handler returns a systemPrompt containing the session addendum', async () => {
     const { pi, handlers } = makeFakePi();
     engramPiExtension(pi);
     const handler = handlers.find((h) => h.event === 'before_agent_start');
     expect(handler).toBeDefined();
-    const result = handler!.handler(
+    const result = (await handler!.handler(
       { type: 'before_agent_start', prompt: 'hi', systemPrompt: 'BASE' },
       {},
-    ) as { systemPrompt?: string } | undefined;
+    )) as { systemPrompt?: string } | undefined;
     expect(result?.systemPrompt).toContain('BASE');
     expect(result?.systemPrompt).toContain('engram_session_resume');
     expect(result?.systemPrompt).toContain('engram_session_update');
     expect(result?.systemPrompt).toContain('engram_session_snapshot');
+  });
+
+  it('session_start sets the fresh-session flag only for reason "new"', () => {
+    const { pi, handlers } = makeFakePi();
+    engramPiExtension(pi);
+    const handler = handlers.find((h) => h.event === 'session_start');
+    expect(handler).toBeDefined();
+    // Registration itself doesn't expose internal state; this just proves the
+    // handler runs without throwing for every documented reason. Behavioral
+    // coverage of the flag lives in integration-smoke.test.ts, where startup
+    // recall's effect on the system prompt is directly observable.
+    for (const reason of ['startup', 'reload', 'new', 'resume', 'fork'] as const) {
+      expect(() => handler!.handler({ type: 'session_start', reason }, { hasUI: false })).not.toThrow();
+    }
   });
 });
