@@ -140,6 +140,20 @@ export interface RecallOptions {
   sourceFilter?: string;
   /** Filter results to chunks whose context contains this string (substring match) */
   contextFilter?: string;
+  /**
+   * Which scope(s) to search. Default: `['durable']` — the four long-term
+   * memory types, matching recall()'s historical behavior exactly. Pass
+   * `['task']` (or `['durable', 'task']`) to include ContextStore artifacts.
+   * Expired 'task' rows (past `expires_at`) are always excluded regardless
+   * of this option — TTL is enforced lazily at query time.
+   */
+  scope?: Array<'durable' | 'task'>;
+  /**
+   * Restrict 'task'-scope results to artifacts chained under this parent
+   * ContextRef id (chunks.parent_ref). Ignored for 'durable' rows. Used by
+   * ContextStore.query() to scope a search to one task's committed artifacts.
+   */
+  parentRef?: string;
   /** Boost RRF score for chunks whose source contains this pattern (soft preference) */
   sourceBoost?: { pattern: string; multiplier: number };
   /** Boost RRF score for chunks whose context contains this pattern (soft preference) */
@@ -217,6 +231,10 @@ interface QueryFilters {
   before?: string;
   /** Restrict to these source types (used by the tier-0 truncation reserve) */
   sourceTypeIn?: string[];
+  /** Which chunks.scope values to include. Always set — recall() defaults it to ['durable']. */
+  scope: string[];
+  /** Restrict 'task'-scope rows to this parent_ref (ignored for 'durable' rows) */
+  parentRef?: string;
 }
 
 // =============================================================================
@@ -281,6 +299,31 @@ function buildSourceTypeFilter(filters: QueryFilters): {
   };
 }
 
+/**
+ * Build the scope/parent/TTL SQL fragment shared by all four strategies.
+ * Always restricts to filters.scope (recall() defaults this to ['durable'],
+ * so pre-ContextStore callers see identical results). The expires_at check
+ * is unconditional — 'durable' rows never set it, so it's a no-op for them,
+ * and it's what makes TTL expiry "lazy, checked at read time" rather than
+ * requiring a background reaper.
+ */
+function buildScopeFilter(filters: QueryFilters): {
+  sql: string;
+  params: string[];
+} {
+  const params: string[] = [...filters.scope];
+  // datetime(c.expires_at) normalizes storage format (ISO 8601 w/ 'T'/'Z',
+  // as written by JS's Date#toISOString()) before comparing against
+  // datetime('now')'s "YYYY-MM-DD HH:MM:SS" — a raw string compare would
+  // spuriously order 'T' (0x54) after ' ' (0x20) and never expire anything.
+  let sql = `AND c.scope IN (${inClausePlaceholders(filters.scope)}) AND (c.expires_at IS NULL OR datetime(c.expires_at) > datetime('now'))`;
+  if (filters.parentRef) {
+    sql += ' AND c.parent_ref = ?';
+    params.push(filters.parentRef);
+  }
+  return { sql, params };
+}
+
 // =============================================================================
 // Retrieval Strategies
 // =============================================================================
@@ -308,6 +351,7 @@ function semanticSearch(
     ? 'AND ' + temporal.conditions.join(' AND ')
     : '';
   const sourceType = buildSourceTypeFilter(filters);
+  const scopeF = buildScopeFilter(filters);
 
   try {
     const rows = db
@@ -324,6 +368,7 @@ function semanticSearch(
         AND (? IS NULL OR c.context LIKE '%' || ? || '%')
         ${typeFilter}
         ${sourceType.sql}
+        ${scopeF.sql}
         ${temporalSQL}
       ORDER BY distance ASC
       LIMIT ?
@@ -338,6 +383,7 @@ function semanticSearch(
         contextFilter ?? null,
         ...(memoryTypes ?? []),
         ...sourceType.params,
+        ...scopeF.params,
         ...temporal.params,
         limit,
       ) as any[];
@@ -375,6 +421,7 @@ function keywordSearch(
     ? 'AND ' + temporal.conditions.join(' AND ')
     : '';
   const sourceType = buildSourceTypeFilter(filters);
+  const scopeF = buildScopeFilter(filters);
 
   try {
     const rows = db
@@ -392,6 +439,7 @@ function keywordSearch(
         AND (? IS NULL OR c.context LIKE '%' || ? || '%')
         ${typeFilter}
         ${sourceType.sql}
+        ${scopeF.sql}
         ${temporalSQL}
       ORDER BY rank
       LIMIT ?
@@ -406,6 +454,7 @@ function keywordSearch(
         contextFilter ?? null,
         ...(memoryTypes ?? []),
         ...sourceType.params,
+        ...scopeF.params,
         ...temporal.params,
         limit,
       ) as any[];
@@ -498,6 +547,7 @@ function graphSearch(
       ? 'AND ' + temporal.conditions.join(' AND ')
       : '';
     const sourceType = buildSourceTypeFilter(filters);
+    const scopeF = buildScopeFilter(filters);
 
     const directChunks = db
       .prepare(
@@ -513,6 +563,7 @@ function graphSearch(
         AND (? IS NULL OR c.context LIKE '%' || ? || '%')
         ${typeFilter}
         ${sourceType.sql}
+        ${scopeF.sql}
         ${temporalSQL}
       ORDER BY c.trust_score DESC, c.created_at DESC
       LIMIT ?
@@ -527,6 +578,7 @@ function graphSearch(
         contextFilter ?? null,
         ...(memoryTypes ?? []),
         ...sourceType.params,
+        ...scopeF.params,
         ...temporal.params,
         limit,
       ) as any[];
@@ -551,6 +603,7 @@ function graphSearch(
         AND (? IS NULL OR c.context LIKE '%' || ? || '%')
         ${typeFilter}
         ${sourceType.sql}
+        ${scopeF.sql}
         ${temporalSQL}
       ORDER BY r.confidence DESC, c.trust_score DESC
       LIMIT ?
@@ -567,6 +620,7 @@ function graphSearch(
         contextFilter ?? null,
         ...(memoryTypes ?? []),
         ...sourceType.params,
+        ...scopeF.params,
         ...temporal.params,
         Math.max(0, limit - directChunks.length),
       ) as any[];
@@ -630,6 +684,15 @@ function temporalSearch(
 
   conditions.push(`(? IS NULL OR c.context LIKE '%' || ? || '%')`);
   params.push(contextFilter ?? null, contextFilter ?? null);
+
+  conditions.push(
+    `c.scope IN (${inClausePlaceholders(filters.scope)}) AND (c.expires_at IS NULL OR datetime(c.expires_at) > datetime('now'))`,
+  );
+  params.push(...filters.scope);
+  if (filters.parentRef) {
+    conditions.push('c.parent_ref = ?');
+    params.push(filters.parentRef);
+  }
 
   try {
     const rows = db
@@ -769,6 +832,8 @@ export async function recall(
     decayHalfLifeDays = 180,
     sourceTiers,
     memoryTypeRank,
+    scope = ['durable'],
+    parentRef,
   } = options;
 
   const tiers = { ...DEFAULT_SOURCE_TIERS, ...sourceTiers };
@@ -793,6 +858,8 @@ export async function recall(
     contextFilter,
     after: effectiveAfter,
     before: effectiveBefore,
+    scope,
+    parentRef,
   };
   const strategyResults: ScoredChunk[][] = [];
   const strategiesUsed: string[] = [];

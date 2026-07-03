@@ -148,11 +148,12 @@ engram/
 │   ├── generation.ts            ← pluggable generation providers (Ollama, OpenAI-compat, Anthropic)
 │   ├── local-embedder.ts        ← in-process embeddings via @huggingface/transformers
 │   ├── working-memory-types.ts  ← types for working memory session management
+│   ├── context-store.ts         ← ContextStore: task-scoped ephemeral artifacts (commit/query/expire/promote), reuses recall()'s RRF pipeline via chunks.scope='task'
 │   ├── mcp-tools.ts             ← MCP tool definitions (8 tools: retain/recall/reflect/extract/forget/supersede/session/queue_stats)
 │   ├── mcp-server.ts            ← standalone MCP stdio server (engram-mcp bin)
 │   ├── cli.ts                   ← `engram` CLI: one subcommand per MCP tool, --json contract for Pi (engram bin)
 │   └── cli-args.ts              ← CLI argv parser + Engram.open option-builder + shared validation/clamp helpers
-├── tests/                        ← TS suites incl. aql-* cross-process (379 tests via npm test; +74 from integrations/pi, +67 from tools/openclaw-import)
+├── tests/                        ← TS suites incl. aql-* cross-process (390 tests via npm test; +74 from integrations/pi, +67 from tools/openclaw-import)
 │   ├── helpers.ts
 │   ├── retain.test.ts
 │   ├── retain-gate.test.ts
@@ -164,6 +165,7 @@ engram/
 │   ├── generation.test.ts
 │   ├── engram.test.ts
 │   ├── working-memory.test.ts
+│   ├── context-store.test.ts      ← commit/query round-trip, TTL expiry, budget truncation, RRF parity, shared-parent integration example
 │   ├── local-embedder.test.ts
 │   ├── agent-integration.test.ts
 │   ├── mcp-server.test.ts
@@ -355,3 +357,5 @@ git init && git branch -M main
 - [x] **Embedding model**: `nomic-ai/nomic-embed-text-v1.5` (768d) runs in-process via `@huggingface/transformers` (v3+, the maintained successor to the deprecated `@xenova/transformers`) as default — no Ollama required for retain/recall, and no Hugging Face token (the `nomic-ai` upstream repo is public). Override via `embedModel` option. `Xenova/all-MiniLM-L6-v2` (384d) is a valid alternative for lower disk/memory use. The legacy `Xenova/nomic-embed-text-v1.5` mirror is now gated (401 without a token) so it's no longer the default, but ships identical 768-dim weights — existing `.engram` files stay valid. Opt into Ollama embeddings via `useOllamaEmbeddings: true` (e.g., for GPU acceleration). Existing `.engram` files with Ollama-generated vectors are fully compatible — same model weights, same 768-dim space.
 
 - [ ] **`.engram` MIME type**: Deferred. Extension is established; OS MIME registration is future work if IDE/tooling support becomes valuable.
+
+- [x] **ContextStore (task-scoped ephemeral context)**: A fifth, short-lived scope alongside the four Hindsight memory types, for cheap agent-to-subagent context handoff (`commitContext`/`queryContext`/`expireContext`/`promoteToDurable` in `src/context-store.ts`). Discriminated via a new `chunks.scope IN ('durable', 'task')` column — deliberately **not** named "working memory": that name is already taken by the pre-existing `working_memory` table (session goal/progress state, its own cosine-matched retrieval, and the thing `engram-aql`'s AQL `Working` memory type already maps to). ContextStore artifacts are immutable, multi-artifact-per-task, and ranked through the **same RRF-fusion `recall()` pipeline** as durable memory — `scope`/`parentRef` are just two more `RecallOptions` filters (`recall.ts`), not a forked ranking path. `recall()` defaults `scope` to `['durable']`, so pre-existing callers and all prior tests are unaffected. New nullable `chunks` columns: `scope`, `expires_at`, `parent_ref` (chains to a parent `ContextRef`, never a copy), `agent_id` (originating agent provenance), `artifact_json` (the structured `DecisionArtifact`; `text` holds a flattened searchable rendering for FTS5/semantic/graph). TTL is enforced lazily at query time (`expires_at` checked via `datetime()`-normalized comparison — raw ISO-string vs. SQLite `datetime('now')` comparison silently never expires anything, a real bug caught during implementation), not swept by a background reaper. Task-scoped chunks are excluded from extraction (never enqueued) and from reflect/consolidation (`v_unreflected` view and `reflect.ts`'s inline query both require `scope = 'durable'`) unless explicitly promoted via `promoteToDurable()`, which is a mechanical seam only — it does not itself run `reflect()` or synthesize observations. Migration follows the existing `text_hash` guarded-`ALTER TABLE` pattern in `engram.ts`, with one correction: the new indexes are created *unconditionally after* the column-guards (not inside `schema.sql`'s unconditional index block), because `CREATE INDEX IF NOT EXISTS` on a column that doesn't exist yet fails outright on a pre-existing `.engram` file (unlike `CREATE TABLE IF NOT EXISTS`, which silently no-ops).

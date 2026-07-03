@@ -74,7 +74,19 @@ CREATE TABLE IF NOT EXISTS chunks (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     reflected_at TIMESTAMP,            -- NULL = not yet processed by reflect cycle
     superseded_by TEXT REFERENCES chunks(id),  -- for corrected/updated facts
-    is_active BOOLEAN DEFAULT TRUE     -- soft delete
+    is_active BOOLEAN DEFAULT TRUE,    -- soft delete
+
+    -- Scope (ContextStore — task-scoped ephemeral artifacts alongside durable memory)
+    -- 'durable' = the four Hindsight memory types, unchanged behavior (the default).
+    -- 'task'    = short-lived DecisionArtifacts committed via ContextStore.commit();
+    --             excluded from reflect/consolidation and from default recall()
+    --             unless a caller explicitly opts in via RecallOptions.scope.
+    scope TEXT NOT NULL DEFAULT 'durable'
+        CHECK (scope IN ('durable', 'task')),
+    expires_at TIMESTAMP,               -- 'task' rows only: TTL deadline. NULL = no expiry (all 'durable' rows)
+    parent_ref TEXT REFERENCES chunks(id), -- 'task' rows only: chains to the parent scope's chunk id (not a copy)
+    agent_id TEXT,                      -- 'task' rows only: originating agent Tier/callsign (provenance)
+    artifact_json TEXT                  -- 'task' rows only: the structured DecisionArtifact; `text` holds a flattened, searchable rendering
 );
 
 -- Full-text search index (BM25 via FTS5)
@@ -113,6 +125,13 @@ CREATE INDEX IF NOT EXISTS idx_chunks_event_time ON chunks(event_time) WHERE eve
 CREATE INDEX IF NOT EXISTS idx_chunks_reflected ON chunks(reflected_at) WHERE reflected_at IS NULL AND is_active = TRUE;
 CREATE INDEX IF NOT EXISTS idx_chunks_trust ON chunks(trust_score);
 CREATE INDEX IF NOT EXISTS idx_chunks_created ON chunks(created_at);
+-- idx_chunks_scope / idx_chunks_parent_ref / idx_chunks_expires_at are created
+-- by engram.ts AFTER its column-migration guards, not here: on a pre-existing
+-- .engram file the scope/parent_ref/expires_at columns don't exist yet at the
+-- point this file is exec'd wholesale, and "CREATE INDEX IF NOT EXISTS" on a
+-- missing column fails immediately (unlike "CREATE TABLE IF NOT EXISTS", which
+-- silently no-ops and leaves the column missing). Creating these indexes here
+-- would break every upgrade from a pre-ContextStore .engram file.
 
 -- =============================================================================
 -- ENTITIES
@@ -380,11 +399,14 @@ WHERE r.is_active = TRUE
 ORDER BY r.confidence DESC;
 
 -- Unreflected facts (input for next reflect cycle)
+-- scope = 'durable' excludes task-scoped ContextStore artifacts: they never
+-- enter reflect/consolidation unless explicitly promoted (promoteToDurable).
 CREATE VIEW IF NOT EXISTS v_unreflected AS
 SELECT c.id, c.text, c.memory_type, c.source, c.context, c.event_time, c.created_at
 FROM chunks c
-WHERE c.reflected_at IS NULL 
+WHERE c.reflected_at IS NULL
   AND c.is_active = TRUE
+  AND c.scope = 'durable'
   AND c.memory_type IN ('world', 'experience')
 ORDER BY c.created_at ASC;
 

@@ -35,6 +35,12 @@ Most agent memory systems are either too simple (append-only logs) or too heavy 
 - **Working memory** — auto-switching session contexts for multi-topic conversations
 - **Zero cloud dependency** — embeddings run locally via Transformers.js; extraction and reflection use any local LLM via Ollama or pluggable providers
 
+### Where Engram fits
+
+Engram's core value — trust-tiered provenance, fast-write/slow-extract, session continuity, cross-agent decision handoff (see [ContextStore](#task-scoped-context-contextstore)) — is agent-shape-agnostic. It's equally useful to a workflow/orchestration agent handing off a decision to a subagent, a general assistant remembering user preferences across sessions, or a coding agent remembering *why* a project made an architectural choice.
+
+Where it's **not** a complete answer is code-symbol retrieval. RRF fusion over semantic embeddings + FTS5 keyword search + graph traversal is built for natural-language recall ("what did we decide about auth last week"), not for finding `handleAuthMiddleware` by name — `nomic-embed-text` embeddings and FTS5 tokenization aren't symbol-aware (no camelCase/snake_case splitting), and there's no invalidation signal when the underlying code changes out from under a stored memory. For a coding agent, pair Engram with proper code search (grep, ctags, an AST-aware index) for "find this symbol" — use Engram for the durable project memory layer (decisions, conventions, session state) that code search doesn't cover, not as a replacement for it. Workflow and assistant agents, whose primary retrieval need *is* natural-language recall, get the more complete fit out of the box.
+
 ## Architecture
 
 ```
@@ -327,6 +333,53 @@ setInterval(() => agent.expireStaleWorkingSessions(48), 60 * 60 * 1000);
 | `snapshotWorkingSession(sessionId)` | Save to episodic memory, then expire |
 | `clearWorkingSession(sessionId)` | Expire without snapshot |
 | `expireStaleWorkingSessions(maxAgeHours?)` | Batch-expire old sessions (default: 48h) |
+
+## Task-Scoped Context (ContextStore)
+
+A second, easily-confused-with-Working-Memory concept: cheap agent-to-subagent
+handoff of small structured decisions, not conversation session state.
+
+|                          | Working Memory (above)                          | ContextStore (this section)                        |
+|--------------------------|--------------------------------------------------|------------------------------------------------------|
+| Shape                    | One mutable JSON blob per session                | Many immutable `DecisionArtifact`s per task          |
+| Matched by                | Its own cosine similarity over `topic_embedding` | The same RRF-fusion `recall()` pipeline as long-term memory |
+| Storage                  | `working_memory` table                           | `chunks` table, `scope = 'task'`                     |
+| Typical use              | "Which conversation topic is this?"              | "Lead committed a decision; subagent needs the relevant slice of it." |
+
+A lead agent commits a small structured artifact instead of handing a
+subagent the whole transcript; the subagent queries for only what's
+relevant, ranked through the exact same trust-tiered RRF recall as
+everything else. Artifacts are short-lived by default (TTL, not days),
+excluded from `reflect()`/consolidation, and never appear in a default
+`recall()` call — `scope` defaults to `'durable'`, so existing recall
+behavior is unchanged unless a caller opts in.
+
+```typescript
+import { commitContext, queryContext } from 'engram';
+
+// Lead agent commits two sibling decisions under a shared parent scope
+const parent = await commitContext(db, embedder, { decision: 'decompose the migration task' });
+const dbDecision = await commitContext(db, embedder, {
+  decision: 'use Postgres for the new service',
+  rationale: 'team already runs Postgres in production',
+  agentId: 'lead-tier1',
+}, { parent });
+await commitContext(db, embedder, {
+  decision: 'use React for the dashboard frontend',
+  rationale: 'matches the existing component library',
+}, { parent });
+
+// Subagent, handed only `parent`, pulls just the relevant slice under a token budget
+const slice = await queryContext(db, embedder, parent, 'database choice', { maxChars: 2000 });
+// slice.artifacts -> [{ ref, artifact, parentRef, createdAt, expiresAt }, ...]
+// slice.truncated -> true if relevant results didn't fit the budget
+```
+
+TTL is enforced lazily (checked at query time via `expires_at`, no background
+reaper) rather than swept eagerly. `expireContext(ref)` hard-expires an
+artifact early; `promoteToDurable(ref)` is a mechanical seam that moves an
+artifact into durable scope (clears TTL/parent, becomes reflect-eligible) —
+it does **not** run `reflect()` itself; wiring that up is future work.
 
 ## Utility Functions
 

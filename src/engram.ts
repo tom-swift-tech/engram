@@ -85,6 +85,19 @@ import type {
   SessionCandidate,
 } from './working-memory-types.js';
 
+import {
+  commitContext,
+  queryContext,
+  expireContext,
+  promoteToDurable,
+  type ContextRef,
+  type TaskScope,
+  type DecisionArtifact,
+  type TokenBudget,
+  type ContextSlice,
+  type CommittedArtifact,
+} from './context-store.js';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -109,6 +122,12 @@ export type {
   SessionCandidate,
   GenerationProvider,
   GenerationOptions,
+  ContextRef,
+  TaskScope,
+  DecisionArtifact,
+  TokenBudget,
+  ContextSlice,
+  CommittedArtifact,
 };
 export {
   OllamaEmbeddings,
@@ -289,6 +308,41 @@ export class Engram {
         'ALTER TABLE extraction_queue ADD COLUMN next_retry_after TIMESTAMP',
       );
     }
+
+    // Migration: add ContextStore scope columns to existing .engram files.
+    // Columns are added first (guarded — only if missing), then indexes are
+    // created unconditionally afterward: by that point the columns exist
+    // either way (freshly created above via schema.sql, or just ALTERed in),
+    // so "CREATE INDEX IF NOT EXISTS" never runs against a missing column.
+    const scopeColumns = db.pragma('table_info(chunks)') as Array<{
+      name: string;
+    }>;
+    if (!scopeColumns.some((c) => c.name === 'scope')) {
+      db.exec(
+        `ALTER TABLE chunks ADD COLUMN scope TEXT NOT NULL DEFAULT 'durable' CHECK (scope IN ('durable', 'task'))`,
+      );
+    }
+    if (!scopeColumns.some((c) => c.name === 'expires_at')) {
+      db.exec('ALTER TABLE chunks ADD COLUMN expires_at TIMESTAMP');
+    }
+    if (!scopeColumns.some((c) => c.name === 'parent_ref')) {
+      db.exec('ALTER TABLE chunks ADD COLUMN parent_ref TEXT REFERENCES chunks(id)');
+    }
+    if (!scopeColumns.some((c) => c.name === 'agent_id')) {
+      db.exec('ALTER TABLE chunks ADD COLUMN agent_id TEXT');
+    }
+    if (!scopeColumns.some((c) => c.name === 'artifact_json')) {
+      db.exec('ALTER TABLE chunks ADD COLUMN artifact_json TEXT');
+    }
+    db.exec(
+      'CREATE INDEX IF NOT EXISTS idx_chunks_scope ON chunks(scope) WHERE is_active = TRUE',
+    );
+    db.exec(
+      'CREATE INDEX IF NOT EXISTS idx_chunks_parent_ref ON chunks(parent_ref) WHERE parent_ref IS NOT NULL',
+    );
+    db.exec(
+      'CREATE INDEX IF NOT EXISTS idx_chunks_expires_at ON chunks(expires_at) WHERE expires_at IS NOT NULL',
+    );
 
     // Migration: re-key entity IDs to collision-resistant format (slug + hash).
     // Disables FK checks during the transaction because child rows (chunk_entities,
@@ -683,6 +737,44 @@ export class Engram {
     })();
 
     return result.changes;
+  }
+
+  // ---------------------------------------------------------------------------
+  // ContextStore — task-scoped ephemeral context (commit/query/expire)
+  //
+  // Not to be confused with the working_memory session table below: these are
+  // immutable, multi-artifact-per-task, RRF-ranked records for agent-to-
+  // subagent handoff. See context-store.ts's module doc for the distinction.
+  // ---------------------------------------------------------------------------
+
+  /** Commit a DecisionArtifact under a TaskScope. Returns a lightweight ContextRef. */
+  async commitContext(
+    artifact: DecisionArtifact,
+    scope?: TaskScope,
+  ): Promise<ContextRef> {
+    return commitContext(this.db, this.embedder, artifact, scope);
+  }
+
+  /**
+   * Query the artifacts committed as children of `ref`, ranked via the same
+   * RRF-fusion recall() pipeline as durable memory, truncated to `budget`.
+   */
+  async queryContext(
+    ref: ContextRef,
+    relevanceQuery: string,
+    budget?: TokenBudget,
+  ): Promise<ContextSlice> {
+    return queryContext(this.db, this.embedder, ref, relevanceQuery, budget);
+  }
+
+  /** Explicitly expire a committed artifact ahead of its natural TTL. */
+  async expireContext(ref: ContextRef): Promise<void> {
+    return expireContext(this.db, ref);
+  }
+
+  /** Promotion seam: moves an artifact into durable scope (no reflect/consolidation wiring yet). */
+  async promoteContext(ref: ContextRef): Promise<void> {
+    return promoteToDurable(this.db, ref);
   }
 
   // ---------------------------------------------------------------------------

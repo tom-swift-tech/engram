@@ -335,6 +335,7 @@ function getUnreflectedFacts(db: Database.Database, limit: number): Chunk[] {
     FROM chunks
     WHERE reflected_at IS NULL
       AND is_active = TRUE
+      AND scope = 'durable'
       AND memory_type IN ('world', 'experience')
     ORDER BY created_at ASC
     LIMIT ?

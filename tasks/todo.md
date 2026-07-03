@@ -17,7 +17,8 @@
 - **Pi background consolidation (2026-06-19)** — merged via PR #10. Turn-based extract/reflect scheduling off `turn_end` (every 3 turns drain queue if pending; every 12 turns reflect) + a time-bounded `session_shutdown` flush. Fire-and-forget, overlap-guarded; warns once if Ollama is unreachable. Tunable via `ENGRAM_PI_EXTRACT_EVERY_TURNS` / `ENGRAM_PI_REFLECT_EVERY_TURNS` / `ENGRAM_PI_EXTRACT_BATCH`.
 - **CI covers `integrations/pi` (2026-06-19)** — merged via PR #11. The `check` job now installs/typechecks/builds/tests the Pi extension after the root build, on the `[20, 24]` matrix. Previously the Pi suite ran locally-only.
 - **Pi auto-retain (2026-06-22)** — merged via PR #12. Captures conversation messages as `experience` chunks off `message_end` (on by default; `ENGRAM_PI_AUTO_RETAIN=0` disables). All conversational roles captured; tool/bash output stored at the lowest trust tier so it can't outrank user directives. Gated (min length, skip `/commands`, truncate over `maxChars`, normalized dedup). Tunable via `ENGRAM_PI_AUTO_RETAIN_MIN_CHARS` / `ENGRAM_PI_AUTO_RETAIN_MAX_CHARS`.
-- **Main suite:** 370 tests across 21 files, green on Node 20 and Node 24. The 2 AQL cross-process suites (`aql-equivalence`, `aql-e2e-process`) need `cargo` and pass when it's present. Format + lint clean.
+- **ContextStore — task-scoped ephemeral context (2026-07-01)** — new fifth scope alongside the four Hindsight memory types for cheap agent-to-subagent context handoff (`commitContext`/`queryContext`/`expireContext`/`promoteToDurable` in `src/context-store.ts`). Full detail in the Decisions section of CLAUDE.md/AGENTS.md. Root suite went 379 → 390.
+- **Main suite:** 390 tests across 23 files, green on Node 20 and Node 24. The 2 AQL cross-process suites (`aql-equivalence`, `aql-e2e-process`) need `cargo` and pass when it's present. Format + lint clean.
 - **Pi extension suite:** 74 tests across 6 files, green and CI-gated on Node 20 and 24 (run locally via `cd integrations/pi && npx vitest run`).
 
 ---
@@ -34,6 +35,59 @@ The Pi adapter's big auto-behaviors (session bridge, consolidation, auto-retain)
 Environment note: the suite runs on **Node 20 or 24** — a plain `npm ci` fetches the right `better-sqlite3` prebuild for either. A `cargo` toolchain is still needed for the 2 AQL cross-process suites.
 
 ---
+
+## Done — Task-scoped ContextStore (2026-07-01)
+
+Confirmed design (post-audit, user-approved 2026-07-01):
+- New discriminant `chunks.scope IN ('durable','task')` — NOT reusing the word
+  "working" (collides with the existing `working_memory` table / AQL `Working`
+  type, which is a different, already-shipped concept).
+- `memory_type` stays untouched; artifacts store as `memory_type='experience'`.
+- TypeScript only, canonical impl alongside `retain.ts`/`recall.ts`. No new AQL
+  MemoryType, no engram-aql changes this pass.
+- Default `recall()` behavior (scope unset) must stay 100% unchanged — scope
+  defaults to `['durable']` so all existing tests keep passing.
+- `reflect.ts` AND the `v_unreflected` view both get `scope = 'durable'` added
+  (two separate query paths surfaced by the audit).
+
+Steps (all done):
+- [x] `schema.sql`: added scope/expires_at/parent_ref/agent_id/artifact_json
+      to chunks + indexes (created in engram.ts, not schema.sql — see below);
+      `v_unreflected` view requires `scope = 'durable'`
+- [x] `engram.ts`: guarded ALTER TABLE migration for the 5 new columns.
+      **Found and fixed a real bug during migration testing**: the 3 new
+      indexes must NOT be in schema.sql's unconditional index block —
+      `CREATE INDEX IF NOT EXISTS` on a column that doesn't exist yet fails
+      outright (unlike `CREATE TABLE IF NOT EXISTS`, which silently no-ops),
+      so opening a genuine pre-existing `.engram` file threw `no such column:
+      scope`. Fixed by creating the 3 indexes unconditionally in engram.ts
+      *after* the column-guards, where the column is guaranteed present
+      either way (fresh CREATE TABLE or just-ran ALTER).
+- [x] `reflect.ts`: added `scope = 'durable'` to the inline unreflected query
+- [x] `recall.ts`: added `scope`/`parentRef` to `RecallOptions`/`QueryFilters`,
+      threaded through all 4 strategies via `buildScopeFilter`. **Found and
+      fixed a second bug**: the lazy-expiry check compared JS
+      `Date#toISOString()` (`...T...Z`) against SQLite's `datetime('now')`
+      (`YYYY-MM-DD HH:MM:SS`) as raw strings — 'T' (0x54) always sorts after
+      ' ' (0x20), so `expires_at > datetime('now')` was true unconditionally
+      and nothing ever expired. Fixed by wrapping both sides in `datetime()`,
+      matching the existing `buildTemporalFilter` convention.
+- [x] `src/context-store.ts`: ContextRef/TaskScope/DecisionArtifact/
+      TokenBudget/ContextSlice types + commitContext/queryContext/
+      expireContext/promoteToDurable functions
+- [x] `engram.ts`: wired commitContext/queryContext/expireContext/
+      promoteContext instance methods + re-exported types
+- [x] tests: `tests/context-store.test.ts`, 11 tests — commit/query
+      round-trip, TTL expiry (lazy, read-time), budget truncation w/
+      truncated flag, RRF-parity vs plain recall(), integration example
+      (2 siblings under a shared parent, tight-budget child query)
+- [x] `README.md`: "Task-Scoped Context (ContextStore)" section with a
+      comparison table vs. Working Memory, to head off the name confusion
+- [x] `CLAUDE.md`/`AGENTS.md`: file-structure tree + a Decisions bullet,
+      mirrored per the repo's own sync rule
+- [x] full suite green: 390/390 TS tests (was 379), `cargo test` in
+      `engram-aql/` unaffected (105 tests, schema is shared but Rust doesn't
+      reference the new columns yet — out of scope for this pass)
 
 ## Phase 2 — Pi adapter
 
