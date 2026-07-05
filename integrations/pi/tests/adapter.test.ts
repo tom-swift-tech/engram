@@ -34,6 +34,7 @@ import {
   autoRetain,
   DEFAULT_AUTO_RETAIN_CONFIG,
   startupRecall,
+  isFreshSessionStart,
 } from '../src/adapter.js';
 
 // Deterministic embedder (no Ollama, no model download).
@@ -166,6 +167,28 @@ describe('Pi adapter', () => {
       if (context !== null) {
         expect(context.length).toBeLessThanOrEqual(40);
       }
+    });
+  });
+
+  describe('isFreshSessionStart', () => {
+    it('is fresh for reason "new" regardless of prior entry count', () => {
+      expect(isFreshSessionStart('new', 0)).toBe(true);
+      expect(isFreshSessionStart('new', 5)).toBe(true);
+    });
+
+    it('is fresh for reason "startup" only when there are zero prior entries', () => {
+      // Every initial process launch (interactive or `pi -p`) reports
+      // 'startup', whether or not it loaded history via --continue/--resume —
+      // prior entry count is what actually distinguishes a blank slate.
+      expect(isFreshSessionStart('startup', 0)).toBe(true);
+      expect(isFreshSessionStart('startup', 1)).toBe(false);
+      expect(isFreshSessionStart('startup', 42)).toBe(false);
+    });
+
+    it('is never fresh for "resume", "fork", or "reload"', () => {
+      expect(isFreshSessionStart('resume', 0)).toBe(false);
+      expect(isFreshSessionStart('fork', 0)).toBe(false);
+      expect(isFreshSessionStart('reload', 0)).toBe(false);
     });
   });
 

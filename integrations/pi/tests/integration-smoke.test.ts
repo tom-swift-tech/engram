@@ -80,8 +80,8 @@ function makeFakeUi(confirmAnswer = true): FakeUi {
   };
 }
 
-function makeCtx(ui: FakeUi, hasUI = true): unknown {
-  return { hasUI, ui };
+function makeCtx(ui: FakeUi, hasUI = true, priorEntries: unknown[] = []): unknown {
+  return { hasUI, ui, sessionManager: { getEntries: () => priorEntries } };
 }
 
 function makePi(captured: Captured): unknown {
@@ -328,6 +328,63 @@ describe('engram-pi integration smoke (built dist + real Engram)', () => {
     expect(result?.systemPrompt).not.toContain('## Relevant memory from prior work');
     // Addendum still present — only the recall injection is reason-gated.
     expect(result?.systemPrompt).toContain('engram_session_resume');
+  });
+
+  it('genuine launch (reason: "startup", only bookkeeping entries): before_agent_start injects starting context', async () => {
+    // Every initial process launch — interactive or `pi -p` — reports reason
+    // 'startup' regardless of whether it created a fresh session. Pi always
+    // appends bookkeeping entries (model_change, thinking_level_change) before
+    // session_start fires, even for a genuinely blank slate — those must be
+    // filtered out (only 'message' entries count) for this case to read fresh.
+    await captured.commands.get('remember')!.handler(
+      'The staging cluster runs on Talos Linux',
+      makeCtx(makeFakeUi()),
+    );
+
+    const start = captured.handlers.get('session_start')!;
+    await start(
+      { type: 'session_start', reason: 'startup' },
+      makeCtx(makeFakeUi(), true, [{ type: 'model_change' }, { type: 'thinking_level_change' }]),
+    );
+
+    const beforeAgentStart = captured.handlers.get('before_agent_start')!;
+    const result = (await beforeAgentStart(
+      {
+        type: 'before_agent_start',
+        prompt: 'what does the staging cluster run on?',
+        systemPrompt: 'BASE PROMPT',
+      },
+      makeCtx(makeFakeUi()),
+    )) as { systemPrompt?: string } | undefined;
+
+    expect(result?.systemPrompt).toContain('## Relevant memory from prior work');
+    expect(result?.systemPrompt).toContain('Talos Linux');
+  });
+
+  it('continued launch (reason: "startup", prior "message" entries present, e.g. --continue): before_agent_start does not inject starting context', async () => {
+    await captured.commands.get('remember')!.handler(
+      'The staging cluster runs on Talos Linux',
+      makeCtx(makeFakeUi()),
+    );
+
+    const start = captured.handlers.get('session_start')!;
+    await start(
+      { type: 'session_start', reason: 'startup' },
+      makeCtx(makeFakeUi(), true, [{ type: 'model_change' }, { type: 'message' }]),
+    );
+
+    const beforeAgentStart = captured.handlers.get('before_agent_start')!;
+    const result = (await beforeAgentStart(
+      {
+        type: 'before_agent_start',
+        prompt: 'what does the staging cluster run on?',
+        systemPrompt: 'BASE PROMPT',
+      },
+      makeCtx(makeFakeUi()),
+    )) as { systemPrompt?: string } | undefined;
+
+    expect(result?.systemPrompt).toContain('BASE PROMPT');
+    expect(result?.systemPrompt).not.toContain('## Relevant memory from prior work');
   });
 
   it('round-trip: /remember then /recall finds the stored fact', async () => {

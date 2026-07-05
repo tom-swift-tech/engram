@@ -93,6 +93,35 @@ export interface StartupRecallInput {
 const STARTUP_RECALL_HEADER = '## Relevant memory from prior work';
 
 /**
+ * Whether a session_start event represents a genuinely blank-slate session
+ * eligible for one-shot startup recall.
+ *
+ * Pi's 'new' reason only fires for an explicit mid-process session switch
+ * (e.g. an interactive "start a new session" action) — it is never the
+ * reason on an initial process launch, interactive or `pi -p`. Every initial
+ * launch reports 'startup' instead, regardless of whether it created a
+ * genuinely fresh session or loaded prior history via
+ * --continue/--resume/--session — so 'reason' alone can't tell those apart.
+ *
+ * `priorMessageCount` disambiguates: it must be the count of session entries
+ * with `type === 'message'` specifically — Pi appends bookkeeping entries
+ * (model_change, thinking_level_change, ...) before session_start fires on
+ * *every* launch, so a raw entry count is never zero even for a truly fresh
+ * session. Zero real messages means nothing was loaded, so 'startup' is
+ * genuinely fresh too; a non-zero count means this is a continuation that
+ * already has its own context (covered by the working-memory session
+ * bridge, not startup recall).
+ */
+export function isFreshSessionStart(
+  reason: string,
+  priorMessageCount: number,
+): boolean {
+  if (reason === 'new') return true;
+  if (reason === 'startup') return priorMessageCount === 0;
+  return false;
+}
+
+/**
  * One-shot "starting context" for a fresh session: recall against the user's
  * first message and format the result for system-prompt injection. Returns
  * null when there's nothing relevant (or nothing to say) — the caller should

@@ -17,10 +17,12 @@
 //     close Engram. Pi may not always fire this (e.g. crash); SQLite WAL is
 //     durable across abrupt exits.
 //   - On 'before_agent_start', ONLY for the first turn of a genuinely fresh
-//     session ('session_start' fired with reason: 'new'): recall against the
-//     user's prompt and prepend the formatted result to the system prompt as
-//     starting context. One-shot — not repeated on later turns in the same
-//     session. ENGRAM_PI_STARTUP_RECALL=0 disables it.
+//     session (session_start reason 'new', or 'startup' with zero prior
+//     session entries — see isFreshSessionStart in adapter.ts for why reason
+//     alone isn't enough): recall against the user's prompt and prepend the
+//     formatted result to the system prompt as starting context. One-shot —
+//     not repeated on later turns in the same session.
+//     ENGRAM_PI_STARTUP_RECALL=0 disables it.
 //
 // Slash commands:
 //   /remember <text>       store a fact
@@ -69,6 +71,7 @@ import {
   type AutoRetainConfig,
   type RetainableMessage,
   startupRecall,
+  isFreshSessionStart,
 } from './adapter.js';
 import {
   RememberParams,
@@ -105,8 +108,8 @@ let cachedDbPath: string | null = null;
 // Never persisted; lost on reload. Engram remains the only stateful party.
 let currentSessionId: string | null = null;
 
-// Set by session_start when reason === 'new'; consumed (and cleared) by the
-// very next before_agent_start. Fresh per Pi session, never persisted —
+// Set by session_start via isFreshSessionStart(); consumed (and cleared) by
+// the very next before_agent_start. Fresh per Pi session, never persisted —
 // exactly the one-shot "is this the first turn of a new session" signal
 // startup recall needs, since before_agent_start otherwise fires every turn.
 let sessionIsFresh = false;
@@ -490,11 +493,19 @@ export default function engramPiExtension(pi: ExtensionAPI): void {
   // ---------------------------------------------------------------------------
 
   pi.on('session_start', (event, ctx) => {
-    // 'new' is the only reason that means a genuinely fresh session — 'resume',
-    // 'fork', 'reload', and 'startup' are all continuations of prior work
+    // See isFreshSessionStart in adapter.ts: 'new' only fires for an explicit
+    // mid-process session switch, never an initial process launch — every
+    // launch (interactive or `pi -p`) reports 'startup' whether or not it
+    // loaded prior history via --continue/--resume/--session. Prior *message*
+    // entry count disambiguates a genuinely blank slate from a continuation
     // (already covered by the working-memory session bridge / SESSION_ADDENDUM
-    // nudge), not a blank slate that needs starting context injected.
-    sessionIsFresh = event.reason === 'new';
+    // nudge) — bookkeeping entries (model_change, thinking_level_change, ...)
+    // are appended before session_start fires on every launch, so they must
+    // be filtered out or a fresh session would never read as zero.
+    const priorMessageCount = ctx.sessionManager
+      .getEntries()
+      .filter((e) => e.type === 'message').length;
+    sessionIsFresh = isFreshSessionStart(event.reason, priorMessageCount);
     notifyOrLog(
       ctx,
       `Engram extension ready. DB will open at ${resolve(process.cwd(), DEFAULT_DB_RELATIVE)} on first use.`,

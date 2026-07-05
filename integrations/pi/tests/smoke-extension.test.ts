@@ -177,17 +177,25 @@ describe('engram-pi extension factory', () => {
     expect(result?.systemPrompt).toContain('engram_session_snapshot');
   });
 
-  it('session_start sets the fresh-session flag only for reason "new"', () => {
+  it('session_start reads reason and prior entry count without throwing', () => {
     const { pi, handlers } = makeFakePi();
     engramPiExtension(pi);
     const handler = handlers.find((h) => h.event === 'session_start');
     expect(handler).toBeDefined();
     // Registration itself doesn't expose internal state; this just proves the
-    // handler runs without throwing for every documented reason. Behavioral
-    // coverage of the flag lives in integration-smoke.test.ts, where startup
+    // handler runs without throwing for every documented reason and entry
+    // count. Behavioral coverage of the fresh-session flag (isFreshSessionStart
+    // in adapter.ts) lives in integration-smoke.test.ts, where startup
     // recall's effect on the system prompt is directly observable.
     for (const reason of ['startup', 'reload', 'new', 'resume', 'fork'] as const) {
-      expect(() => handler!.handler({ type: 'session_start', reason }, { hasUI: false })).not.toThrow();
+      for (const entries of [[], [{ type: 'model_change' }], [{ type: 'message' }]]) {
+        expect(() =>
+          handler!.handler(
+            { type: 'session_start', reason },
+            { hasUI: false, sessionManager: { getEntries: () => entries } },
+          ),
+        ).not.toThrow();
+      }
     }
   });
 });
