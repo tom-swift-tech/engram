@@ -185,7 +185,13 @@ let engineFactory: EngineFactory = (path) => Engram.open(path);
 async function getEngram(): Promise<Engram> {
   if (enginePromise) return enginePromise;
 
-  const dbPath = resolve(process.cwd(), DEFAULT_DB_RELATIVE);
+  // ENGRAM_PI_DB_PATH overrides the default project-local <cwd>/.engram/pi.db
+  // resolution. Needed for a persistent-identity agent that gets launched
+  // from several different working directories (interactive TUI, scheduled
+  // jobs, chat bridges) but should always open the same one database rather
+  // than silently starting a fresh, empty one per cwd.
+  const override = process.env.ENGRAM_PI_DB_PATH;
+  const dbPath = override ? resolve(override) : resolve(process.cwd(), DEFAULT_DB_RELATIVE);
   cachedDbPath = dbPath;
   await mkdir(dirname(dbPath), { recursive: true });
 
@@ -425,9 +431,12 @@ export default function engramPiExtension(pi: ExtensionAPI): void {
   // ---------------------------------------------------------------------------
 
   pi.on('session_start', (_event, ctx) => {
+    const plannedPath = process.env.ENGRAM_PI_DB_PATH
+      ? resolve(process.env.ENGRAM_PI_DB_PATH)
+      : resolve(process.cwd(), DEFAULT_DB_RELATIVE);
     notifyOrLog(
       ctx,
-      `Engram extension ready. DB will open at ${resolve(process.cwd(), DEFAULT_DB_RELATIVE)} on first use.`,
+      `Engram extension ready. DB will open at ${plannedPath} on first use.`,
     );
   });
 
