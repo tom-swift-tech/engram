@@ -95,11 +95,23 @@ export const DEFAULT_SOURCE_TIERS: Record<string, number> = {
 const UNKNOWN_SOURCE_TIER = 2;
 
 /**
- * Memory-type → rank, the middle term of the lexicographic sort
- * (tier, memoryTypeRank, score). It only discriminates WITHIN a source
- * tier — provenance dominates memory type exactly as it dominates score.
- * Opinion ranks lowest deliberately: this agrees with the 0.85
- * opinion-confidence cap in formatForPrompt rather than fighting it.
+ * Memory-type → rank. Used as a SOFT multiplicative weight in applyWeighting
+ * (via memoryTypeWeightFromRank below), not a hard lexicographic floor.
+ *
+ * It used to be a hard floor — sorted before score, so no relevance match
+ * could ever let an 'experience' chunk outrank a weakly-related 'observation'
+ * or 'world' chunk. That's backwards for "recall this specific memory"
+ * queries (personal narrative is exactly memory_type='experience') even
+ * though it may have been reasonable for "give me a synthesized answer"
+ * queries. A 2023 chunk ranked #1 by raw semantic distance out of ~4,700
+ * chunks still failed to appear in the results at all, purely because it
+ * was 'experience' competing against unrelated 'world'/'observation'
+ * chunks that structurally outranked it regardless of relevance.
+ *
+ * Kept as a gentle preference instead: world/observation get a modest boost,
+ * opinion a modest penalty (still consistent with the 0.85 opinion-confidence
+ * cap in formatForPrompt), experience is the neutral baseline — but a strong
+ * match in a "lower" type can still beat a weak match in a "higher" one.
  */
 export const DEFAULT_MEMORY_TYPE_RANK: Record<string, number> = {
   world: 0,
@@ -107,6 +119,11 @@ export const DEFAULT_MEMORY_TYPE_RANK: Record<string, number> = {
   experience: 2,
   opinion: 3,
 };
+
+/** rank 0 (world) -> 1.15x, rank 3 (opinion) -> 0.925x. Linear in between. */
+function memoryTypeWeightFromRank(rank: number): number {
+  return 1.15 - rank * 0.075;
+}
 
 /** Unknown/missing memory types sort last within their tier. */
 const UNKNOWN_MEMORY_TYPE_RANK = 99;
@@ -774,9 +791,11 @@ function applyWeighting(
     decayHalfLifeDays?: number;
     sourceBoost?: { pattern: string; multiplier: number };
     contextBoost?: { pattern: string; multiplier: number };
+    memoryRankOf?: (memoryType: string) => number;
   } = {},
 ): void {
-  const { decayHalfLifeDays = 180, sourceBoost, contextBoost } = options;
+  const { decayHalfLifeDays = 180, sourceBoost, contextBoost, memoryRankOf } =
+    options;
 
   for (const [, entry] of fused) {
     // Trust: 0.5 trust → 0.9x, 1.0 trust → 1.2x
@@ -798,9 +817,20 @@ function applyWeighting(
       contextBoost && entry.chunk.context?.includes(contextBoost.pattern)
         ? contextBoost.multiplier
         : 1.0;
+    // Memory-type weight — a gentle preference (world/observation slightly
+    // up, opinion slightly down), not the hard floor this used to be. See
+    // the comment on DEFAULT_MEMORY_TYPE_RANK.
+    const memoryTypeMultiplier = memoryRankOf
+      ? memoryTypeWeightFromRank(memoryRankOf(entry.chunk.memory_type))
+      : 1.0;
 
     entry.score *=
-      trustMultiplier * strategyBoost * decay * srcMultiplier * ctxMultiplier;
+      trustMultiplier *
+      strategyBoost *
+      decay *
+      srcMultiplier *
+      ctxMultiplier *
+      memoryTypeMultiplier;
   }
 }
 
@@ -943,23 +973,28 @@ export async function recall(
 
   // Fuse results
   const fused = reciprocalRankFusion(strategyResults, rrfK);
-  applyWeighting(fused, { decayHalfLifeDays, sourceBoost, contextBoost });
+  applyWeighting(fused, {
+    decayHalfLifeDays,
+    sourceBoost,
+    contextBoost,
+    memoryRankOf,
+  });
 
-  // Sort lexicographically by (source tier, memory-type rank, fused score)
-  // and take top K. The tier is a structural floor: no amount of trust or
-  // relevance lets a lower-tier chunk outrank a higher-tier one. Memory-type
-  // rank then orders within a tier (world > observation > experience >
-  // opinion by default), and trust-weighted score orders within those.
-  // Sorting the FULL fused set before truncation means tier-0 matches
-  // always survive the topK cut.
+  // Sort by (source tier, fused score) and take top K. The tier is a
+  // structural floor: no amount of trust or relevance lets a lower-tier
+  // chunk outrank a higher-tier one — provenance (was this actually stated,
+  // vs. inferred, vs. a raw tool result) is the one thing worth an absolute
+  // floor. Memory-type is NOT a floor anymore — it's a gentle multiplier
+  // inside the score itself (see applyWeighting / memoryTypeWeightFromRank),
+  // so a strong 'experience' match can still beat a weak 'observation' or
+  // 'world' match instead of losing to it categorically. Sorting the FULL
+  // fused set before truncation means tier-0 matches always survive the
+  // topK cut.
   const sorted = [...fused.values()]
     .sort((a, b) => {
       const tierDiff =
         tierOf(a.chunk.source_type) - tierOf(b.chunk.source_type);
       if (tierDiff !== 0) return tierDiff;
-      const typeDiff =
-        memoryRankOf(a.chunk.memory_type) - memoryRankOf(b.chunk.memory_type);
-      if (typeDiff !== 0) return typeDiff;
       return b.score - a.score;
     })
     .slice(0, topK);
