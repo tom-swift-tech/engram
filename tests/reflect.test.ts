@@ -137,8 +137,11 @@ describe('reflect()', () => {
     vi.stubGlobal('fetch', mockOllamaFetch('this is not json at all'));
 
     const result = await reflect({ dbPath });
-    // Graceful recovery: unparseable JSON → empty arrays, not failure
-    expect(result.status).toBe('completed');
+    // Graceful recovery: unparseable JSON → empty arrays, not a hard failure.
+    // But this IS a silent-failure cycle (0 insights despite chunks meeting
+    // the threshold) — status is 'partial', not 'completed', so it's
+    // distinguishable from a genuine no-data-yet quiet cycle (issue #17).
+    expect(result.status).toBe('partial');
     expect(result.observationsCreated).toBe(0);
     expect(result.opinionsFormed).toBe(0);
   });
@@ -624,7 +627,10 @@ describe('reflect()', () => {
     );
 
     const result = await reflect({ dbPath });
-    expect(result.status).toBe('completed');
+    // 0 insights with a full batch (>= minFactsThreshold) is a silent-failure
+    // signal for monitoring purposes, even though the JSON parsed cleanly —
+    // status is 'partial', not 'completed' (issue #17).
+    expect(result.status).toBe('partial');
     expect(result.factsProcessed).toBe(0);
 
     // Facts stay unreflected for retry
@@ -692,5 +698,253 @@ describe('reflect()', () => {
 
     // With dampening (0.5x), delta of 0.10 becomes 0.05, so 0.6 + 0.05 = 0.65
     expect(op.confidence).toBeCloseTo(0.65, 2);
+  });
+
+  // ---------------------------------------------------------------------------
+  // issue #17 — adaptive batch sizing, char-budget truncation, status distinction
+  // ---------------------------------------------------------------------------
+
+  describe('adaptive batch sizing (issue #17)', () => {
+    it('persists a shrunk reflect_batch_hint after a 0-insight cycle with a full batch', async () => {
+      dbPath = tmpDbPath();
+      await setupDb(dbPath, 10);
+      vi.stubGlobal('fetch', mockOllamaFetch('this is not json at all'));
+
+      await reflect({ dbPath, batchSize: 10 });
+
+      const db = new Database(dbPath);
+      const hint = db
+        .prepare(`SELECT value FROM bank_config WHERE key = 'reflect_batch_hint'`)
+        .get() as { value: string } | undefined;
+      db.close();
+
+      expect(hint).toBeDefined();
+      // floor(10 / 2) = 5, and >= minFactsThreshold (5)
+      expect(Number(hint!.value)).toBe(5);
+    });
+
+    it('applies the persisted batch hint to shrink the next cycle, when batchSize is not explicitly passed', async () => {
+      dbPath = tmpDbPath();
+      await setupDb(dbPath, 20);
+
+      const db = new Database(dbPath);
+      db.prepare(
+        `INSERT INTO bank_config (key, value) VALUES ('reflect_batch_hint', '7')`,
+      ).run();
+      db.close();
+
+      vi.stubGlobal('fetch', mockOllamaFetch(REFLECT_RESPONSE));
+
+      await reflect({ dbPath }); // no explicit batchSize — should honor the hint
+
+      const verify = new Database(dbPath);
+      const reflectedCount = verify
+        .prepare(`SELECT COUNT(*) as cnt FROM chunks WHERE reflected_at IS NOT NULL`)
+        .get() as { cnt: number };
+      verify.close();
+
+      // Hint caps the batch at 7, even though 20 facts and the configured
+      // default (50) would otherwise allow more.
+      expect(reflectedCount.cnt).toBe(7);
+    });
+
+    it('does not apply the batch hint when the caller passes an explicit batchSize', async () => {
+      dbPath = tmpDbPath();
+      await setupDb(dbPath, 20);
+
+      const db = new Database(dbPath);
+      db.prepare(
+        `INSERT INTO bank_config (key, value) VALUES ('reflect_batch_hint', '5')`,
+      ).run();
+      db.close();
+
+      vi.stubGlobal('fetch', mockOllamaFetch(REFLECT_RESPONSE));
+
+      // Explicit override of 12 must win over the persisted hint of 5
+      await reflect({ dbPath, batchSize: 12 });
+
+      const verify = new Database(dbPath);
+      const reflectedCount = verify
+        .prepare(`SELECT COUNT(*) as cnt FROM chunks WHERE reflected_at IS NOT NULL`)
+        .get() as { cnt: number };
+      verify.close();
+
+      expect(reflectedCount.cnt).toBe(12);
+    });
+
+    it('resets the batch hint back to default after a cycle that produces insights', async () => {
+      dbPath = tmpDbPath();
+      await setupDb(dbPath, 5);
+
+      const db = new Database(dbPath);
+      db.prepare(
+        `INSERT INTO bank_config (key, value) VALUES ('reflect_batch_hint', '5')`,
+      ).run();
+      db.close();
+
+      vi.stubGlobal('fetch', mockOllamaFetch(REFLECT_RESPONSE));
+
+      const result = await reflect({ dbPath });
+      expect(result.observationsCreated).toBeGreaterThan(0);
+
+      const verify = new Database(dbPath);
+      const hint = verify
+        .prepare(`SELECT value FROM bank_config WHERE key = 'reflect_batch_hint'`)
+        .get();
+      verify.close();
+
+      expect(hint).toBeUndefined();
+    });
+
+    it('floors the shrunk batch hint at minFactsThreshold', async () => {
+      dbPath = tmpDbPath();
+      await setupDb(dbPath, 6);
+      vi.stubGlobal('fetch', mockOllamaFetch('this is not json at all'));
+
+      // floor(6/2) = 3, which is below minFactsThreshold (5) → clamp to 5
+      await reflect({ dbPath, batchSize: 6, minFactsThreshold: 5 });
+
+      const db = new Database(dbPath);
+      const hint = db
+        .prepare(`SELECT value FROM bank_config WHERE key = 'reflect_batch_hint'`)
+        .get() as { value: string };
+      db.close();
+
+      expect(Number(hint.value)).toBe(5);
+    });
+  });
+
+  describe('existing-context character-budget cap (issue #17)', () => {
+    it('truncates existing observations included in the prompt once the char budget is exceeded', async () => {
+      dbPath = tmpDbPath();
+      await setupDb(dbPath, 5);
+
+      const db = new Database(dbPath);
+      // Insert observations with long summaries so a small budget truncates
+      // most of them. Ordered by last_refreshed/synthesized_at DESC, so the
+      // most recently inserted (highest N) sort first.
+      const longSummary = 'X'.repeat(500);
+      for (let i = 0; i < 10; i++) {
+        db.prepare(
+          `
+          INSERT INTO observations (id, summary, source_chunks, source_entities, domain, topic, synthesized_at)
+          VALUES (?, ?, '[]', '[]', 'test', 'topic', datetime('now', ?))
+        `,
+        ).run(`obs-${i}`, `${longSummary} (${i})`, `+${i} seconds`);
+      }
+      db.close();
+
+      let capturedPrompt = '';
+      vi.stubGlobal(
+        'fetch',
+        async (_url: unknown, init?: RequestInit) => {
+          const body = JSON.parse(String(init?.body ?? '{}'));
+          capturedPrompt = body.prompt ?? '';
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ response: REFLECT_RESPONSE }),
+            text: async () => REFLECT_RESPONSE,
+          } as unknown as Response;
+        },
+      );
+
+      // Budget small enough that only a couple of the 500-char summaries fit
+      await reflect({ dbPath, existingContextCharBudget: 1200 });
+
+      // The most-recently-synthesized observation (obs-9) should always be
+      // present under a most-recent-first ordering; an old one inserted
+      // first (obs-0) should have been truncated out of the 10-observation
+      // set given the tight budget.
+      expect(capturedPrompt).toContain('(9)');
+      expect(capturedPrompt).not.toContain('(0)');
+    });
+
+    it('always includes at least one observation even if it alone exceeds the char budget', async () => {
+      dbPath = tmpDbPath();
+      await setupDb(dbPath, 5);
+
+      const db = new Database(dbPath);
+      db.prepare(
+        `
+        INSERT INTO observations (id, summary, source_chunks, source_entities, domain, topic, synthesized_at)
+        VALUES ('obs-huge', ?, '[]', '[]', 'test', 'topic', datetime('now'))
+      `,
+      ).run('Y'.repeat(5000));
+      db.close();
+
+      let capturedPrompt = '';
+      vi.stubGlobal('fetch', async (_url: unknown, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body ?? '{}'));
+        capturedPrompt = body.prompt ?? '';
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ response: REFLECT_RESPONSE }),
+          text: async () => REFLECT_RESPONSE,
+        } as unknown as Response;
+      });
+
+      await reflect({ dbPath, existingContextCharBudget: 100 });
+
+      expect(capturedPrompt).toContain('obs-huge');
+    });
+  });
+
+  describe('reflect_log status distinction (issue #17)', () => {
+    it('logs status "partial" (not "completed") when a full batch produces 0 insights', async () => {
+      dbPath = tmpDbPath();
+      await setupDb(dbPath, 5);
+      vi.stubGlobal('fetch', mockOllamaFetch('this is not json at all'));
+
+      const result = await reflect({ dbPath });
+
+      const db = new Database(dbPath);
+      const log = db
+        .prepare('SELECT status FROM reflect_log WHERE id = ?')
+        .get(result.logId) as { status: string };
+      db.close();
+
+      expect(result.status).toBe('partial');
+      expect(log.status).toBe('partial');
+    });
+
+    it('keeps status "completed" when there are too few unreflected facts to trigger reflection', async () => {
+      dbPath = tmpDbPath();
+      await setupDb(dbPath, 2); // below default minFactsThreshold of 5
+      vi.stubGlobal('fetch', async () => {
+        throw new Error('fetch should not be called when threshold not met');
+      });
+
+      const result = await reflect({ dbPath });
+
+      const db = new Database(dbPath);
+      const log = db
+        .prepare('SELECT status FROM reflect_log WHERE id = ?')
+        .get(result.logId) as { status: string };
+      db.close();
+
+      // Not enough data yet is a genuinely healthy quiet cycle, not a
+      // silent failure — must stay 'completed'.
+      expect(result.status).toBe('completed');
+      expect(log.status).toBe('completed');
+    });
+
+    it('keeps status "completed" when the cycle actually produces insights', async () => {
+      dbPath = tmpDbPath();
+      await setupDb(dbPath, 5);
+      vi.stubGlobal('fetch', mockOllamaFetch(REFLECT_RESPONSE));
+
+      const result = await reflect({ dbPath });
+
+      const db = new Database(dbPath);
+      const log = db
+        .prepare('SELECT status FROM reflect_log WHERE id = ?')
+        .get(result.logId) as { status: string };
+      db.close();
+
+      expect(result.status).toBe('completed');
+      expect(log.status).toBe('completed');
+    });
   });
 });

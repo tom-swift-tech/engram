@@ -39,6 +39,13 @@ export interface ReflectConfig {
   batchSize?: number;
   /** Min facts needed to trigger reflection (default: 5) */
   minFactsThreshold?: number;
+  /**
+   * Max total characters of existing observations to fold into the reflect
+   * prompt (default: 8000). Existing opinions share the same budget.
+   * Guards against accumulated context crowding out room for new facts as
+   * the observation/opinion store grows.
+   */
+  existingContextCharBudget?: number;
 }
 
 interface Chunk {
@@ -310,8 +317,16 @@ function parseReflectOutput(raw: string): LLMReflectOutput {
       opinion_updates: parsed.opinion_updates || [],
       observation_refreshes: parsed.observation_refreshes || [],
     };
-  } catch {
-    // Graceful degradation: empty cycle is better than a failed cycle
+  } catch (err) {
+    // Graceful degradation: empty cycle is better than a failed cycle.
+    // But a silent empty result is exactly what let issue #17's infinite
+    // failure loop go undiagnosed — log enough to reconstruct what happened
+    // (length + a raw snippet) without dumping potentially large/untrusted
+    // content in full.
+    console.error(
+      `[Reflect] Failed to parse LLM output as JSON (${(err as Error).message}). ` +
+        `Raw response length: ${raw.length} chars. First 500 chars: ${raw.slice(0, 500)}`,
+    );
     return { observations: [], opinion_updates: [], observation_refreshes: [] };
   }
 }
@@ -344,9 +359,13 @@ function getUnreflectedFacts(db: Database.Database, limit: number): Chunk[] {
     .all(limit) as Chunk[];
 }
 
+/** Default character budget for existing-context blocks (observations/opinions) in the reflect prompt. */
+const DEFAULT_EXISTING_CONTEXT_CHAR_BUDGET = 8000;
+
 function getExistingObservations(
   db: Database.Database,
   limit: number = 20,
+  maxChars: number = DEFAULT_EXISTING_CONTEXT_CHAR_BUDGET,
 ): Observation[] {
   const rows = db
     .prepare(
@@ -360,16 +379,29 @@ function getExistingObservations(
     )
     .all(limit) as any[];
 
-  return rows.map((r) => ({
-    ...r,
-    source_chunks: JSON.parse(r.source_chunks || '[]'),
-    source_entities: JSON.parse(r.source_entities || '[]'),
-  }));
+  // Cap by character budget as well as count — as the observation store
+  // grows, the top `limit` rows alone can still crowd out room for new
+  // facts in the prompt (see issue #17). Rows are already ordered
+  // most-recent-first, so truncation drops the least-recently-touched ones.
+  const result: Observation[] = [];
+  let totalChars = 0;
+  for (const r of rows) {
+    const summary: string = r.summary || '';
+    totalChars += summary.length + 50; // fixed per-row overhead (id/domain/topic formatting)
+    if (result.length > 0 && totalChars > maxChars) break;
+    result.push({
+      ...r,
+      source_chunks: JSON.parse(r.source_chunks || '[]'),
+      source_entities: JSON.parse(r.source_entities || '[]'),
+    });
+  }
+  return result;
 }
 
 function getExistingOpinions(
   db: Database.Database,
   limit: number = 20,
+  maxChars: number = DEFAULT_EXISTING_CONTEXT_CHAR_BUDGET,
 ): ExistingOpinion[] {
   const rows = db
     .prepare(
@@ -384,12 +416,20 @@ function getExistingOpinions(
     )
     .all(limit) as any[];
 
-  return rows.map((r) => ({
-    ...r,
-    supporting_chunks: JSON.parse(r.supporting_chunks || '[]'),
-    contradicting_chunks: JSON.parse(r.contradicting_chunks || '[]'),
-    related_entities: JSON.parse(r.related_entities || '[]'),
-  }));
+  const result: ExistingOpinion[] = [];
+  let totalChars = 0;
+  for (const r of rows) {
+    const belief: string = r.belief || '';
+    totalChars += belief.length + 50; // fixed per-row overhead (id/confidence/domain formatting)
+    if (result.length > 0 && totalChars > maxChars) break;
+    result.push({
+      ...r,
+      supporting_chunks: JSON.parse(r.supporting_chunks || '[]'),
+      contradicting_chunks: JSON.parse(r.contradicting_chunks || '[]'),
+      related_entities: JSON.parse(r.related_entities || '[]'),
+    });
+  }
+  return result;
 }
 
 function getBankConfig(db: Database.Database): Record<string, string> {
@@ -471,8 +511,9 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
     dbPath,
     ollamaUrl = DEFAULT_OLLAMA_URL,
     reflectModel = 'llama3.1:8b',
-    batchSize = 50,
+    batchSize: configuredBatchSize = 50,
     minFactsThreshold = 5,
+    existingContextCharBudget = DEFAULT_EXISTING_CONTEXT_CHAR_BUDGET,
   } = config;
 
   const generator =
@@ -486,6 +527,24 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
   const db = new Database(dbPath);
   const startTime = Date.now();
   const logId = randomUUID();
+
+  // Adaptive batch sizing (issue #17): if a prior cycle produced zero
+  // insights despite having unreflected chunks available, a shrunk-batch
+  // hint is persisted in bank_config. Only apply it when the caller didn't
+  // pass an explicit batchSize — an explicit value is a deliberate override
+  // and shouldn't be silently downsized.
+  let batchSize = configuredBatchSize;
+  if (config.batchSize === undefined) {
+    const hintRow = db
+      .prepare(`SELECT value FROM bank_config WHERE key = 'reflect_batch_hint'`)
+      .get() as { value: string } | undefined;
+    if (hintRow) {
+      const hinted = parseInt(hintRow.value, 10);
+      if (Number.isFinite(hinted) && hinted > 0) {
+        batchSize = Math.min(batchSize, hinted);
+      }
+    }
+  }
 
   // Start the reflect log entry
   db.prepare(
@@ -543,8 +602,12 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
     }
 
     // 2. Load existing context
-    const existingObs = getExistingObservations(db);
-    const existingOps = getExistingOpinions(db);
+    const existingObs = getExistingObservations(
+      db,
+      20,
+      existingContextCharBudget,
+    );
+    const existingOps = getExistingOpinions(db, 20, existingContextCharBudget);
     const bankConfig = getBankConfig(db);
 
     // 3. Build prompt and call LLM
@@ -560,6 +623,10 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
       jsonMode: true,
     });
     const output = parseReflectOutput(rawResponse);
+
+    // Tracked outside the transaction closure so the post-cycle status/
+    // batch-hint logic (below) can see it once the transaction commits.
+    let insightsProduced = 0;
 
     // 4. Apply results in a transaction
     const applyTransaction = db.transaction(() => {
@@ -735,7 +802,7 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
       // -- Mark facts as reflected only if insights were produced --
       // If parse failed (empty arrays), leave facts unreflected so the next
       // reflect cycle can retry them instead of silently consuming them.
-      const insightsProduced =
+      insightsProduced =
         result.observationsCreated +
         result.observationsUpdated +
         result.opinionsFormed +
@@ -757,13 +824,51 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
 
     applyTransaction();
 
+    // 4b. Adaptive batch sizing + status distinction (issue #17).
+    //
+    // A cycle that produced zero insights despite a full batch of
+    // unreflected chunks being available is a *silent-failure* cycle, not a
+    // healthy quiet one — most likely the prompt overran the model's
+    // effective context and the JSON came back malformed (parseReflectOutput
+    // now logs that). Left alone, the same oversized batch retries forever.
+    // Distinguish it in reflect_log via status 'partial' (already a valid
+    // CHECK value, previously unused) and shrink the batch size hint for the
+    // next cycle so the prompt gets smaller until it succeeds.
+    //
+    // A cycle with few unreflected chunks (below minFactsThreshold) never
+    // reaches this branch at all (handled by the early return above) — that
+    // case is genuinely "not enough data yet," not a failure.
+    const wasSilentFailure =
+      insightsProduced === 0 && unreflected.length >= minFactsThreshold;
+
+    if (wasSilentFailure) {
+      const shrunk = Math.max(
+        minFactsThreshold,
+        Math.floor(unreflected.length / 2),
+      );
+      db.prepare(
+        `INSERT OR REPLACE INTO bank_config (key, value, updated_at) VALUES ('reflect_batch_hint', ?, CURRENT_TIMESTAMP)`,
+      ).run(String(shrunk));
+      console.warn(
+        `[Reflect] Cycle produced 0 insights from ${unreflected.length} unreflected chunks — ` +
+          `likely a parse/context-size failure (see prior log). Shrinking next batch size to ${shrunk}.`,
+      );
+    } else if (insightsProduced > 0) {
+      // A cycle that actually produced insights is evidence the current
+      // batch size works — clear any prior shrink hint so future cycles
+      // go back to the configured/default size.
+      db.prepare(`DELETE FROM bank_config WHERE key = 'reflect_batch_hint'`).run();
+    }
+
+    result.status = wasSilentFailure ? 'partial' : 'completed';
+
     // 5. Update reflect log
     result.durationMs = Date.now() - startTime;
     db.prepare(
       `
       UPDATE reflect_log
       SET completed_at = CURRENT_TIMESTAMP,
-          status = 'completed',
+          status = ?,
           facts_processed = ?,
           observations_created = ?,
           observations_updated = ?,
@@ -773,6 +878,7 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
       WHERE id = ?
     `,
     ).run(
+      result.status,
       result.factsProcessed,
       result.observationsCreated,
       result.observationsUpdated,
