@@ -77,6 +77,12 @@ export async function recall(
   return engram.recall(input.query, {
     topK: input.topK ?? 5,
     minTrust: input.minTrust,
+    // Disable the library's default 180-day recency decay. At that default a
+    // multi-year-old memory's score is crushed to ~1% before trust/relevance
+    // even apply (2^(-1205/180) ≈ 0.01 for a 2023 chunk) — wrong for a
+    // personal assistant meant to have continuity across years, where
+    // trust_score and semantic relevance should drive ranking, not recency.
+    decayHalfLifeDays: 0,
   });
 }
 
