@@ -254,6 +254,32 @@ describe('engram-pi integration smoke (built dist + real Engram)', () => {
     expect(existsSync(join(projectDir, '.engram', 'pi.db'))).toBe(true);
   });
 
+  it('ENGRAM_PI_DB_PATH overrides the default project-local db path', async () => {
+    const overrideDir = mkdtempSync(join(tmpdir(), 'engram-pi-db-override-'));
+    const overridePath = join(overrideDir, 'shared.db');
+    process.env.ENGRAM_PI_DB_PATH = overridePath;
+    try {
+      const start = captured.handlers.get('session_start')!;
+      const ui = makeFakeUi();
+      await start({}, makeCtx(ui));
+      expect(ui.notifications[0].message).toContain(overridePath);
+
+      // Trigger lazy open via /memory — it must open at the override path,
+      // not <projectDir>/.engram/pi.db.
+      await captured.commands.get('memory')!.handler('', makeCtx(makeFakeUi()));
+      expect(existsSync(overridePath)).toBe(true);
+      expect(existsSync(join(projectDir, '.engram', 'pi.db'))).toBe(false);
+    } finally {
+      // Close the Engram instance before removing its directory — on Windows
+      // an open SQLite handle blocks deletion (the outer afterEach does the
+      // same shutdown, but that runs too late to unblock this cleanup).
+      const shutdown = captured.handlers.get('session_shutdown');
+      if (shutdown) await shutdown({}, makeCtx(makeFakeUi()));
+      delete process.env.ENGRAM_PI_DB_PATH;
+      rmSync(overrideDir, { recursive: true, force: true });
+    }
+  });
+
   it('fresh session (reason: "new"): before_agent_start injects starting context from prior memory', async () => {
     // Seed memory in a "previous session" before the fresh one starts.
     await captured.commands.get('remember')!.handler(

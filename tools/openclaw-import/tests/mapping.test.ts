@@ -8,7 +8,7 @@ describe('mapCategory', () => {
     expect(result).toEqual({
       memoryType: 'world',
       trustScore: 0.9,
-      sourceType: 'external_doc',
+      sourceType: 'agent_generated',
       skipExtraction: false,
     });
   });
@@ -18,7 +18,7 @@ describe('mapCategory', () => {
     expect(result).toEqual({
       memoryType: 'experience',
       trustScore: 0.7,
-      sourceType: 'external_doc',
+      sourceType: 'agent_generated',
       skipExtraction: false,
     });
   });
@@ -28,7 +28,7 @@ describe('mapCategory', () => {
     expect(result).toEqual({
       memoryType: 'world',
       trustScore: 0.85,
-      sourceType: 'external_doc',
+      sourceType: 'agent_generated',
       skipExtraction: false,
     });
   });
@@ -38,7 +38,7 @@ describe('mapCategory', () => {
     expect(result).toEqual({
       memoryType: 'experience',
       trustScore: 0.6,
-      sourceType: 'external_doc',
+      sourceType: 'agent_generated',
       skipExtraction: true,
     });
   });
@@ -48,7 +48,7 @@ describe('mapCategory', () => {
     expect(result).toEqual({
       memoryType: 'world',
       trustScore: 0.8,
-      sourceType: 'external_doc',
+      sourceType: 'agent_generated',
       skipExtraction: false,
     });
   });
@@ -58,7 +58,7 @@ describe('mapCategory', () => {
     expect(result).toEqual({
       memoryType: 'world',
       trustScore: 0.85,
-      sourceType: 'external_doc',
+      sourceType: 'agent_generated',
       skipExtraction: true,
     });
   });
@@ -68,7 +68,7 @@ describe('mapCategory', () => {
     expect(result).toEqual({
       memoryType: 'world',
       trustScore: 0.75,
-      sourceType: 'external_doc',
+      sourceType: 'agent_generated',
       skipExtraction: false,
     });
   });
@@ -107,7 +107,7 @@ describe('mapCategory', () => {
       expect(result.memoryType).toBeDefined();
       expect(result.trustScore).toBeGreaterThanOrEqual(0);
       expect(result.trustScore).toBeLessThanOrEqual(1);
-      expect(result.sourceType).toBe('external_doc');
+      expect(result.sourceType).toBe('agent_generated');
       expect(typeof result.skipExtraction).toBe('boolean');
     }
   });
