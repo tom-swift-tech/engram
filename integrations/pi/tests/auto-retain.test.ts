@@ -16,7 +16,7 @@ import engramPiExtension, {
   _setAutoRetainConfigForTesting,
   _getPendingAutoRetainForTesting,
 } from '../src/index.js';
-import { memoryStats } from '../src/adapter.js';
+import { memoryStats, recall } from '../src/adapter.js';
 
 class TestEmbedder implements EmbeddingProvider {
   readonly dimensions = 8;
@@ -69,8 +69,12 @@ describe('auto-retain (binding)', () => {
     _resetEngineFactoryForTesting();
   });
 
-  async function fireMessage(fp: FakePi, message: unknown): Promise<void> {
-    fp.handlers.get('message_end')!({ message }, {});
+  async function fireMessage(
+    fp: FakePi,
+    message: unknown,
+    ctx: unknown = {},
+  ): Promise<void> {
+    fp.handlers.get('message_end')!({ message }, ctx);
     const pending = _getPendingAutoRetainForTesting();
     if (pending) await pending;
   }
@@ -125,5 +129,71 @@ describe('auto-retain (binding)', () => {
     await fireMessage(fp, { role: 'compactionSummary', content: 'internal summary text' }); // skipped role
 
     expect(factoryCalls).toBe(0);
+  });
+
+  describe('ctx.mode-aware provenance (issue #21)', () => {
+    const CONTENT = 'deploy the staging cluster tonight at 9pm please';
+
+    async function retainedSourceType(): Promise<{ sourceType: string; trustScore: number }> {
+      const response = await recall(engram!, { query: CONTENT, topK: 1 });
+      expect(response.results).toHaveLength(1);
+      return response.results[0];
+    }
+
+    it('stores a tui-mode user message as user_stated (unchanged)', async () => {
+      const fp = makeFakePi();
+      engramPiExtension(fp.pi);
+      await fireMessage(fp, { role: 'user', content: CONTENT }, { mode: 'tui' });
+      await expect(retainedSourceType()).resolves.toMatchObject({
+        sourceType: 'user_stated',
+        trustScore: 0.7,
+      });
+    });
+
+    it('falls back to tui when ctx has no mode field (back-compat)', async () => {
+      const fp = makeFakePi();
+      engramPiExtension(fp.pi);
+      await fireMessage(fp, { role: 'user', content: CONTENT }, {});
+      await expect(retainedSourceType()).resolves.toMatchObject({
+        sourceType: 'user_stated',
+        trustScore: 0.7,
+      });
+    });
+
+    it.each(['rpc', 'json', 'print'] as const)(
+      'downgrades a %s-mode user message to inferred',
+      async (mode) => {
+        const fp = makeFakePi();
+        engramPiExtension(fp.pi);
+        await fireMessage(fp, { role: 'user', content: CONTENT }, { mode });
+        await expect(retainedSourceType()).resolves.toMatchObject({
+          sourceType: 'inferred',
+          trustScore: 0.3,
+        });
+      },
+    );
+
+    it('honors ENGRAM_PI_AUTO_RETAIN_NONINTERACTIVE_SOURCE_TYPE override', async () => {
+      _setAutoRetainConfigForTesting({ nonInteractiveSourceType: 'user_stated' });
+      const fp = makeFakePi();
+      engramPiExtension(fp.pi);
+      await fireMessage(fp, { role: 'user', content: CONTENT }, { mode: 'print' });
+      await expect(retainedSourceType()).resolves.toMatchObject({
+        sourceType: 'user_stated',
+        trustScore: 0.7,
+      });
+    });
+
+    it('never downgrades non-user roles regardless of mode', async () => {
+      const fp = makeFakePi();
+      engramPiExtension(fp.pi);
+      await fireMessage(
+        fp,
+        { role: 'toolResult', content: 'npm test => 59 passing, 0 failing' },
+        { mode: 'print' },
+      );
+      const response = await recall(engram!, { query: 'npm test passing', topK: 1 });
+      expect(response.results[0]).toMatchObject({ sourceType: 'tool_result', trustScore: 0.4 });
+    });
   });
 });

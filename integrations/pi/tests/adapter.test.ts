@@ -577,7 +577,7 @@ describe('extractMessageText', () => {
 });
 
 describe('planAutoRetain — pure', () => {
-  const cfg = { minChars: 8, maxChars: 50 };
+  const cfg = { minChars: 8, maxChars: 50, nonInteractiveSourceType: 'inferred' as const };
 
   it('maps user/assistant/tool roles to the right provenance', () => {
     const user = planAutoRetain({ role: 'user', content: 'deploy the staging cluster tonight' }, cfg);
@@ -619,6 +619,58 @@ describe('planAutoRetain — pure', () => {
     const plan = planAutoRetain({ role: 'user', content: 'a sufficiently long user message' }, cfg);
     expect(plan!.source).toBe('pi:conversation');
     expect(plan!.context).toBe('role:user');
+  });
+
+  describe('mode-aware provenance for user-role messages (issue #21)', () => {
+    const msg = { role: 'user', content: 'deploy the staging cluster tonight' };
+
+    it('defaults to tui (interactive) when mode is omitted — unchanged behavior', () => {
+      const plan = planAutoRetain(msg, cfg);
+      expect(plan).toMatchObject({ sourceType: 'user_stated', trustScore: 0.7 });
+    });
+
+    it('trusts a tui session as user_stated', () => {
+      const plan = planAutoRetain(msg, cfg, 'tui');
+      expect(plan).toMatchObject({ sourceType: 'user_stated', trustScore: 0.7 });
+    });
+
+    it.each(['rpc', 'json', 'print'] as const)(
+      'downgrades a non-interactive (%s) user message to inferred',
+      (mode) => {
+        const plan = planAutoRetain(msg, cfg, mode);
+        expect(plan).toMatchObject({ sourceType: 'inferred', trustScore: 0.3 });
+      },
+    );
+
+    it('leaves non-user roles untouched by mode', () => {
+      const asst = planAutoRetain(
+        { role: 'assistant', content: 'I will deploy the staging cluster now' },
+        cfg,
+        'print',
+      );
+      expect(asst).toMatchObject({ sourceType: 'agent_generated', trustScore: 0.5 });
+
+      const tool = planAutoRetain(
+        { role: 'toolResult', content: 'exit code 0, build succeeded fine' },
+        cfg,
+        'rpc',
+      );
+      expect(tool).toMatchObject({ sourceType: 'tool_result', trustScore: 0.4 });
+    });
+
+    it('honors a configured nonInteractiveSourceType override', () => {
+      const revertToUserStated = { ...cfg, nonInteractiveSourceType: 'user_stated' as const };
+      expect(planAutoRetain(msg, revertToUserStated, 'print')).toMatchObject({
+        sourceType: 'user_stated',
+        trustScore: 0.7,
+      });
+
+      const lowerStill = { ...cfg, nonInteractiveSourceType: 'tool_result' as const };
+      expect(planAutoRetain(msg, lowerStill, 'rpc')).toMatchObject({
+        sourceType: 'tool_result',
+        trustScore: 0.4,
+      });
+    });
   });
 });
 

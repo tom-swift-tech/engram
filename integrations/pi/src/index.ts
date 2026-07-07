@@ -12,7 +12,11 @@
 //     turn never blocks on Ollama. Skipped entirely if memory was never opened.
 //   - On 'message_end': auto-retain the completed message as an experience
 //     memory (on by default; ENGRAM_PI_AUTO_RETAIN=0 disables). Fire-and-forget;
-//     a message that fails gating never opens the DB.
+//     a message that fails gating never opens the DB. A 'user'-role message is
+//     stored as user_stated only when ctx.mode === 'tui' (a live interactive
+//     session); non-interactive invocations (pi -p, RPC, JSON) default to
+//     ENGRAM_PI_AUTO_RETAIN_NONINTERACTIVE_SOURCE_TYPE (default 'inferred') so
+//     scheduled/automated volume can't crowd out real user_stated content.
 //   - On 'session_shutdown': flush a final extract+reflect (time-bounded), then
 //     close Engram. Pi may not always fire this (e.g. crash); SQLite WAL is
 //     durable across abrupt exits.
@@ -70,6 +74,7 @@ import {
   DEFAULT_AUTO_RETAIN_CONFIG,
   type AutoRetainConfig,
   type RetainableMessage,
+  type RunMode,
   startupRecall,
   isFreshSessionStart,
 } from './adapter.js';
@@ -172,6 +177,28 @@ function envBoolDefaultTrue(name: string): boolean {
   return !['0', 'false', 'no', 'off'].includes(raw);
 }
 
+// Valid overrides for a non-interactive 'user'-role message's sourceType
+// (see AutoRetainConfig.nonInteractiveSourceType). Anything else in the env
+// var falls back to the default rather than failing startup.
+const NON_INTERACTIVE_SOURCE_TYPES = [
+  'inferred',
+  'user_stated',
+  'agent_generated',
+  'tool_result',
+] as const;
+
+function envNonInteractiveSourceType(
+  name: string,
+  fallback: AutoRetainConfig['nonInteractiveSourceType'],
+): AutoRetainConfig['nonInteractiveSourceType'] {
+  const raw = process.env[name];
+  return (NON_INTERACTIVE_SOURCE_TYPES as readonly string[]).includes(
+    raw ?? '',
+  )
+    ? (raw as AutoRetainConfig['nonInteractiveSourceType'])
+    : fallback;
+}
+
 let autoRetainEnabled = envBoolDefaultTrue('ENGRAM_PI_AUTO_RETAIN');
 let autoRetainConfig: AutoRetainConfig = {
   minChars: envInt(
@@ -181,6 +208,10 @@ let autoRetainConfig: AutoRetainConfig = {
   maxChars: envInt(
     'ENGRAM_PI_AUTO_RETAIN_MAX_CHARS',
     DEFAULT_AUTO_RETAIN_CONFIG.maxChars,
+  ),
+  nonInteractiveSourceType: envNonInteractiveSourceType(
+    'ENGRAM_PI_AUTO_RETAIN_NONINTERACTIVE_SOURCE_TYPE',
+    DEFAULT_AUTO_RETAIN_CONFIG.nonInteractiveSourceType,
   ),
 };
 // Most recent detached auto-retain promise, for deterministic test awaits.
@@ -272,6 +303,7 @@ export function _resetEngineFactoryForTesting(): void {
   autoRetainConfig = {
     minChars: DEFAULT_AUTO_RETAIN_CONFIG.minChars,
     maxChars: DEFAULT_AUTO_RETAIN_CONFIG.maxChars,
+    nonInteractiveSourceType: DEFAULT_AUTO_RETAIN_CONFIG.nonInteractiveSourceType,
   };
   pendingAutoRetain = null;
   startupRecallEnabled = true;
@@ -302,10 +334,14 @@ export function _setAutoRetainConfigForTesting(opts: {
   enabled?: boolean;
   minChars?: number;
   maxChars?: number;
+  nonInteractiveSourceType?: AutoRetainConfig['nonInteractiveSourceType'];
 }): void {
   if (opts.enabled !== undefined) autoRetainEnabled = opts.enabled;
   if (opts.minChars !== undefined) autoRetainConfig.minChars = opts.minChars;
   if (opts.maxChars !== undefined) autoRetainConfig.maxChars = opts.maxChars;
+  if (opts.nonInteractiveSourceType !== undefined) {
+    autoRetainConfig.nonInteractiveSourceType = opts.nonInteractiveSourceType;
+  }
 }
 
 /** Test-only: toggle startup recall and/or override its topK/budget. */
@@ -419,14 +455,14 @@ function scheduleConsolidation(ctx: ExtensionContext): void {
  * never opens Engram (preserving lazy-open); retain() is fast and in-process,
  * but we still don't block the turn on it.
  */
-function scheduleAutoRetain(message: RetainableMessage): void {
+function scheduleAutoRetain(message: RetainableMessage, mode?: RunMode): void {
   if (!autoRetainEnabled) return;
-  if (!planAutoRetain(message, autoRetainConfig)) return;
+  if (!planAutoRetain(message, autoRetainConfig, mode)) return;
 
   pendingAutoRetain = (async () => {
     try {
       const engram = await getEngram();
-      await autoRetain(engram, message, autoRetainConfig);
+      await autoRetain(engram, message, autoRetainConfig, mode);
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error(
@@ -534,9 +570,11 @@ export default function engramPiExtension(pi: ExtensionAPI): void {
   });
 
   // Auto-retain: capture each completed message as an experience memory.
-  pi.on('message_end', (event) => {
+  // ctx.mode distinguishes a live interactive (tui) session from a
+  // non-interactive one (rpc/json/print, e.g. `pi -p`) — see planAutoRetain.
+  pi.on('message_end', (event, ctx) => {
     const message = (event as { message?: RetainableMessage }).message;
-    if (message) scheduleAutoRetain(message);
+    if (message) scheduleAutoRetain(message, ctx.mode);
   });
 
   pi.on('before_agent_start', async (event) => {

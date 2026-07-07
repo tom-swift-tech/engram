@@ -529,14 +529,33 @@ export interface AutoRetainConfig {
   minChars: number;
   /** Truncate extracted text to this length so huge tool output can't bloat the DB (default 4000). */
   maxChars: number;
+  /**
+   * sourceType applied to a 'user'-role message when the invocation wasn't a
+   * live interactive (tui) session — e.g. `pi -p`, RPC, or JSON mode (see
+   * `mode` on planAutoRetain). Defaults to 'inferred' so unbounded
+   * non-interactive volume (scheduled jobs, automation) can't structurally
+   * crowd out genuine interactive user_stated content at recall time.
+   * Override via ENGRAM_PI_AUTO_RETAIN_NONINTERACTIVE_SOURCE_TYPE for hosts
+   * that know their non-tui invocations are genuine human queries (set to
+   * 'user_stated') or are 100% automation (set to 'tool_result').
+   */
+  nonInteractiveSourceType: SourceType;
 }
 
 export const DEFAULT_AUTO_RETAIN_CONFIG: AutoRetainConfig = {
   minChars: 8,
   maxChars: 4000,
+  nonInteractiveSourceType: 'inferred',
 };
 
-type SourceType = 'user_stated' | 'agent_generated' | 'tool_result';
+type SourceType = 'user_stated' | 'agent_generated' | 'tool_result' | 'inferred';
+
+/**
+ * Pi's run mode ("tui" | "rpc" | "json" | "print" — mirrors
+ * @earendil-works/pi-coding-agent's ExtensionContext.mode). Declared locally
+ * rather than imported so this module stays Pi-agnostic.
+ */
+export type RunMode = 'tui' | 'rpc' | 'json' | 'print';
 
 interface RoleMapping {
   sourceType: SourceType;
@@ -550,6 +569,17 @@ const ROLE_MAP: Record<string, RoleMapping> = {
   assistant: { sourceType: 'agent_generated', trustScore: 0.5 },
   toolResult: { sourceType: 'tool_result', trustScore: 0.4 },
   bashExecution: { sourceType: 'tool_result', trustScore: 0.4 },
+};
+
+// Trust score paired with each valid nonInteractiveSourceType override —
+// mirrors ROLE_MAP's scores for the roles that already use these source
+// types, so a downgraded/overridden user message carries the same trust
+// convention as native content of that source type.
+const NON_INTERACTIVE_SOURCE_TRUST: Record<SourceType, number> = {
+  user_stated: 0.7,
+  agent_generated: 0.5,
+  tool_result: 0.4,
+  inferred: 0.3,
 };
 
 const TRUNCATION_MARKER = '… [truncated]';
@@ -589,10 +619,22 @@ export interface AutoRetainPlan {
  * Pure decision: given a message, return what to retain (or null to skip).
  * Skips non-conversational roles, empty/whitespace text, user `/command`
  * invocations, and text below `minChars`; truncates to `maxChars`.
+ *
+ * `mode` is the invocation's run mode (default 'tui', i.e. a live interactive
+ * session — the safe default for callers that don't know about run modes).
+ * A 'user'-role message is only trusted as `user_stated` when `mode ===
+ * 'tui'`; anything else (`rpc`/`json`/`print` — non-interactive or automated
+ * invocations, e.g. `pi -p`) falls back to `config.nonInteractiveSourceType`.
+ * This can't perfectly distinguish a genuine one-off human `pi -p` query from
+ * a scheduled job (see issue #21) — it only tells apart a standing
+ * interactive session from a one-shot invocation — but that's the axis that
+ * matters: scheduled jobs are definitionally one-shot and non-interactive.
+ * Non-'user' roles are unaffected by mode.
  */
 export function planAutoRetain(
   message: RetainableMessage,
   config: AutoRetainConfig = DEFAULT_AUTO_RETAIN_CONFIG,
+  mode: RunMode = 'tui',
 ): AutoRetainPlan | null {
   const mapping = ROLE_MAP[message.role];
   if (!mapping) return null;
@@ -609,11 +651,19 @@ export function planAutoRetain(
         TRUNCATION_MARKER
       : raw;
 
+  const isNonInteractiveUser = message.role === 'user' && mode !== 'tui';
+  const sourceType = isNonInteractiveUser
+    ? config.nonInteractiveSourceType
+    : mapping.sourceType;
+  const trustScore = isNonInteractiveUser
+    ? NON_INTERACTIVE_SOURCE_TRUST[config.nonInteractiveSourceType]
+    : mapping.trustScore;
+
   return {
     text,
     memoryType: 'experience',
-    sourceType: mapping.sourceType,
-    trustScore: mapping.trustScore,
+    sourceType,
+    trustScore,
     source: 'pi:conversation',
     context: `role:${message.role}`,
   };
@@ -628,8 +678,9 @@ export async function autoRetain(
   engram: Engram,
   message: RetainableMessage,
   config: AutoRetainConfig = DEFAULT_AUTO_RETAIN_CONFIG,
+  mode: RunMode = 'tui',
 ): Promise<RetainResult | null> {
-  const plan = planAutoRetain(message, config);
+  const plan = planAutoRetain(message, config, mode);
   if (!plan) return null;
   return engram.retain(plan.text, {
     memoryType: plan.memoryType,
