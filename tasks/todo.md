@@ -47,8 +47,24 @@ entities); both only manifest at scale.
 - [x] Tests for both in `tests/retain.test.ts` (existing describe blocks) —
       root suite 400 → 403, all green.
 - [x] Full suite green (`npm test`), commit to `main`, push.
-- [ ] Upgrade note for Mira — her deploy base `d5d7dd8` predates the #17
-      reflect fix, #18 ranking fix, #19 decay fix, and these two.
+- [x] Upgrade note for Mira drafted (relayed via Tom) — her deploy base
+      `d5d7dd8` predates the #17 reflect fix, #18 ranking fix, #19 decay
+      fix, and these two (landed as `30476f7`).
+
+Follow-up enhancements (Mira's #8/#9), same session:
+
+- [x] **`failed_reasons` breakdown in queue stats** — `getQueueStats` now
+      returns distinct failed-item error messages with counts (top 10, most
+      common first), so an outage is self-diagnosing ("11× fetch failed")
+      across all three transports for free.
+- [x] **Requeue surface for terminally-failed extractions** — failed was a
+      dead end after 3 attempts (an outage stranded recoverable items).
+      New `requeueFailedExtractions()` core fn + `Engram` method, 9th MCP
+      tool `engram_requeue_failed` (optional `errorLike` substring filter),
+      CLI `requeue-failed [--error-like]`. Resets attempts/backoff; skips
+      deactivated chunks. Docs: README, skills/engram.md,
+      skills/cli-memory/SKILL.md, CLAUDE.md+AGENTS.md (mirrored).
+      Root suite 403 → 411; Pi suite 102 green; mirror diff clean.
 
 ## Next session — start here
 

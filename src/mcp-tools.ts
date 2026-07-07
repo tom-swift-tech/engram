@@ -248,10 +248,25 @@ export const ENGRAM_TOOLS = [
   {
     name: 'engram_queue_stats' as const,
     description:
-      'Get extraction queue health stats: pending, processing, completed, and failed counts plus the oldest pending item age. Use to diagnose why the knowledge graph is not growing or to decide when to call engram_process_extractions.',
+      'Get extraction queue health stats: pending, processing, completed, and failed counts plus the oldest pending item age and a failed_reasons breakdown (distinct error messages with counts). Use to diagnose why the knowledge graph is not growing or to decide when to call engram_process_extractions.',
     inputSchema: {
       type: 'object' as const,
       properties: {},
+    },
+  },
+  {
+    name: 'engram_requeue_failed' as const,
+    description:
+      'Re-queue failed extraction items for a fresh round of attempts (resets the attempt counter and backoff). Failed is otherwise terminal after 3 attempts — use after fixing the underlying cause of an outage (LLM host back online, missing model pulled). Optional errorLike substring filter targets one failure class from the engram_queue_stats failed_reasons breakdown. Returns {requeued: count}.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        errorLike: {
+          type: 'string',
+          description:
+            'Only requeue items whose stored error message contains this substring (e.g. "fetch failed"). Omit to requeue all failed items.',
+        },
+      },
     },
   },
 
@@ -491,6 +506,16 @@ export function createEngramToolHandler(engram: Engram) {
           const stats = engram.getQueueStats();
           return {
             content: [{ type: 'text', text: JSON.stringify(stats, null, 2) }],
+          };
+        }
+
+        case 'engram_requeue_failed': {
+          const result = engram.requeueFailedExtractions({
+            errorLike:
+              typeof input.errorLike === 'string' ? input.errorLike : undefined,
+          });
+          return {
+            content: [{ type: 'text', text: JSON.stringify(result) }],
           };
         }
 

@@ -13,6 +13,7 @@
 //   engram reflect                  engram process-extractions
 //   engram forget <chunkId>         engram supersede <oldChunkId> <newText>
 //   engram session <message>        engram queue-stats
+//   engram requeue-failed
 //
 // Contract:
 //   --json        emit the raw method return as JSON to stdout, nothing else.
@@ -190,11 +191,17 @@ function formatSession(r: WorkingSessionResult): string {
 }
 
 function formatQueueStats(s: QueueStats): string {
-  return (
+  let out =
     `queue: pending=${s.pending} processing=${s.processing} ` +
     `completed=${s.completed} failed=${s.failed} ` +
-    `oldest_pending=${s.oldest_pending ?? 'none'}\n`
-  );
+    `oldest_pending=${s.oldest_pending ?? 'none'}\n`;
+  if (s.failed_reasons.length > 0) {
+    out += 'failed reasons:\n';
+    for (const r of s.failed_reasons) {
+      out += `  ${r.count}x ${r.error ?? '(no error recorded)'}\n`;
+    }
+  }
+  return out;
 }
 
 // ─── Misc helpers ─────────────────────────────────────────────────────────────
@@ -236,6 +243,8 @@ Commands:
   supersede <oldChunkId> <newText> Replace a fact (newText from stdin if omitted)
   session <message>                Infer/resume a working memory session
   queue-stats                      Extraction queue health
+  requeue-failed                   Re-queue failed extractions for retry
+                                   (--error-like <substring> to filter)
 
 Database:
   --db <path>                      Path to the .engram file (or set ENGRAM_DB)
@@ -419,6 +428,15 @@ async function dispatch(
       const stats = engram.getQueueStats();
       if (json) emitJson(io, stats);
       else io.stdout(formatQueueStats(stats));
+      return EXIT_OK;
+    }
+
+    case 'requeue-failed': {
+      const result = engram.requeueFailedExtractions({
+        errorLike: args.values.get('--error-like'),
+      });
+      if (json) emitJson(io, result);
+      else io.stdout(`requeued ${result.requeued} failed item(s)\n`);
       return EXIT_OK;
     }
 

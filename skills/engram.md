@@ -107,7 +107,16 @@ Soft-deletes the old chunk, stores the new one, and links them via `superseded_b
 npx mcporter call engram.engram_queue_stats
 ```
 
-Returns counts by status (`pending`, `processing`, `completed`, `failed`) and the age of the oldest pending item. Use to diagnose why the knowledge graph is not growing or to decide when to call `engram_process_extractions`. Takes no parameters.
+Returns counts by status (`pending`, `processing`, `completed`, `failed`), the age of the oldest pending item, and a `failed_reasons` breakdown (distinct error messages with counts, most common first). Use to diagnose why the knowledge graph is not growing or to decide when to call `engram_process_extractions`. Takes no parameters.
+
+### Re-queue failed extractions — `engram_requeue_failed`
+
+```bash
+npx mcporter call engram.engram_requeue_failed
+npx mcporter call engram.engram_requeue_failed errorLike="fetch failed"
+```
+
+Failed is a terminal state — after 3 attempts an item never retries on its own. Once the underlying cause is fixed (LLM host back online, missing model pulled), call this to reset failed items to pending with a fresh attempt counter. Optional `errorLike` substring targets one failure class from the `failed_reasons` breakdown. Returns `{"requeued": <count>}`. Items whose chunk was forgotten are skipped.
 
 ## Usage Patterns
 

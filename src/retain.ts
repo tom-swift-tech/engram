@@ -680,10 +680,16 @@ export interface QueueStats {
   completed: number;
   failed: number;
   oldest_pending: string | null;
+  /**
+   * Distinct error messages among failed items, most common first (top 10).
+   * `error` is null for items failed without a recorded message (e.g. moved
+   * to failed by the stalled-item recovery sweep).
+   */
+  failed_reasons: Array<{ error: string | null; count: number }>;
 }
 
 export function getQueueStats(db: Database.Database): QueueStats {
-  return db
+  const stats = db
     .prepare(
       `
     SELECT
@@ -696,6 +702,68 @@ export function getQueueStats(db: Database.Database): QueueStats {
   `,
     )
     .get() as QueueStats;
+
+  // Failure-reason breakdown: distinct error messages among failed items,
+  // most common first. Makes an outage self-diagnosing from queue stats
+  // alone ("11× fetch failed" vs. an opaque failed=21).
+  stats.failed_reasons = db
+    .prepare(
+      `
+    SELECT error, COUNT(*) as count
+    FROM extraction_queue
+    WHERE status = 'failed'
+    GROUP BY error
+    ORDER BY count DESC, error
+    LIMIT 10
+  `,
+    )
+    .all() as Array<{ error: string | null; count: number }>;
+
+  return stats;
+}
+
+/**
+ * Re-queue failed extraction items for a fresh round of attempts.
+ *
+ * Failed is a terminal state (3 attempts exhausted) — after a transient
+ * outage (LLM host down, model missing) the affected items need an explicit
+ * re-drive once the cause is fixed. Resets attempts to 0 and clears the
+ * backoff window; the prior error message is left in place until the next
+ * attempt overwrites it. Items whose chunk has been deactivated are skipped
+ * (they would sit as unprocessable pending rows).
+ *
+ * @param errorLike — optional substring filter on the stored error message,
+ *   to target one failure class (e.g. 'fetch failed')
+ * @returns number of items reset to pending
+ */
+export function requeueFailedExtractions(
+  db: Database.Database,
+  options?: { errorLike?: string },
+): number {
+  const errorLike = options?.errorLike;
+  if (errorLike !== undefined) {
+    return db
+      .prepare(
+        `
+      UPDATE extraction_queue
+      SET status = 'pending', attempts = 0, next_retry_after = NULL
+      WHERE status = 'failed'
+        AND error LIKE '%' || ? || '%'
+        AND chunk_id IN (SELECT id FROM chunks WHERE is_active = TRUE)
+    `,
+      )
+      .run(errorLike).changes;
+  }
+  return db
+    .prepare(
+      `
+    UPDATE extraction_queue
+    SET status = 'pending', attempts = 0, next_retry_after = NULL
+    WHERE status = 'failed'
+      AND chunk_id IN (SELECT id FROM chunks WHERE is_active = TRUE)
+  `,
+    )
+    .run().changes;
 }
 
 // =============================================================================

@@ -91,9 +91,9 @@ describe('MCP Server', () => {
     cleanupDb(dbPath);
   });
 
-  it('ListTools returns all 9 tool schemas', async () => {
+  it('ListTools returns all 10 tool schemas', async () => {
     const result = await client.listTools();
-    expect(result.tools.length).toBe(9);
+    expect(result.tools.length).toBe(10);
     const names = result.tools.map((t) => t.name);
     expect(names).toContain('engram_retain');
     expect(names).toContain('engram_recall');
@@ -103,6 +103,7 @@ describe('MCP Server', () => {
     expect(names).toContain('engram_supersede');
     expect(names).toContain('engram_session');
     expect(names).toContain('engram_queue_stats');
+    expect(names).toContain('engram_requeue_failed');
     expect(names).toContain('engram_embed');
   });
 
@@ -271,6 +272,18 @@ describe('MCP Server', () => {
     expect(stats).toHaveProperty('completed');
     expect(stats).toHaveProperty('failed');
     expect(typeof stats.pending).toBe('number');
+    expect(Array.isArray(stats.failed_reasons)).toBe(true);
+  });
+
+  it('engram_requeue_failed returns a requeued count (0 when nothing failed)', async () => {
+    const result = await client.callTool({
+      name: 'engram_requeue_failed',
+      arguments: { errorLike: 'fetch failed' },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const content = result.content as Array<{ type: string; text: string }>;
+    expect(JSON.parse(content[0].text)).toEqual({ requeued: 0 });
   });
 
   it('engram_recall returns isError when query is missing', async () => {

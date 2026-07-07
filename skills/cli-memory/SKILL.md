@@ -140,8 +140,22 @@ Options: `--max-active <n>` (default 5), `--threshold <0..1>` (default 0.55).
 engram queue-stats --json
 ```
 
-`--json` shape: `{ "pending": 3, "processing": 0, "completed": 12, "failed": 0, "oldest_pending": "2026-06-05T12:00:00Z" }`.
+`--json` shape: `{ "pending": 3, "processing": 0, "completed": 12, "failed": 2, "oldest_pending": "2026-06-05T12:00:00Z", "failed_reasons": [{ "error": "fetch failed", "count": 2 }] }`.
 A growing `pending` means the knowledge graph is behind — run `process-extractions`.
+A non-zero `failed` with a transient-looking reason (host down, model missing) means
+those items need an explicit re-drive once the cause is fixed — run `requeue-failed`.
+
+### `requeue-failed` — re-drive failed extractions
+
+```bash
+engram requeue-failed --json
+engram requeue-failed --error-like "fetch failed" --json
+```
+
+Failed is terminal (3 attempts exhausted) — items never retry on their own. This
+resets them to pending with a fresh attempt counter. `--error-like <substring>`
+targets one failure class from the `failed_reasons` breakdown.
+`--json` shape: `{ "requeued": 11 }`.
 
 ### `reflect` — synthesize observations/opinions (needs an LLM)
 

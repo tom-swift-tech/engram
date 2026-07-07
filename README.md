@@ -491,7 +491,8 @@ npx engram-mcp ./agent.engram --anthropic-api-key sk-ant-... --anthropic-model c
 | `engram_forget` | Soft-delete a memory chunk |
 | `engram_supersede` | Replace an outdated fact with corrected text |
 | `engram_session` | Infer or resume a working memory session |
-| `engram_queue_stats` | Extraction queue depth and processing metrics |
+| `engram_queue_stats` | Extraction queue depth, processing metrics, and failure-reason breakdown |
+| `engram_requeue_failed` | Re-queue failed extractions after an outage (optional error filter) |
 
 ## CLI
 
@@ -520,7 +521,7 @@ accepted: `--ollama-url`, `--use-ollama-embeddings`, `--reflect-model`,
 **Exit codes:** `0` success · `2` not-found (`forget`/`supersede` on a missing
 chunk) · `1` error (bad/missing argument, no DB path, operation failure).
 
-The eight commands:
+The nine commands:
 
 ```bash
 # Store a fact
@@ -544,8 +545,12 @@ engram forget chk-abc123 --json
 engram reflect --json
 engram process-extractions --batch-size 10 --json
 
-# Queue health
+# Queue health (includes a failed_reasons breakdown)
 engram queue-stats --json
+
+# Re-drive failed extractions after an outage (all, or one failure class)
+engram requeue-failed --json
+engram requeue-failed --error-like "fetch failed" --json
 ```
 
 The primary text argument for `retain`, `recall`, `session`, and the `newText`
@@ -632,7 +637,7 @@ See **[docs/PI-INTEGRATION.md](docs/PI-INTEGRATION.md)** for full setup, lifecyc
 
 Portable skill files for agents using Engram via mcporter:
 
-- **[skills/engram.md](skills/engram.md)** — Complete tool reference with all 8 MCP tools, usage patterns, and common mistakes
+- **[skills/engram.md](skills/engram.md)** — Complete tool reference with all 9 MCP tools, usage patterns, and common mistakes
 - **[skills/engram-session.md](skills/engram-session.md)** — Working memory session lifecycle and tuning guide
 - **[skills/cli-memory/SKILL.md](skills/cli-memory/SKILL.md)** — `engram` CLI contract for coding agents (e.g. Pi): per-command `--json` schemas, exit codes, and when to recall vs. retain vs. supersede vs. session
 

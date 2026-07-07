@@ -5,6 +5,7 @@ import {
   retainBatch,
   processExtractionQueue,
   recoverStalledExtractions,
+  requeueFailedExtractions,
   getQueueStats,
   chunkText,
 } from '../src/retain.js';
@@ -658,6 +659,101 @@ describe('recoverStalledExtractions()', () => {
     const result = await processExtractionQueue(db, generator);
     // Should skip the item because CAS fails (status is not 'pending')
     expect(result.processed).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// requeueFailedExtractions + failed_reasons breakdown
+// ---------------------------------------------------------------------------
+
+describe('requeueFailedExtractions()', () => {
+  let db: Database.Database;
+  const embedder = new MockEmbedder();
+
+  beforeEach(() => {
+    db = createTestDb();
+  });
+  afterEach(() => db.close());
+
+  /** Seed one retained chunk whose queue item is in terminal 'failed' state. */
+  async function seedFailed(text: string, error: string): Promise<string> {
+    const r = await retain(db, text, embedder, { memoryType: 'world' });
+    db.prepare(
+      `UPDATE extraction_queue
+       SET status = 'failed', attempts = 3, error = ?,
+           next_retry_after = datetime('now', '+1 hour')
+       WHERE chunk_id = ?`,
+    ).run(error, r.chunkId);
+    return r.chunkId;
+  }
+
+  it('resets failed items to pending with fresh attempts and no backoff', async () => {
+    await seedFailed('outage casualty one', 'fetch failed');
+    await seedFailed('outage casualty two', 'fetch failed');
+
+    const requeued = requeueFailedExtractions(db);
+    expect(requeued).toBe(2);
+
+    const rows = db
+      .prepare(
+        `SELECT status, attempts, next_retry_after FROM extraction_queue`,
+      )
+      .all() as any[];
+    for (const row of rows) {
+      expect(row.status).toBe('pending');
+      expect(row.attempts).toBe(0);
+      expect(row.next_retry_after).toBeNull();
+    }
+  });
+
+  it('errorLike filter requeues only the matching failure class', async () => {
+    await seedFailed('network failure', 'fetch failed: ECONNREFUSED');
+    await seedFailed('missing model', 'model "nope" not found');
+
+    const requeued = requeueFailedExtractions(db, { errorLike: 'fetch failed' });
+    expect(requeued).toBe(1);
+
+    const stillFailed = db
+      .prepare(`SELECT error FROM extraction_queue WHERE status = 'failed'`)
+      .all() as any[];
+    expect(stillFailed.length).toBe(1);
+    expect(stillFailed[0].error).toContain('not found');
+  });
+
+  it('skips failed items whose chunk has been deactivated', async () => {
+    const chunkId = await seedFailed('forgotten fact', 'fetch failed');
+    db.prepare(`UPDATE chunks SET is_active = FALSE WHERE id = ?`).run(chunkId);
+
+    const requeued = requeueFailedExtractions(db);
+    expect(requeued).toBe(0);
+  });
+
+  it('requeued items get processed on the next queue drain', async () => {
+    await seedFailed('second chance fact', 'fetch failed');
+    requeueFailedExtractions(db);
+
+    const generator = new MockGenerator(EXTRACTION_RESPONSE);
+    const result = await processExtractionQueue(db, generator);
+    expect(result.processed).toBe(1);
+    expect(result.failed).toBe(0);
+  });
+
+  it('getQueueStats reports a failed_reasons breakdown, most common first', async () => {
+    await seedFailed('one', 'fetch failed');
+    await seedFailed('two', 'fetch failed');
+    await seedFailed('three', 'timeout after 30s');
+
+    const stats = getQueueStats(db);
+    expect(stats.failed).toBe(3);
+    expect(stats.failed_reasons).toEqual([
+      { error: 'fetch failed', count: 2 },
+      { error: 'timeout after 30s', count: 1 },
+    ]);
+  });
+
+  it('getQueueStats failed_reasons is empty when nothing has failed', () => {
+    const stats = getQueueStats(db);
+    expect(stats.failed_reasons).toEqual([]);
   });
 });
 

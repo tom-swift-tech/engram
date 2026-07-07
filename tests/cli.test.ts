@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import Database from 'better-sqlite3';
 import { runCli, type CliIO } from '../src/cli.js';
 import type { EngramOptions } from '../src/engram.js';
 import {
@@ -271,6 +272,44 @@ describe('engram CLI', () => {
     expect(stats).toHaveProperty('completed');
     expect(stats).toHaveProperty('failed');
     expect(typeof stats.pending).toBe('number');
+    expect(Array.isArray(stats.failed_reasons)).toBe(true);
+  });
+
+  // ─── requeue-failed ──────────────────────────────────────────────────────────
+
+  it('requeue-failed resets failed items and reports the count', async () => {
+    // Seed a chunk (its queue item starts pending), then force it to the
+    // terminal failed state the way a real exhausted-retries outage would.
+    await runCli(
+      args('retain', 'A fact that failed extraction'),
+      captureIo().io,
+      overrides,
+    );
+    const raw = new Database(dbPath);
+    raw
+      .prepare(
+        `UPDATE extraction_queue SET status = 'failed', attempts = 3, error = 'fetch failed'`,
+      )
+      .run();
+    raw.close();
+
+    const cap = captureIo();
+    const code = await runCli(
+      args('requeue-failed', '--error-like', 'fetch failed', '--json'),
+      cap.io,
+      overrides,
+    );
+    expect(code).toBe(0);
+    expect(JSON.parse(cap.stdout())).toEqual({ requeued: 1 });
+
+    // The item is pending again with fresh attempts
+    const check = new Database(dbPath);
+    const row = check
+      .prepare('SELECT status, attempts FROM extraction_queue LIMIT 1')
+      .get() as any;
+    check.close();
+    expect(row.status).toBe('pending');
+    expect(row.attempts).toBe(0);
   });
 
   // ─── error paths ──────────────────────────────────────────────────────────
@@ -339,6 +378,10 @@ describe('engram CLI', () => {
       },
       { argv: args('session', 'plan something', '--json'), label: 'session' },
       { argv: args('queue-stats', '--json'), label: 'queue-stats' },
+      {
+        argv: args('requeue-failed', '--json'),
+        label: 'requeue-failed',
+      },
       { argv: args('forget', seededId, '--json'), label: 'forget' },
     ];
 

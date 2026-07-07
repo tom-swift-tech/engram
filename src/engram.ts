@@ -36,6 +36,7 @@ import {
   retainBatch,
   processExtractionQueue,
   recoverStalledExtractions,
+  requeueFailedExtractions,
   getQueueStats,
   OllamaEmbeddings,
   LocalEmbedder,
@@ -613,6 +614,18 @@ export class Engram {
    */
   recoverExtractions(stallTimeoutMinutes?: number): number {
     return recoverStalledExtractions(this.db, stallTimeoutMinutes);
+  }
+
+  /**
+   * Re-queue failed extraction items for a fresh round of attempts — the
+   * recovery path after a transient outage (LLM host down, model missing).
+   * Failed is otherwise terminal (3 attempts exhausted). Optionally filter
+   * by an error-message substring to target one failure class.
+   */
+  requeueFailedExtractions(options?: { errorLike?: string }): {
+    requeued: number;
+  } {
+    return { requeued: requeueFailedExtractions(this.db, options) };
   }
 
   /** Get extraction queue health stats (pending, completed, failed counts). */
