@@ -26,7 +26,8 @@ whether and how to call it** — not a man page.
   resume or open the working-memory session and pull related long-term context
   in one shot. Use the returned `relatedContext` to ground your reply.
 - `reflect` / `process-extractions` are background maintenance (need an LLM).
-  Run occasionally, not per turn. `queue-stats` tells you if the graph is behind.
+  Run occasionally, not per turn. `queue-stats` tells you if the graph is behind;
+  `requeue-failed` re-drives items stranded by an outage (see its section below).
 
 ## Setup
 

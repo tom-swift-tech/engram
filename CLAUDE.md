@@ -155,7 +155,7 @@ engram/
 │   ├── mcp-server.ts            ← standalone MCP stdio server (engram-mcp bin)
 │   ├── cli.ts                   ← `engram` CLI: one subcommand per MCP tool, --json contract for Pi (engram bin)
 │   └── cli-args.ts              ← CLI argv parser + Engram.open option-builder + shared validation/clamp helpers
-├── tests/                        ← TS suites incl. aql-* cross-process (390 tests via npm test; +82 from integrations/pi, +67 from tools/openclaw-import)
+├── tests/                        ← TS suites incl. aql-* cross-process (411 tests via npm test; +102 from integrations/pi, +67 from tools/openclaw-import)
 │   ├── helpers.ts
 │   ├── retain.test.ts
 │   ├── retain-gate.test.ts
@@ -171,7 +171,7 @@ engram/
 │   ├── local-embedder.test.ts
 │   ├── agent-integration.test.ts
 │   ├── mcp-server.test.ts
-│   ├── cli.test.ts               ← engram CLI: per-subcommand happy path, --json contract, stdin, exit codes (21 tests)
+│   ├── cli.test.ts               ← engram CLI: per-subcommand happy path, --json contract, stdin, exit codes (22 tests)
 │   ├── aql-schema.test.ts         ← AQL schema/parse checks
 │   ├── aql-equivalence.test.ts    ← L2: AQL results match TS recall/scan/load semantics
 │   └── aql-e2e-process.test.ts    ← L3: cross-process WAL handoff (spawns the Rust binary; needs cargo)
@@ -186,7 +186,7 @@ engram/
 │       │   ├── index.ts          ← Pi binding: registers commands + LLM tools, lifecycle
 │       │   ├── adapter.ts        ← pure logic: takes Engram, returns plain objects
 │       │   └── types.ts          ← typebox schemas for the seven LLM tools (core + session)
-│       └── tests/                ← 82 tests (adapter, scheduling, auto-retain, startup-recall, session-bridge, smoke + built-dist)
+│       └── tests/                ← 102 tests (adapter, scheduling, auto-retain, startup-recall, session-bridge, smoke + built-dist)
 ├── skills/
 │   ├── engram.md                  ← portable agent skill (covers all 9 MCP tools)
 │   ├── engram-session.md          ← working memory session skill
@@ -286,7 +286,7 @@ Surface: five slash commands (`/remember`, `/recall`, `/memory`, `/forget`, `/se
 - **Background consolidation:** every few turns drains the extraction queue / runs reflection, fire-and-forget so a turn never blocks on Ollama; warns once per session if Ollama is unreachable. Tunable via `ENGRAM_PI_EXTRACT_EVERY_TURNS` / `ENGRAM_PI_REFLECT_EVERY_TURNS` / `ENGRAM_PI_EXTRACT_BATCH`
 - **Auto-retain:** captures conversation messages as `experience` chunks off `message_end` (on by default; `ENGRAM_PI_AUTO_RETAIN=0` disables). Tool/bash output is stored at the lowest trust tier (`tool_result`) so it can never outrank a user directive at recall
 - **Startup recall:** closes the "written automatically, read manually" gap for fresh sessions only. `session_start` sets a transient `sessionIsFresh` flag via `isFreshSessionStart(reason, priorMessageCount)` in `adapter.ts` — fresh for `reason === 'new'` unconditionally, and for `reason === 'startup'` only when there are zero prior `type === 'message'` session entries. This two-part check exists because live validation against a real Pi runtime found that non-interactive `pi -p` launches (and in fact every initial process launch, interactive or not) report `reason: 'startup'`, never `'new'` — `'new'` only fires for an explicit mid-process session switch — and Pi appends bookkeeping entries (`model_change`, `thinking_level_change`) before `session_start` fires on every launch, so a raw entry count is never zero even for a genuinely blank slate; only counting `'message'`-type entries fixes both false negatives. The very next `before_agent_start` (and only that one — the flag is consumed immediately) recalls against `event.prompt` and prepends the formatted result to the system prompt via `startupRecall()` in `adapter.ts` (reuses core's `formatForPrompt`, budget-capped, same convention as the session-resume `relatedContext`). Sessions continued via `--continue`/`--resume`/`--session` and later turns are unaffected — this is a one-time "create starting context" injection, not a per-turn recall. On by default; tunable via `ENGRAM_PI_STARTUP_RECALL` / `ENGRAM_PI_STARTUP_RECALL_MAX_CHARS` / `ENGRAM_PI_STARTUP_RECALL_TOPK`
-- 82 tests (pure adapter + binding lifecycle + built-dist smoke), gated in CI on Node 20 and 24
+- 102 tests (pure adapter + binding lifecycle + built-dist smoke), gated in CI on Node 20 and 24
 - Deferred: memory-inspector UI widget (`ctx.ui.custom()`); `pi install`-able packaging
 
 ## Integration with valor-engine
