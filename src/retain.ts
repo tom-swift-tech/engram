@@ -393,6 +393,29 @@ interface ExtractedEntity {
   aliases: string[];
 }
 
+/** Entity types accepted by the entities table CHECK constraint (schema.sql). */
+const VALID_ENTITY_TYPES = new Set([
+  'person',
+  'project',
+  'organization',
+  'technology',
+  'location',
+  'concept',
+  'event',
+  'tool',
+]);
+
+/**
+ * Clamp an LLM-emitted entity type to the schema's CHECK list. The model
+ * occasionally invents off-list types ("company", "file"); unclamped, one
+ * such entity aborts the whole chunk's extraction transaction with a CHECK
+ * failure that no retry can fix. 'concept' is the neutral catch-all.
+ */
+function clampEntityType(raw: unknown): string {
+  const normalized = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+  return VALID_ENTITY_TYPES.has(normalized) ? normalized : 'concept';
+}
+
 interface ExtractedRelation {
   source: string;
   target: string;
@@ -454,6 +477,11 @@ export function recoverStalledExtractions(
 ): number {
   const timeout = String(stallTimeoutMinutes);
 
+  // A NULL last_attempt (row set to 'processing' by an older code path or
+  // manual SQL) must count as stalled — `NULL < datetime(...)` is NULL in
+  // SQLite, so without the IS NULL arm such a row matches neither branch
+  // and stays stuck in 'processing' forever.
+
   // Retryable items: reset to pending
   const retried = db
     .prepare(
@@ -462,7 +490,8 @@ export function recoverStalledExtractions(
     SET status = 'pending', next_retry_after = CURRENT_TIMESTAMP
     WHERE status = 'processing'
       AND attempts < 3
-      AND last_attempt < datetime('now', '-' || ? || ' minutes')
+      AND (last_attempt IS NULL
+           OR last_attempt < datetime('now', '-' || ? || ' minutes'))
   `,
     )
     .run(timeout).changes;
@@ -475,7 +504,8 @@ export function recoverStalledExtractions(
     SET status = 'failed'
     WHERE status = 'processing'
       AND attempts >= 3
-      AND last_attempt < datetime('now', '-' || ? || ' minutes')
+      AND (last_attempt IS NULL
+           OR last_attempt < datetime('now', '-' || ? || ' minutes'))
   `,
     )
     .run(timeout).changes;
@@ -552,14 +582,23 @@ export async function processExtractionQueue(
         const entityIdMap: Record<string, string> = {};
 
         for (const ent of extracted.entities) {
+          // LLM output can drift from the requested shape; skip entities
+          // without a usable canonical_name rather than aborting the whole
+          // transaction (which would burn all retries on the same output).
+          if (
+            typeof ent.canonical_name !== 'string' ||
+            !ent.canonical_name.trim()
+          ) {
+            continue;
+          }
           const entityId = buildEntityId(ent.canonical_name);
           entityIdMap[ent.canonical_name] = entityId;
 
           upsertEntity.run(
             entityId,
-            ent.name,
+            ent.name || ent.canonical_name,
             ent.canonical_name,
-            ent.entity_type,
+            clampEntityType(ent.entity_type),
             JSON.stringify(ent.aliases || []),
             now,
             now,

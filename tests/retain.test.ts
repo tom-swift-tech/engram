@@ -337,6 +337,67 @@ describe('processExtractionQueue()', () => {
     db.close();
   });
 
+  it('clamps off-list entity_type and skips malformed entities instead of failing extraction', async () => {
+    const db = createTestDb();
+    const embedder = new MockEmbedder();
+    // Real-world LLM drift: an entity_type outside the schema CHECK list
+    // ("company") and an entity missing canonical_name. Pre-fix, either one
+    // aborted the whole chunk's extraction transaction and burned all 3
+    // retries on the same output.
+    const driftResponse = JSON.stringify({
+      entities: [
+        {
+          name: 'Acme',
+          canonical_name: 'acme',
+          entity_type: 'company',
+          aliases: [],
+        },
+        { name: 'Ghost', entity_type: 'person', aliases: [] },
+        {
+          name: 'Bob',
+          canonical_name: 'bob',
+          entity_type: 'Person',
+          aliases: [],
+        },
+      ],
+      relations: [],
+    });
+    const generator = new MockGenerator(driftResponse);
+
+    // All-lowercase text so the Tier 1 CPU extractor creates no entities —
+    // otherwise it pre-creates 'acme'/'bob' as 'concept' and the LLM upsert's
+    // ON CONFLICT path (which doesn't touch entity_type) would mask the clamp.
+    await retain(db, 'the vendor hired someone new', embedder, {
+      memoryType: 'world',
+    });
+    const result = await processExtractionQueue(db, generator);
+
+    expect(result.processed).toBe(1);
+    expect(result.failed).toBe(0);
+
+    const acme = db
+      .prepare(`SELECT entity_type FROM entities WHERE canonical_name = 'acme'`)
+      .get() as any;
+    expect(acme.entity_type).toBe('concept'); // off-list → neutral fallback
+
+    const bob = db
+      .prepare(`SELECT entity_type FROM entities WHERE canonical_name = 'bob'`)
+      .get() as any;
+    expect(bob.entity_type).toBe('person'); // case-normalized, kept
+
+    // Malformed entity skipped, not fatal
+    const ghost = db
+      .prepare(`SELECT count(*) as n FROM entities WHERE name = 'Ghost'`)
+      .get() as any;
+    expect(ghost.n).toBe(0);
+
+    const queued = db
+      .prepare('SELECT status FROM extraction_queue LIMIT 1')
+      .get() as any;
+    expect(queued.status).toBe('completed');
+    db.close();
+  });
+
   it('sets status to pending (not failed) after first extraction failure', async () => {
     const db = createTestDb();
     const embedder = new MockEmbedder();
@@ -537,6 +598,43 @@ describe('recoverStalledExtractions()', () => {
     // Simulate crash on 3rd attempt
     db.prepare(
       `UPDATE extraction_queue SET status = 'processing', attempts = 3, last_attempt = datetime('now', '-10 minutes')`,
+    ).run();
+
+    const recovered = recoverStalledExtractions(db, 5);
+    expect(recovered).toBe(1);
+
+    const row = db
+      .prepare('SELECT status FROM extraction_queue LIMIT 1')
+      .get() as any;
+    expect(row.status).toBe('failed');
+  });
+
+  it('recovers processing items with NULL last_attempt (retryable branch)', async () => {
+    await retain(db, 'null last_attempt test', embedder, {
+      memoryType: 'world',
+    });
+    // A row can enter 'processing' without last_attempt via older code paths
+    // or manual SQL. NULL < datetime(...) is NULL, so pre-fix this row
+    // matched neither recovery branch and was stuck forever.
+    db.prepare(
+      `UPDATE extraction_queue SET status = 'processing', last_attempt = NULL`,
+    ).run();
+
+    const recovered = recoverStalledExtractions(db, 5);
+    expect(recovered).toBe(1);
+
+    const row = db
+      .prepare('SELECT status FROM extraction_queue LIMIT 1')
+      .get() as any;
+    expect(row.status).toBe('pending');
+  });
+
+  it('moves NULL-last_attempt items with attempts >= 3 to failed', async () => {
+    await retain(db, 'null last_attempt max attempts test', embedder, {
+      memoryType: 'world',
+    });
+    db.prepare(
+      `UPDATE extraction_queue SET status = 'processing', attempts = 3, last_attempt = NULL`,
     ).run();
 
     const recovered = recoverStalledExtractions(db, 5);

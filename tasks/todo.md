@@ -27,6 +27,29 @@
 
 ---
 
+## In progress — Mira field-report fixes (2026-07-07)
+
+Two confirmed library bugs from the largest live deployment (6.5k chunks, 29k
+entities); both only manifest at scale.
+
+- [x] **Clamp LLM-emitted `entity_type` before INSERT** (`src/retain.ts` ~562).
+      Schema CHECK allows person/project/organization/technology/location/
+      concept/event/tool; the model occasionally invents off-list types
+      ("company"), which aborts the whole chunk's extraction transaction and
+      burns all 3 retries on the same output. Fix: normalize + fall back to
+      `'concept'`. Also skip entities missing a usable `canonical_name` (same
+      failure class — one malformed entity kills the batch).
+- [x] **NULL-safe stalled-extraction sweep** (`src/retain.ts` ~465/478).
+      `last_attempt < datetime(...)` is NULL-poisoned — a `processing` row
+      with NULL `last_attempt` matches neither recovery branch and is stuck
+      forever (Mira's `chk-9d1d3b65-f60`, 3+ hours). Fix: `last_attempt IS
+      NULL OR ...` in both UPDATEs.
+- [x] Tests for both in `tests/retain.test.ts` (existing describe blocks) —
+      root suite 400 → 403, all green.
+- [x] Full suite green (`npm test`), commit to `main`, push.
+- [ ] Upgrade note for Mira — her deploy base `d5d7dd8` predates the #17
+      reflect fix, #18 ranking fix, #19 decay fix, and these two.
+
 ## Next session — start here
 
 The Pi adapter's big auto-behaviors (session bridge, consolidation, auto-retain) are all in and CI-gated. Remaining open work, roughly by leverage:
