@@ -62,6 +62,23 @@ describe('retain()', () => {
     expect(chunk.embedding.byteLength).toBe(embedder.dimensions * 4);
   });
 
+  it('stores only the active slice of a Float32Array embedding', async () => {
+    class SlicedEmbedder {
+      readonly dimensions = 2;
+      private readonly backing = new Float32Array([1, 2, 3, 4]);
+
+      async embed(_text: string): Promise<Float32Array> {
+        return new Float32Array(this.backing.buffer, 8, 2);
+      }
+    }
+
+    const result = await retain(db, 'slice test', new SlicedEmbedder() as any);
+    const chunk = db
+      .prepare('SELECT embedding FROM chunks WHERE id = ?')
+      .get(result.chunkId) as any;
+    expect(chunk.embedding.byteLength).toBe(2 * 4);
+  });
+
   it('applies default options', async () => {
     const result = await retain(db, 'plain text', embedder);
     const chunk = db
@@ -176,6 +193,31 @@ describe('retain() — deduplication', () => {
       .prepare('SELECT trust_score FROM chunks WHERE id = ?')
       .get(r1.chunkId) as any;
     expect(chunk.trust_score).toBe(0.9);
+  });
+
+  it('exact dedup: promotes provenance when a higher-trust source retains the same text', async () => {
+    const r1 = await retain(db, 'Tom prefers Terraform', embedder, {
+      sourceType: 'external_doc',
+      trustScore: 0.2,
+      source: 'doc:v1',
+      context: 'imported-doc',
+    });
+
+    const r2 = await retain(db, 'Tom prefers Terraform', embedder, {
+      sourceType: 'user_stated',
+      trustScore: 0.95,
+      source: 'conversation:pi',
+      context: 'interactive',
+    });
+
+    expect(r2.chunkId).toBe(r1.chunkId);
+    const chunk = db
+      .prepare('SELECT source_type, trust_score, source, context FROM chunks WHERE id = ?')
+      .get(r1.chunkId) as any;
+    expect(chunk.source_type).toBe('user_stated');
+    expect(chunk.trust_score).toBe(0.95);
+    expect(chunk.source).toBe('conversation:pi');
+    expect(chunk.context).toBe('interactive');
   });
 
   it('dedupMode none: always creates new chunks', async () => {

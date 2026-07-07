@@ -78,6 +78,23 @@ export interface EmbeddingProvider {
 
 export { LocalEmbedder } from './local-embedder.js';
 
+/** Convert a Float32Array to the exact byte slice it occupies. */
+export function embeddingToBuffer(embedding: Float32Array): Buffer {
+  return Buffer.from(
+    embedding.buffer,
+    embedding.byteOffset,
+    embedding.byteLength,
+  );
+}
+
+const RETAIN_SOURCE_TIERS: Record<string, number> = {
+  user_stated: 0,
+  inferred: 1,
+  agent_generated: 1,
+  tool_result: 2,
+  external_doc: 2,
+};
+
 // =============================================================================
 // Ollama Embedding Provider
 // =============================================================================
@@ -135,13 +152,40 @@ export function computeTextHash(text: string): string {
 function findNormalizedDuplicate(
   db: Database.Database,
   text: string,
-): { id: string; trust_score: number } | undefined {
+): {
+  id: string;
+  trust_score: number;
+  source_type: string;
+  source: string | null;
+  source_uri: string | null;
+  context: string | null;
+  event_time: string | null;
+  event_time_end: string | null;
+  temporal_label: string | null;
+} | undefined {
   const hash = computeTextHash(text);
   return db
     .prepare(
-      `SELECT id, trust_score FROM chunks WHERE is_active = TRUE AND text_hash = ? LIMIT 1`,
+      `SELECT id, trust_score, source_type, source, source_uri, context, event_time, event_time_end, temporal_label
+       FROM chunks WHERE is_active = TRUE AND text_hash = ? LIMIT 1`,
     )
-    .get(hash) as { id: string; trust_score: number } | undefined;
+    .get(hash) as
+    | {
+        id: string;
+        trust_score: number;
+        source_type: string;
+        source: string | null;
+        source_uri: string | null;
+        context: string | null;
+        event_time: string | null;
+        event_time_end: string | null;
+        temporal_label: string | null;
+      }
+    | undefined;
+}
+
+function sourceTier(sourceType: string): number {
+  return RETAIN_SOURCE_TIERS[sourceType] ?? 2;
 }
 
 // =============================================================================
@@ -175,16 +219,61 @@ export async function retain(
         ? findNormalizedDuplicate(db, text)
         : db
             .prepare(
-              `SELECT id, trust_score FROM chunks WHERE is_active = TRUE AND text = ? LIMIT 1`,
+              `SELECT id, trust_score, source_type, source, source_uri, context, event_time, event_time_end, temporal_label
+               FROM chunks WHERE is_active = TRUE AND text = ? LIMIT 1`,
             )
             .get(text)
-    ) as { id: string; trust_score: number } | undefined;
+    ) as
+      | {
+          id: string;
+          trust_score: number;
+          source_type: string;
+          source: string | null;
+          source_uri: string | null;
+          context: string | null;
+          event_time: string | null;
+          event_time_end: string | null;
+          temporal_label: string | null;
+        }
+      | undefined;
 
     if (existing) {
       const newTrust = Math.max(existing.trust_score, trustScore);
+      const existingTier = sourceTier(existing.source_type);
+      const newTier = sourceTier(sourceType);
+      const promoteProvenance =
+        newTier < existingTier ||
+        (newTier === existingTier &&
+          (trustScore > existing.trust_score ||
+            (trustScore === existing.trust_score &&
+              sourceType !== existing.source_type)));
+
+      const updates = ['trust_score = ?'];
+      const params: unknown[] = [newTrust];
+      if (promoteProvenance) {
+        updates.push('source = COALESCE(?, source)');
+        updates.push('source_uri = COALESCE(?, source_uri)');
+        updates.push('context = COALESCE(?, context)');
+        updates.push('source_type = ?');
+        updates.push('event_time = COALESCE(?, event_time)');
+        updates.push('event_time_end = COALESCE(?, event_time_end)');
+        updates.push('temporal_label = COALESCE(?, temporal_label)');
+        params.push(
+          source,
+          sourceUri,
+          context,
+          sourceType,
+          eventTime,
+          eventTimeEnd,
+          temporalLabel,
+        );
+      }
+      updates.push('updated_at = CURRENT_TIMESTAMP');
+      params.push(existing.id);
+
       db.prepare(
-        `UPDATE chunks SET trust_score = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-      ).run(newTrust, existing.id);
+        `UPDATE chunks SET ${updates.join(', ')} WHERE id = ?`,
+      ).run(...params);
       return { chunkId: existing.id, queued: false, deduplicated: true };
     }
   }
@@ -193,7 +282,7 @@ export async function retain(
 
   // Generate embedding (this is the only async step)
   const embedding = await embedder.embed(text);
-  const embeddingBuffer = Buffer.from(embedding.buffer);
+  const embeddingBuffer = embeddingToBuffer(embedding);
 
   // Write chunk + Tier 1 extraction + queue Tier 2 in a single transaction
   let tier1: { entitiesLinked: number; relationsCreated: number } | undefined;

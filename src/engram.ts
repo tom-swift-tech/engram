@@ -38,6 +38,7 @@ import {
   recoverStalledExtractions,
   requeueFailedExtractions,
   getQueueStats,
+  embeddingToBuffer,
   OllamaEmbeddings,
   LocalEmbedder,
   shouldRetain,
@@ -836,7 +837,7 @@ export class Engram {
     embedding: Float32Array,
     limit: number = 3,
   ): SessionCandidate[] {
-    const embeddingBuffer = Buffer.from(embedding.buffer);
+    const embeddingBuffer = embeddingToBuffer(embedding);
     try {
       const rows = this.db
         .prepare(
@@ -886,7 +887,7 @@ export class Engram {
 
     // 1. Embed the incoming message
     const msgEmbedding = await this.embedText(message);
-    const embeddingBuffer = Buffer.from(msgEmbedding.buffer);
+    const embeddingBuffer = embeddingToBuffer(msgEmbedding);
 
     // 2. Find active sessions and score by similarity
     const candidates = this.findSimilarSessions(msgEmbedding, 3);
@@ -998,7 +999,7 @@ export class Engram {
 
     const seedQuery = `${merged.goal}`.trim();
     const embedding = await this.embedder.embed(seedQuery);
-    const embeddingBuffer = Buffer.from(embedding.buffer);
+    const embeddingBuffer = embeddingToBuffer(embedding);
 
     this.db
       .prepare(

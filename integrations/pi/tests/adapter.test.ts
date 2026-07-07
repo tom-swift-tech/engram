@@ -3,7 +3,7 @@
 // No Pi mocking; the adapter knows nothing about Pi types.
 // =============================================================================
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -168,6 +168,22 @@ describe('Pi adapter', () => {
         expect(context.length).toBeLessThanOrEqual(40);
       }
     });
+
+    it('disables decay in the underlying recall call', async () => {
+      const recallMock = vi.fn().mockResolvedValue({
+        results: [],
+        opinions: [],
+        observations: [],
+      });
+      const fakeEngram = { recall: recallMock } as unknown as Engram;
+
+      await startupRecall(fakeEngram, { prompt: 'help me deploy' });
+
+      expect(recallMock).toHaveBeenCalledWith('help me deploy', {
+        topK: 8,
+        decayHalfLifeDays: 0,
+      });
+    });
   });
 
   describe('isFreshSessionStart', () => {
@@ -218,6 +234,37 @@ describe('Pi adapter', () => {
       expect(looksLikeChunkId('what did I learn last week')).toBe(false);
       expect(looksLikeChunkId('chunk-foo')).toBe(false);
       expect(looksLikeChunkId('')).toBe(false);
+    });
+  });
+
+  describe('findToForget', () => {
+    it('disables decay when selecting a query-based forget candidate', async () => {
+      const recallMock = vi.fn().mockResolvedValue({
+        results: [
+          {
+            id: 'chk-1',
+            text: 'Terraform note',
+            score: 0.42,
+            source: 'conversation:old',
+          },
+        ],
+        opinions: [],
+        observations: [],
+      });
+      const fakeEngram = { recall: recallMock } as unknown as Engram;
+
+      const candidate = await findToForget(fakeEngram, 'terraform');
+
+      expect(recallMock).toHaveBeenCalledWith('terraform', {
+        topK: 5,
+        decayHalfLifeDays: 0,
+      });
+      expect(candidate).toMatchObject({
+        chunkId: 'chk-1',
+        text: 'Terraform note',
+        score: 0.42,
+        source: 'conversation:old',
+      });
     });
   });
 

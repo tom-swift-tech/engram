@@ -28,7 +28,11 @@
 
 import Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
-import { computeTextHash, type EmbeddingProvider } from './retain.js';
+import {
+  computeTextHash,
+  embeddingToBuffer,
+  type EmbeddingProvider,
+} from './retain.js';
 import { recall } from './recall.js';
 
 // =============================================================================
@@ -161,7 +165,7 @@ export async function commitContext(
   const text = composeSearchableText(artifact);
 
   const embedding = await embedder.embed(text);
-  const embeddingBuffer = Buffer.from(embedding.buffer);
+  const embeddingBuffer = embeddingToBuffer(embedding);
 
   db.prepare(
     `

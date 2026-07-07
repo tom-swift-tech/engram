@@ -144,7 +144,10 @@ export async function startupRecall(
   const prompt = input.prompt.trim();
   if (!prompt) return null;
 
-  const response = await engram.recall(prompt, { topK: input.topK ?? 8 });
+  const response = await engram.recall(prompt, {
+    topK: input.topK ?? 8,
+    decayHalfLifeDays: 0,
+  });
   if (
     response.results.length === 0 &&
     response.opinions.length === 0 &&
@@ -227,7 +230,10 @@ export async function findToForget(
   // the single most RELEVANT match regardless of provenance. With topK: 1
   // the tier-major cut would preferentially nominate user-stated directives
   // for deletion. Over-fetch and re-sort by score locally instead.
-  const response = await engram.recall(query, { topK: 5 });
+  const response = await engram.recall(query, {
+    topK: 5,
+    decayHalfLifeDays: 0,
+  });
   const top = [...response.results].sort((a, b) => b.score - a.score)[0];
   if (!top) return null;
   return {

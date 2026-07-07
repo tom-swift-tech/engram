@@ -15,7 +15,7 @@
 // =============================================================================
 
 import Database from 'better-sqlite3';
-import type { EmbeddingProvider } from './retain.js';
+import { embeddingToBuffer, type EmbeddingProvider } from './retain.js';
 import { parseTemporalQuery } from './temporal-parser.js';
 
 // =============================================================================
@@ -355,7 +355,7 @@ function semanticSearch(
   filters: QueryFilters,
 ): ScoredChunk[] {
   const { memoryTypes, minTrust = 0, sourceFilter, contextFilter } = filters;
-  const embeddingBuffer = Buffer.from(queryEmbedding.buffer);
+  const embeddingBuffer = embeddingToBuffer(queryEmbedding);
 
   // Build optional memory_type filter
   const typeFilter = memoryTypes?.length
