@@ -355,6 +355,17 @@ function parseQuarter(query: string, ref: Date): TemporalRange | null {
 
 /**
  * "this year", "last year", "in 2025"
+ *
+ * A bare 4-digit number is only treated as a year when corroborating
+ * temporal context precedes it (a preposition like "in"/"since"/"during"/
+ * "before"/"after"/"from"/"until", or the explicit word "year"), or when it
+ * appears as a hyphenated year-year range ("2024-2026"). Month names and
+ * quarter forms ("March 2026", "Q1 2026") are already resolved earlier in
+ * the parseTemporalQuery chain (parseMonthReference / parseQuarter run
+ * before this parser), so they never reach this fallback. Without this
+ * gate, ANY bare integer 2000-2100 anywhere in the query — "error code
+ * 2048", "port 2020", "chunk of 2048 bytes" — silently became a hard date
+ * filter that starved recall results (issue found in codebase review).
  */
 function parseYearReference(query: string, ref: Date): TemporalRange | null {
   if (/\bthis\s+year\b/.test(query)) {
@@ -375,7 +386,9 @@ function parseYearReference(query: string, ref: Date): TemporalRange | null {
     };
   }
 
-  const yearMatch = query.match(/\b(?:in\s+)?(\d{4})\b/);
+  const yearMatch = query.match(
+    /\b(?:in|since|during|before|after|from|until|year)\s+(\d{4})\b/,
+  );
   if (yearMatch) {
     const year = parseInt(yearMatch[1]);
     if (year >= 2000 && year <= 2100) {
@@ -384,6 +397,20 @@ function parseYearReference(query: string, ref: Date): TemporalRange | null {
       return {
         after: start.toISOString(),
         before: end.toISOString(),
+      };
+    }
+  }
+
+  const rangeMatch = query.match(/\b(\d{4})\s*-\s*(\d{4})\b/);
+  if (rangeMatch) {
+    const y1 = parseInt(rangeMatch[1]);
+    const y2 = parseInt(rangeMatch[2]);
+    if (y1 >= 2000 && y1 <= 2100 && y2 >= 2000 && y2 <= 2100) {
+      const startYear = Math.min(y1, y2);
+      const endYear = Math.max(y1, y2);
+      return {
+        after: utcDate(startYear, 0, 1).toISOString(),
+        before: utcDate(endYear, 11, 31, 23, 59, 59, 999).toISOString(),
       };
     }
   }

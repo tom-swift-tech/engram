@@ -117,35 +117,48 @@ Phase-2a tool made it 10 MCP tools, not 9, and broke the documented CLI↔MCP
 
 ### Phase 1 — Correctness quick-wins [builder ×2, parallel-safe: disjoint files]
 
+**DONE 2026-07-09.** Two builders in isolated worktrees off `2a54741` (the
+Phase 0 tip), disjoint file ownership, both reviewed and approved. Slice A
+landed as `7c28b4a` on `fix/phase1a-atomic-supersede-opinion-dedup` (also
+touched `src/retain.ts` — the atomic seam is a `RetainOptions.supersedes`
+field handled inside retain's own transaction, since retain's async embed
+means the transaction can't be wrapped externally; self-supersede and
+missing-target edge cases tested). Slice B landed as `a0ea502` on
+`fix/phase1b-temporal-fts` (graph strategy keeps the plain sanitizer; a new
+`sanitizeQueryForFts` feeds only the keyword strategy). Combined integration
+merge verified locally: 460/460 tests, typecheck + lint clean, zero merge
+conflicts.
+
 Slice A (`src/engram.ts`, `src/reflect.ts`):
-- [ ] **Atomic `supersede()`** (`engram.ts:702-714`) — wrap the retain +
+- [x] **Atomic `supersede()`** (`engram.ts:702-714`) — wrap the retain +
       `UPDATE … superseded_by` in one better-sqlite3 transaction. Note:
       `retain()` currently owns its own transaction; nested transaction via
       savepoint or restructure so the UPDATE joins retain's transaction.
       Test: crash-window semantics (inject a throw between the two steps,
       assert rollback leaves the old chunk active and no orphan new chunk).
-- [ ] **Dedup `direction:'new'` opinions** (`reflect.ts:710-726`) — route
+- [x] **Dedup `direction:'new'` opinions** (`reflect.ts:710-726`) — route
       through the existing `findMatchingOpinion`/`beliefSimilarity` before
       insert; a match converts the verdict to a reinforcement instead of a
       duplicate row. Test: same belief re-stated as "new" across two cycles
       yields 1 opinion with raised confidence, not 2 rows.
 
 Slice B (`src/temporal-parser.ts`, `src/recall.ts`):
-- [ ] **Gate bare-year temporal auto-parse** (`temporal-parser.ts:378-389`) —
+- [x] **Gate bare-year temporal auto-parse** (`temporal-parser.ts:378-389`) —
       a bare 2000–2100 integer only becomes a year filter with corroborating
       context (month name, "in/since/during/before/after <year>", date-ish
       punctuation). "error code 2048" / "port 2020" must NOT constrain
       recall. Keep explicit `after`/`before` options untouched. Tests for
       both directions (real year phrases still parse; numeric false
       positives don't).
-- [ ] **FTS phrase support** (`recall.ts:269-274`) — instead of stripping all
+- [x] **FTS phrase support** (`recall.ts:269-274`) — instead of stripping all
       punctuation, preserve double-quoted phrases as FTS5 phrase queries
       (escape internal quotes); strip only genuinely unsafe operators
       outside quotes. Test: quoted phrase matches adjacent tokens, unquoted
       behavior unchanged, no FTS5 syntax error on pathological input
       (fuzz the sanitizer with the existing pathological-query test corpus).
-- [ ] Verification per slice; both land before Phase 2 starts (Phase 2
-      builds on recall.ts).
+- [x] Verification per slice; both land before Phase 2 starts (Phase 2
+      builds on recall.ts). Per-slice full suites 427 (A) / 451 (B) green;
+      combined merge 460 green.
 
 ### Phase 2 — Agent-surface completion [builder, sequential slices; recall.ts is the shared spine]
 
