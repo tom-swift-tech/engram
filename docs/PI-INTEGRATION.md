@@ -104,7 +104,7 @@ The LLM sees seven tools every turn:
 | Tool | Purpose | Required params |
 |------|---------|-----------------|
 | `engram_remember` | Store a fact (marked `agent_generated`, default trust 0.6) | `text` |
-| `engram_recall` | Search memory | `query` |
+| `engram_recall` | Search memory. Optional: `memoryTypes`, `after`, `before`, `strategies`, `minScore` — passed straight through to `engram.recall()` (2026-07-09 widening; previously only `topK`/`minTrust` were exposed) | `query` |
 | `engram_memory_stats` | Report counts | (none) |
 | `engram_forget` | Soft-delete by chunk ID | `chunkId` (must match `^chk-`) |
 | `engram_session_resume` | Resume or create a working memory session for the current task | `message` |

@@ -246,6 +246,8 @@ const response = await agent.recall('What IaC tools does Tom use?', {
   memoryTypeRank?: Record<string, number>, // memory_type → within-tier rank overrides (see DEFAULT_MEMORY_TYPE_RANK)
   snippetChars?: number,            // max chars per result
   rrfK?: number,                    // RRF constant (default: 60)
+  minScore?: number,                // drop fused results below this weighted score
+  explainScores?: boolean,          // attach a per-result strategyScores breakdown (default: false)
 });
 
 // response.results       → ranked chunks with scores, strategies, and metadata
@@ -255,7 +257,7 @@ const response = await agent.recall('What IaC tools does Tom use?', {
 // response.strategiesUsed
 ```
 
-**Result ordering.** `recall` returns results in **tier-major order, not pure relevance order**: sorted by source tier first (0 `user_stated`, 1 `inferred`/`agent_generated`, 2 `tool_result`/`external_doc`), then by trust-weighted relevance within each tier. This enforces the trust-layer guarantee — external content cannot outrank user directives regardless of relevance or trust score. Memory type (`world`/`observation`/`experience`/`opinion`) is **not** part of this ordering floor — it's a soft multiplicative weight folded into the score itself (world/observation get a gentle boost, opinion a gentle penalty), so a strong match in one type can still beat a weak match in another instead of losing to it categorically; only source tier is an absolute floor. Integrators: `results[0]` is the best match in the highest-present tier, **not** necessarily the highest-relevance match overall; do not assume score-descending order across the full list (re-sort by `score` locally where you genuinely need relevance order). Tier mapping is configurable via `RecallOptions.sourceTiers`; the memory-type weight curve via `RecallOptions.memoryTypeRank` (defaults exported as `DEFAULT_SOURCE_TIERS` / `DEFAULT_MEMORY_TYPE_RANK`).
+**Result ordering.** `recall` returns results in **tier-major order, not pure relevance order**: sorted by source tier first (0 `user_stated`, 1 `inferred`/`agent_generated`, 2 `tool_result`/`external_doc`), then by trust-weighted relevance within each tier. This enforces the trust-layer guarantee — external content cannot outrank user directives regardless of relevance or trust score. Memory type (`world`/`observation`/`experience`/`opinion`) is **not** part of this ordering floor — it's a soft multiplicative weight folded into the score itself (world/observation get a gentle boost, opinion a gentle penalty), so a strong match in one type can still beat a weak match in another instead of losing to it categorically; only source tier is an absolute floor. Integrators: `results[0]` is the best match in the highest-present tier, **not** necessarily the highest-relevance match overall; do not assume score-descending order across the full list (re-sort by `score` locally where you genuinely need relevance order). Tier mapping is configurable via `RecallOptions.sourceTiers`; the memory-type weight curve via `RecallOptions.memoryTypeRank` (defaults exported as `DEFAULT_SOURCE_TIERS` / `DEFAULT_MEMORY_TYPE_RANK`). `minScore` filters the fused, weighted set — anything below the threshold is dropped before results are returned. `explainScores: true` attaches a `strategyScores` breakdown (per-strategy rank/score that fed RRF) to each result, off by default to keep the payload lean.
 
 **Recency decay tradeoff.** `decayHalfLifeDays` defaults to 180 — a chunk's score is multiplied by `2^(-ageDays/180)`, so content much older than ~18 months becomes functionally unrecallable regardless of relevance, with no warning. That's a sensible default for a short-lived coding-session context, but a real trap for a personal-assistant/journal-style consumer meant to have continuity across years — pass `decayHalfLifeDays: 0` (or a much longer half-life) explicitly if that's your use case; don't rely on the default.
 
@@ -383,6 +385,14 @@ artifact early; `promoteToDurable(ref)` is a mechanical seam that moves an
 artifact into durable scope (clears TTL/parent, becomes reflect-eligible) —
 it does **not** run `reflect()` itself; wiring that up is future work.
 
+**Task-scoped context over MCP/CLI.** The same primitives are reachable
+without a direct TypeScript import via `engram_context_commit` /
+`engram_context_query` / `engram_context_promote` (MCP) or `context-commit` /
+`context-query` / `context-promote` (CLI) — see [Tools Exposed](#tools-exposed)
+and the [CLI](#cli) section. One gotcha to know before using either: querying
+a ref returns the **children** committed under it (`parentRefId` pointing at
+that ref), not the artifact stored at the ref itself.
+
 ## Utility Functions
 
 Exported directly from `engram` — no instance required.
@@ -490,10 +500,15 @@ npx engram-mcp ./agent.engram --anthropic-api-key sk-ant-... --anthropic-model c
 | `engram_process_extractions` | Process entity extraction queue |
 | `engram_forget` | Soft-delete a memory chunk |
 | `engram_supersede` | Replace an outdated fact with corrected text |
-| `engram_session` | Infer or resume a working memory session |
+| `engram_session` | Infer/resume, update, or snapshot a working memory session (`action: resume\|update\|snapshot`, default `resume`) |
 | `engram_queue_stats` | Extraction queue depth, processing metrics, and failure-reason breakdown |
 | `engram_requeue_failed` | Re-queue failed extractions after an outage (optional error filter) |
 | `engram_embed` | Embed text in the bank's stored vector space (query or document mode) |
+| `engram_context_commit` | Commit a task-scoped decision artifact (ContextStore) |
+| `engram_context_query` | Query the children committed under a ContextStore ref |
+| `engram_context_promote` | Promote a task-scoped artifact into durable memory |
+
+`engram_session` omitting `action` behaves exactly as before (backward compatible); `action: 'update'`/`'snapshot'` require `sessionId` and let an MCP-only agent drive the full session lifecycle without a direct API call.
 
 ## CLI
 
@@ -522,7 +537,7 @@ accepted: `--ollama-url`, `--use-ollama-embeddings`, `--reflect-model`,
 **Exit codes:** `0` success · `2` not-found (`forget`/`supersede` on a missing
 chunk) · `1` error (bad/missing argument, no DB path, operation failure).
 
-The ten commands:
+The thirteen commands:
 
 ```bash
 # Store a fact
@@ -532,9 +547,13 @@ engram retain "Tom prefers Pulumi over Terraform" \
 # Search (keywords/proper nouns beat questions; temporal phrases auto-parse)
 engram recall "Terraform IaC provider" --top-k 5 --json
 engram recall "decisions last week" --strategies semantic,temporal --json
+engram recall "IaC tools" --min-score 0.3 --explain-scores --json
 
 # Infer/resume a working-memory session (once per incoming message)
 engram session "Help me plan the deployment" --json
+# Update progress, or snapshot to long-term memory and end it (both need --session-id)
+engram session --action update --session-id sess-abc123 --progress "step 2 done" --json
+engram session --action snapshot --session-id sess-abc123 --json
 
 # Correct an outdated fact (old chunk soft-deleted + linked to the new one)
 engram supersede chk-abc123 "Tom switched to Kubernetes" --json
@@ -556,6 +575,11 @@ engram requeue-failed --error-like "fetch failed" --json
 # Embed text in the bank's vector space (query mode by default)
 engram embed "deploy pipeline" --json
 engram embed "stored document text" --mode document --json
+
+# Task-scoped context handoff (ContextStore) — see below
+engram context-commit '{"decision":"use Postgres"}' --json
+engram context-query <refId> "database choice" --json
+engram context-promote <refId> --json
 ```
 
 The primary text argument for `retain`, `recall`, `session`, `embed`, and the
@@ -642,7 +666,7 @@ See **[docs/PI-INTEGRATION.md](docs/PI-INTEGRATION.md)** for full setup, lifecyc
 
 Portable skill files for agents using Engram via mcporter:
 
-- **[skills/engram.md](skills/engram.md)** — Complete tool reference with all 10 MCP tools, usage patterns, and common mistakes
+- **[skills/engram.md](skills/engram.md)** — Complete tool reference with all 13 MCP tools, usage patterns, and common mistakes
 - **[skills/engram-session.md](skills/engram-session.md)** — Working memory session lifecycle and tuning guide
 - **[skills/cli-memory/SKILL.md](skills/cli-memory/SKILL.md)** — `engram` CLI contract for coding agents (e.g. Pi): per-command `--json` schemas, exit codes, and when to recall vs. retain vs. supersede vs. session
 

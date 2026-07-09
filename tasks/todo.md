@@ -162,7 +162,14 @@ Slice B (`src/temporal-parser.ts`, `src/recall.ts`):
 
 ### Phase 2 — Agent-surface completion [builder, sequential slices; recall.ts is the shared spine]
 
-- [ ] **`minScore` relevance threshold + score observability**
+**DONE 2026-07-09.** Four sequential builder slices on `feat/phase2-agent-surface`
+(Slice A `minScore`/`explainScores`, Slice B session actions + ContextStore
+surface, Slice C Pi `engram_recall` widening, docs sweep), root suite
+418 → 489 (session-action + ContextStore MCP/CLI tests, cli.test.ts grew to
+35), Pi suite 104 → 108 (`engram_recall` passthrough tests). MCP tool count
+10 → 13. Mirror diff (CLAUDE.md ↔ AGENTS.md) clean.
+
+- [x] **`minScore` relevance threshold + score observability**
       (`src/recall.ts`, `src/mcp-tools.ts`, `src/cli-args.ts`):
       `RecallOptions.minScore` filters the fused set post-weighting;
       each result gains an optional `strategyScores` breakdown (per-strategy
@@ -171,7 +178,7 @@ Slice B (`src/temporal-parser.ts`, `src/recall.ts`):
       `engram_recall` tool description + skills: "`results[0]` is
       best-in-highest-tier, not best-overall; re-sort by `score` for pure
       relevance." Expose `--min-score` / `--explain-scores` in the CLI.
-- [ ] **Session lifecycle over MCP + CLI** (`src/mcp-tools.ts`, `src/cli.ts`):
+- [x] **Session lifecycle over MCP + CLI** (`src/mcp-tools.ts`, `src/cli.ts`):
       extend `engram_session` (or add `engram_session_update` /
       `engram_session_snapshot` — prefer extending the existing tool with an
       `action` enum to keep tool count from creeping; decision for the
@@ -179,20 +186,26 @@ Slice B (`src/temporal-parser.ts`, `src/recall.ts`):
       a working session, matching what Pi already has. CLI `session`
       subcommand grows the same actions. Update `skills/engram-session.md`
       to drop the "direct API only" caveat.
-- [ ] **ContextStore agent surface** (`src/mcp-tools.ts`, `src/cli.ts`):
+      Landed as an `action` enum (`resume` default | `update` | `snapshot`)
+      on the existing tool/subcommand — omitting `action` is byte-identical
+      to the pre-existing behavior; `update`/`snapshot` require `sessionId`.
+- [x] **ContextStore agent surface** (`src/mcp-tools.ts`, `src/cli.ts`):
       `engram_context_commit` / `engram_context_query` /
       `engram_context_promote` wrapping the existing tested core fns —
       the subagent-handoff feature is fully built but unreachable by any
       LLM today. CLI subcommands to match (keeps the parity test honest —
       it will FAIL when the tools land without CLI twins, by design).
       Skills: new section in `skills/engram.md`.
-- [ ] **Widen Pi `engram_recall`** (`integrations/pi/src/{types,index}.ts`) —
+      Landed with a documented gotcha: `engram_context_query`/`context-query`
+      returns the **children** committed under a ref (`parentRefId` pointing
+      at it), not the artifact at that ref itself.
+- [x] **Widen Pi `engram_recall`** (`integrations/pi/src/{types,index}.ts`) —
       pass through `memoryTypes` / `after` / `before` / `strategies` /
-      `minScore`; typebox schemas + adapter plumbing + tests.
-- [ ] Docs: README tool table, CLAUDE.md/AGENTS.md Decisions bullet updated
+      `minScore`; typebox schemas + adapter plumbing + tests. Commit `7ab99cd`.
+- [x] Docs: README tool table, CLAUDE.md/AGENTS.md Decisions bullet updated
       (tool count changes again here — the Phase 0 parity test keeps us
       honest), `docs/PI-INTEGRATION.md` tool list.
-- [ ] Verification: full pipeline; MCP round-trip tests for every new/changed
+- [x] Verification: full pipeline; MCP round-trip tests for every new/changed
       tool; CLI `--json` contract tests.
 
 ### Phase 3 — Scaling walls [architect spike first, then builder+operator]
@@ -260,7 +273,7 @@ optimization lands without a before/after number.
 
 ## Next session — start here
 
-**A full-codebase review (2026-07-09) produced a phased remediation plan — see "Planned — 2026-07-09 codebase-review remediation" above. Phase 0 (docs truth + drift guard) is the cheapest highest-leverage start.**
+**A full-codebase review (2026-07-09) produced a phased remediation plan — see "Planned — 2026-07-09 codebase-review remediation" above. Phases 0–2 (docs truth, correctness quick-wins, agent-surface completion) are all done. Phase 3 (scaling walls — benchmark harness, semantic-scan fix, Tier-1 extraction off the hot path) is next, architect-spike-first.**
 
 The Pi adapter's big auto-behaviors (session bridge, consolidation, auto-retain) are all in and CI-gated. Other open work, roughly by leverage:
 
