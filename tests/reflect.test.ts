@@ -527,6 +527,102 @@ describe('reflect()', () => {
     expect(op.confidence).toBe(0.7);
   });
 
+  it('dedups a repeated "new" verdict into a reinforcement — no duplicate opinion row, confidence increases', async () => {
+    dbPath = tmpDbPath();
+    await setupDb(dbPath, 5);
+
+    // Same belief, re-emitted as "new" both cycles — this is what a model
+    // does when it re-derives a belief it already formed instead of
+    // recognizing it should reinforce. Without dedup, this accumulates a
+    // duplicate opinion row every cycle.
+    const sameNewOpinionResponse = JSON.stringify({
+      observations: [],
+      opinion_updates: [
+        {
+          belief: 'Alice strongly prefers Rust over other systems languages',
+          direction: 'new',
+          confidence_delta: 0.2,
+          domain: 'preferences',
+          evidence_chunk_ids: [],
+          entity_names: ['Alice'],
+        },
+      ],
+      observation_refreshes: [],
+    });
+
+    vi.stubGlobal('fetch', mockOllamaFetch(sameNewOpinionResponse));
+
+    // Cycle 1: no matching opinion yet — genuinely new, inserts.
+    const result1 = await reflect({ dbPath });
+    expect(result1.opinionsFormed).toBe(1);
+    expect(result1.opinionsReinforced).toBe(0);
+
+    const afterCycle1 = new Database(dbPath);
+    const opsAfter1 = afterCycle1
+      .prepare('SELECT * FROM opinions')
+      .all() as any[];
+    afterCycle1.close();
+    expect(opsAfter1).toHaveLength(1);
+
+    // Cycle 2: fresh unreflected facts (distinct text — setupDb's literal
+    // text would otherwise dedup against the already-reflected chunks from
+    // cycle 1 and never register as new unreflected facts), same "new"
+    // verdict re-emitted.
+    const db2 = new Database(dbPath);
+    for (let i = 0; i < 5; i++) {
+      await retain(db2, `Alice prefers Rust — round 2 fact ${i}`, embedder, {
+        memoryType: 'world',
+        sourceType: 'user_stated',
+        trustScore: 0.8,
+      });
+    }
+    db2.close();
+    vi.unstubAllGlobals();
+    vi.stubGlobal('fetch', mockOllamaFetch(sameNewOpinionResponse));
+
+    const result2 = await reflect({ dbPath });
+    expect(result2.opinionsFormed).toBe(0);
+    expect(result2.opinionsReinforced).toBe(1);
+
+    const afterCycle2 = new Database(dbPath);
+    const opsAfter2 = afterCycle2
+      .prepare('SELECT * FROM opinions')
+      .all() as any[];
+    afterCycle2.close();
+
+    // Still exactly one opinion row — converted to a reinforcement, not inserted again.
+    expect(opsAfter2).toHaveLength(1);
+    expect(opsAfter2[0].id).toBe(opsAfter1[0].id);
+    // Confidence increased rather than being reset by a fresh insert.
+    expect(opsAfter2[0].confidence).toBeGreaterThan(opsAfter1[0].confidence);
+  });
+
+  it('a "new" verdict with no matching existing opinion still inserts (not swallowed by dedup)', async () => {
+    dbPath = tmpDbPath();
+    await setupDb(dbPath, 5);
+
+    const db = new Database(dbPath);
+    db.prepare(
+      `
+      INSERT INTO opinions (id, belief, confidence, domain, supporting_chunks, related_entities)
+      VALUES ('op-unrelated', 'Tom prefers Terraform for infrastructure', 0.6, 'infrastructure', '[]', '[]')
+    `,
+    ).run();
+    db.close();
+
+    // REFLECT_RESPONSE's belief/domain don't match the pre-existing opinion.
+    vi.stubGlobal('fetch', mockOllamaFetch(REFLECT_RESPONSE));
+
+    const result = await reflect({ dbPath });
+    expect(result.opinionsFormed).toBe(1);
+    expect(result.opinionsReinforced).toBe(0);
+
+    const verify = new Database(dbPath);
+    const ops = verify.prepare('SELECT * FROM opinions').all() as any[];
+    verify.close();
+    expect(ops).toHaveLength(2); // pre-existing unrelated opinion + the new one
+  });
+
   it('refreshes an existing observation with new source chunks', async () => {
     dbPath = tmpDbPath();
     await setupDb(dbPath, 5);

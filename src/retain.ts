@@ -52,6 +52,15 @@ export interface RetainOptions {
   skipExtraction?: boolean;
   /** Dedup mode: 'normalized' (default) ignores case/whitespace, 'exact' skips if identical text exists, 'none' always creates new chunk */
   dedupMode?: 'exact' | 'normalized' | 'none';
+  /**
+   * Chunk id to atomically mark superseded (is_active = FALSE, superseded_by
+   * = the resulting chunk id) in the SAME transaction as this retain's write.
+   * Powers Engram.supersede() — see markSuperseded() below for the seam.
+   * If this id resolves to the SAME chunk this retain resolves to (e.g. a
+   * dedup hit that lands back on the chunk being superseded), the mark is
+   * skipped rather than deactivating the chunk retain just resolved to.
+   */
+  supersedes?: string;
 }
 
 export interface RetainResult {
@@ -190,6 +199,27 @@ function sourceTier(sourceType: string): number {
   return RETAIN_SOURCE_TIERS[sourceType] ?? 2;
 }
 
+/**
+ * Mark a chunk superseded — is_active = FALSE, superseded_by = the new
+ * chunk's id. Called from INSIDE the same db.transaction() as the write
+ * that produced newChunkId (either the dedup UPDATE or the fresh INSERT),
+ * so a crash or constraint failure between the two can never leave the new
+ * chunk active AND the old one un-superseded. No-op (does not throw) when
+ * oldChunkId doesn't match an existing row — mirrors the pre-existing
+ * external behavior where supersede() never throws on a missing chunk id;
+ * not-found handling is the caller's responsibility (see cli.ts's
+ * chunkExists pre-check).
+ */
+function markSuperseded(
+  db: Database.Database,
+  oldChunkId: string,
+  newChunkId: string,
+): void {
+  db.prepare(
+    `UPDATE chunks SET is_active = FALSE, superseded_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+  ).run(newChunkId, oldChunkId);
+}
+
 // =============================================================================
 // Fast Retain (no LLM, just embed + store)
 // =============================================================================
@@ -212,6 +242,7 @@ export async function retain(
     temporalLabel = null,
     skipExtraction = false,
     dedupMode = 'normalized', // uses indexed text_hash column; 'exact' scans unindexed text
+    supersedes = null,
   } = options;
 
   // Dedup check — runs before embed to avoid unnecessary Ollama calls
@@ -273,9 +304,21 @@ export async function retain(
       updates.push('updated_at = CURRENT_TIMESTAMP');
       params.push(existing.id);
 
-      db.prepare(`UPDATE chunks SET ${updates.join(', ')} WHERE id = ?`).run(
-        ...params,
-      );
+      // Same transaction as the dedup UPDATE, not a separate statement —
+      // the "mark old chunk superseded" write must commit-or-rollback
+      // together with the dedup write it's paired with. Self-supersede
+      // guard: if the dedup hit resolved back onto the very chunk being
+      // superseded (e.g. supersede(id, sameTextAsId)), skip the mark —
+      // deactivating the chunk retain just resolved to would be wrong.
+      const dedupTransaction = db.transaction(() => {
+        db.prepare(`UPDATE chunks SET ${updates.join(', ')} WHERE id = ?`).run(
+          ...params,
+        );
+        if (supersedes && supersedes !== existing.id) {
+          markSuperseded(db, supersedes, existing.id);
+        }
+      });
+      dedupTransaction();
       return { chunkId: existing.id, queued: false, deduplicated: true };
     }
   }
@@ -332,6 +375,13 @@ export async function retain(
         VALUES (?)
       `,
       ).run(chunkId);
+    }
+
+    // Mark the superseded chunk inside this same transaction — a fresh
+    // chunkId can never collide with supersedes, so no self-supersede guard
+    // is needed here (that case is only reachable via the dedup path above).
+    if (supersedes) {
+      markSuperseded(db, supersedes, chunkId);
     }
   });
 
