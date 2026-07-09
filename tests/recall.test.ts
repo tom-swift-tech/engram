@@ -351,8 +351,12 @@ describe('recall() — minScore threshold', () => {
     await retain(db, 'widget documentation reference', embedder, {
       trustScore: 0.9,
     });
+    // decayHalfLifeDays: 0 pins scores across the two sequential calls —
+    // with decay on, elapsed wall-clock time between them shifts every
+    // score by a representable amount and toEqual flakes.
     const withoutMinScore = await recall(db, 'widget documentation', embedder, {
       strategies: ['keyword'],
+      decayHalfLifeDays: 0,
     });
     const explicitUndefined = await recall(
       db,
@@ -360,6 +364,7 @@ describe('recall() — minScore threshold', () => {
       embedder,
       {
         strategies: ['keyword'],
+        decayHalfLifeDays: 0,
         minScore: undefined,
       },
     );
@@ -388,8 +393,12 @@ describe('recall() — minScore threshold', () => {
     await retain(db, 'boundary threshold widget test', embedder, {
       trustScore: 0.9,
     });
+    // decayHalfLifeDays: 0 makes the captured score reproducible in the
+    // second call — with decay on, the score decays between the two calls
+    // and the inclusive >= boundary fails by a hair.
     const baseline = await recall(db, 'boundary threshold widget', embedder, {
       strategies: ['keyword'],
+      decayHalfLifeDays: 0,
     });
     expect(baseline.results.length).toBeGreaterThan(0);
     const exactScore = baseline.results[0].score;
@@ -400,6 +409,7 @@ describe('recall() — minScore threshold', () => {
       embedder,
       {
         strategies: ['keyword'],
+        decayHalfLifeDays: 0,
         minScore: exactScore,
       },
     );
