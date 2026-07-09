@@ -706,8 +706,70 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
         WHERE id = ?
       `);
 
+      // Shared by the 'reinforce' branch and by a 'new' verdict that turns
+      // out to match an existing belief (see below) — same clamp,
+      // self-reinforcement dampening, and supporting_chunks merge either way.
+      const reinforceExisting = (
+        existing: ExistingOpinion,
+        opUpdate: LLMReflectOutput['opinion_updates'][number],
+      ): void => {
+        let clampedDelta = Math.min(
+          0.15,
+          Math.max(0, opUpdate.confidence_delta),
+        );
+
+        // Dampen self-reinforcement: if >50% of evidence is agent-generated,
+        // halve the delta to break opinion feedback loops
+        const evidenceIds = opUpdate.evidence_chunk_ids.filter(
+          (id: string) => id,
+        );
+        if (evidenceIds.length > 0) {
+          const placeholders = evidenceIds.map(() => '?').join(',');
+          const agentCount = (
+            db
+              .prepare(
+                `SELECT COUNT(*) as cnt FROM chunks WHERE id IN (${placeholders}) AND source_type = 'agent_generated'`,
+              )
+              .get(...evidenceIds) as { cnt: number }
+          ).cnt;
+          if (agentCount / evidenceIds.length > 0.5) {
+            clampedDelta = clampedDelta * 0.5;
+          }
+        }
+
+        const mergedSupporting = [
+          ...new Set([
+            ...existing.supporting_chunks,
+            ...opUpdate.evidence_chunk_ids,
+          ]),
+        ];
+        reinforceOpinion.run(
+          clampedDelta,
+          JSON.stringify(mergedSupporting),
+          now,
+          now,
+          existing.id,
+        );
+        result.opinionsReinforced++;
+      };
+
       for (const opUpdate of output.opinion_updates) {
         if (opUpdate.direction === 'new') {
+          // A belief re-stated as "new" that actually matches an existing
+          // opinion (same dedup match used by reinforce/challenge) is a
+          // reinforcement, not a fresh row — otherwise a belief the LLM
+          // keeps re-deriving as "new" accumulates duplicate opinion rows
+          // every cycle instead of strengthening one.
+          const existing = findMatchingOpinion(
+            existingOps,
+            opUpdate.belief,
+            opUpdate.domain,
+          );
+          if (existing) {
+            reinforceExisting(existing, opUpdate);
+            continue;
+          }
+
           const initialConfidence = Math.min(
             0.7,
             Math.max(0.3, 0.5 + opUpdate.confidence_delta),
@@ -731,44 +793,7 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
             opUpdate.domain,
           );
           if (existing) {
-            let clampedDelta = Math.min(
-              0.15,
-              Math.max(0, opUpdate.confidence_delta),
-            );
-
-            // Dampen self-reinforcement: if >50% of evidence is agent-generated,
-            // halve the delta to break opinion feedback loops
-            const evidenceIds = opUpdate.evidence_chunk_ids.filter(
-              (id: string) => id,
-            );
-            if (evidenceIds.length > 0) {
-              const placeholders = evidenceIds.map(() => '?').join(',');
-              const agentCount = (
-                db
-                  .prepare(
-                    `SELECT COUNT(*) as cnt FROM chunks WHERE id IN (${placeholders}) AND source_type = 'agent_generated'`,
-                  )
-                  .get(...evidenceIds) as { cnt: number }
-              ).cnt;
-              if (agentCount / evidenceIds.length > 0.5) {
-                clampedDelta = clampedDelta * 0.5;
-              }
-            }
-
-            const mergedSupporting = [
-              ...new Set([
-                ...existing.supporting_chunks,
-                ...opUpdate.evidence_chunk_ids,
-              ]),
-            ];
-            reinforceOpinion.run(
-              clampedDelta,
-              JSON.stringify(mergedSupporting),
-              now,
-              now,
-              existing.id,
-            );
-            result.opinionsReinforced++;
+            reinforceExisting(existing, opUpdate);
           }
         } else if (opUpdate.direction === 'challenge') {
           const existing = findMatchingOpinion(

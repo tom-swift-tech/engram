@@ -246,6 +246,113 @@ describe('Engram', () => {
     expect(terraform.results.some((r) => r.id === old.chunkId)).toBe(false);
   });
 
+  it('supersede() is atomic: a failure between insert and mark-superseded leaves nothing persisted', async () => {
+    dbPath = tmpDbPath();
+    engram = await Engram.create(dbPath, { embedder: new MockEmbedder() });
+
+    const old = await engram.retain('Tom prefers Terraform (atomicity)', {
+      memoryType: 'world',
+      trustScore: 0.9,
+    });
+
+    // Install a real (non-TEMP) trigger via a second raw connection to the
+    // same file, so it also fires for Engram's own connection — SQLite
+    // triggers live in the schema, not the connection. It fires exactly on
+    // the "mark old chunk superseded" UPDATE (is_active), which retain()
+    // now runs AFTER the new chunk's INSERT inside the same transaction —
+    // so a failure here proves the INSERT rolls back too, not just the
+    // UPDATE. Without atomicity, the INSERT would already be committed and
+    // this trigger firing would leave the new chunk active with the old
+    // chunk never marked superseded — exactly the double-counting bug.
+    const rawDb = new Database(dbPath);
+    rawDb.exec(`
+      CREATE TRIGGER poison_supersede
+      BEFORE UPDATE OF is_active ON chunks
+      WHEN OLD.id = '${old.chunkId}'
+      BEGIN
+        SELECT RAISE(ABORT, 'injected failure for atomicity test');
+      END;
+    `);
+    rawDb.close();
+
+    await expect(
+      engram.supersede(old.chunkId, 'Tom switched to Pulumi (atomicity)', {
+        memoryType: 'world',
+        trustScore: 0.9,
+      }),
+    ).rejects.toThrow();
+
+    const cleanup = new Database(dbPath);
+    cleanup.exec('DROP TRIGGER IF EXISTS poison_supersede');
+    cleanup.close();
+
+    const verify = new Database(dbPath);
+    const oldRow = verify
+      .prepare('SELECT is_active, superseded_by FROM chunks WHERE id = ?')
+      .get(old.chunkId) as any;
+    const newRowCount = verify
+      .prepare(
+        `SELECT COUNT(*) as c FROM chunks WHERE text LIKE '%Pulumi (atomicity)%'`,
+      )
+      .get() as { c: number };
+    verify.close();
+
+    // Old chunk untouched — the whole transaction rolled back, not just
+    // the UPDATE that failed.
+    expect(oldRow.is_active).toBe(1);
+    expect(oldRow.superseded_by).toBeNull();
+    // New chunk was never persisted — all-or-nothing.
+    expect(newRowCount.c).toBe(0);
+  });
+
+  it('supersede() marks the old chunk superseded when newText dedups to an existing chunk', async () => {
+    dbPath = tmpDbPath();
+    engram = await Engram.create(dbPath, { embedder: new MockEmbedder() });
+
+    const existing = await engram.retain('Tom uses Kubernetes', {
+      memoryType: 'world',
+      trustScore: 0.9,
+    });
+    const old = await engram.retain('Tom uses Docker Swarm', {
+      memoryType: 'world',
+      trustScore: 0.9,
+    });
+
+    const result = await engram.supersede(
+      old.chunkId,
+      '  tom uses kubernetes  ', // normalizes to the same text as `existing`
+      { memoryType: 'world', trustScore: 0.9 },
+    );
+
+    expect(result.chunkId).toBe(existing.chunkId);
+    expect(result.deduplicated).toBe(true);
+
+    const db = new Database(dbPath);
+    const oldRow = db
+      .prepare('SELECT is_active, superseded_by FROM chunks WHERE id = ?')
+      .get(old.chunkId) as any;
+    db.close();
+    expect(oldRow.is_active).toBe(0);
+    expect(oldRow.superseded_by).toBe(existing.chunkId);
+  });
+
+  it('supersede() on a missing oldChunkId still creates the new chunk (external behavior unchanged)', async () => {
+    dbPath = tmpDbPath();
+    engram = await Engram.create(dbPath, { embedder: new MockEmbedder() });
+
+    const result = await engram.supersede(
+      'chk-doesnotexist',
+      'A brand new fact',
+      { memoryType: 'world' },
+    );
+
+    expect(result.chunkId).toMatch(/^chk-/);
+    const found = await engram.recall('brand new fact', {
+      strategies: ['keyword'],
+    });
+    expect(found.results.some((r) => r.id === result.chunkId)).toBe(true);
+  });
+
   it('forgetBySource() deactivates all matching chunks', async () => {
     dbPath = tmpDbPath();
     engram = await Engram.create(dbPath, { embedder: new MockEmbedder() });

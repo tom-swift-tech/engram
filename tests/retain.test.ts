@@ -272,6 +272,78 @@ describe('retain() — deduplication', () => {
 });
 
 // ---------------------------------------------------------------------------
+// retain() — supersedes option (atomic-supersede seam; see Engram.supersede())
+// ---------------------------------------------------------------------------
+
+describe('retain() — supersedes option', () => {
+  let db: Database.Database;
+  const embedder = new MockEmbedder();
+
+  beforeEach(() => {
+    db = createTestDb();
+  });
+  afterEach(() => db.close());
+
+  it('marks the old chunk superseded in the same write as a fresh insert', async () => {
+    const old = await retain(db, 'Tom prefers Terraform', embedder);
+    const next = await retain(db, 'Tom switched to Pulumi', embedder, {
+      supersedes: old.chunkId,
+    });
+
+    expect(next.chunkId).not.toBe(old.chunkId);
+    const oldRow = db
+      .prepare('SELECT is_active, superseded_by FROM chunks WHERE id = ?')
+      .get(old.chunkId) as any;
+    expect(oldRow.is_active).toBe(0);
+    expect(oldRow.superseded_by).toBe(next.chunkId);
+  });
+
+  it('marks the old chunk superseded when the new text dedups to an existing chunk', async () => {
+    const existing = await retain(db, 'Tom uses Kubernetes', embedder);
+    const old = await retain(db, 'Tom uses Docker Swarm', embedder);
+
+    // New text is a normalized duplicate of `existing` — retain() resolves
+    // to existing.chunkId via the dedup path, not a fresh insert.
+    const result = await retain(db, '  tom uses kubernetes  ', embedder, {
+      supersedes: old.chunkId,
+    });
+
+    expect(result.chunkId).toBe(existing.chunkId);
+    expect(result.deduplicated).toBe(true);
+
+    const oldRow = db
+      .prepare('SELECT is_active, superseded_by FROM chunks WHERE id = ?')
+      .get(old.chunkId) as any;
+    expect(oldRow.is_active).toBe(0);
+    expect(oldRow.superseded_by).toBe(existing.chunkId);
+  });
+
+  it('self-supersede: dedup resolving back onto the chunk being superseded does not deactivate it', async () => {
+    const chunk = await retain(db, 'Tom uses Kubernetes', embedder);
+
+    // supersedes points at the SAME chunk the dedup hit resolves to.
+    const result = await retain(db, 'tom uses kubernetes', embedder, {
+      supersedes: chunk.chunkId,
+    });
+
+    expect(result.chunkId).toBe(chunk.chunkId);
+    const row = db
+      .prepare('SELECT is_active, superseded_by FROM chunks WHERE id = ?')
+      .get(chunk.chunkId) as any;
+    expect(row.is_active).toBe(1);
+    expect(row.superseded_by).toBeNull();
+  });
+
+  it('supersedes pointing at a non-existent chunk id does not throw', async () => {
+    const result = await retain(db, 'brand new fact', embedder, {
+      supersedes: 'chk-doesnotexist',
+    });
+    expect(result.chunkId).toMatch(/^chk-/);
+    expect(result.deduplicated).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // retainBatch()
 // ---------------------------------------------------------------------------
 

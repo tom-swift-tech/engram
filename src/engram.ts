@@ -701,19 +701,19 @@ export class Engram {
    * Supersede an old fact with new text. The old chunk is soft-deleted and
    * linked to the new one via superseded_by. Use when correcting information:
    * supersede("Tom prefers Terraform" → "Tom switched to Pulumi").
+   *
+   * Thin wrapper: threads oldChunkId into retain()'s `supersedes` option so
+   * the "mark old chunk superseded" write lands inside retain()'s own
+   * synchronous transaction — atomic with the new chunk's insert (or dedup
+   * update), not a separate statement after the fact. See markSuperseded()
+   * in retain.ts.
    */
   async supersede(
     oldChunkId: string,
     newText: string,
     options?: RetainOptions,
   ): Promise<RetainResult> {
-    const newResult = await this.retain(newText, options);
-    this.db
-      .prepare(
-        `UPDATE chunks SET is_active = FALSE, superseded_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-      )
-      .run(newResult.chunkId, oldChunkId);
-    return newResult;
+    return this.retain(newText, { ...options, supersedes: oldChunkId });
   }
 
   /**
