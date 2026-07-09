@@ -152,17 +152,19 @@ export function computeTextHash(text: string): string {
 function findNormalizedDuplicate(
   db: Database.Database,
   text: string,
-): {
-  id: string;
-  trust_score: number;
-  source_type: string;
-  source: string | null;
-  source_uri: string | null;
-  context: string | null;
-  event_time: string | null;
-  event_time_end: string | null;
-  temporal_label: string | null;
-} | undefined {
+):
+  | {
+      id: string;
+      trust_score: number;
+      source_type: string;
+      source: string | null;
+      source_uri: string | null;
+      context: string | null;
+      event_time: string | null;
+      event_time_end: string | null;
+      temporal_label: string | null;
+    }
+  | undefined {
   const hash = computeTextHash(text);
   return db
     .prepare(
@@ -271,9 +273,9 @@ export async function retain(
       updates.push('updated_at = CURRENT_TIMESTAMP');
       params.push(existing.id);
 
-      db.prepare(
-        `UPDATE chunks SET ${updates.join(', ')} WHERE id = ?`,
-      ).run(...params);
+      db.prepare(`UPDATE chunks SET ${updates.join(', ')} WHERE id = ?`).run(
+        ...params,
+      );
       return { chunkId: existing.id, queued: false, deduplicated: true };
     }
   }

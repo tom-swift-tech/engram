@@ -56,7 +56,7 @@ npx mcporter call engram.engram_session message="plan the deployment" threshold=
     "id": "wm-abc123",
     "goal": "Plan the production deployment",
     "progress": "Identified 3 migrations pending...",
-    "status": "in_progress"
+    "updated_at": "2026-07-09T12:00:00Z"
   },
   "relatedContext": "## Relevant Memory Context\n- Tom prefers blue/green deployments...",
   "confidence": 0.82,

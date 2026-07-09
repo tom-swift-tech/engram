@@ -174,6 +174,19 @@ engram process-extractions --batch-size 10 --json
 
 `--json` shape: `{ "processed": 7, "failed": 0 }`.
 
+### `embed <text>` — raw vector in the stored embedding space
+
+```bash
+engram embed "deploy pipeline" --json
+echo "stored document text" | engram embed --mode document --json
+```
+
+`--json` shape: `{ "embedding": [0.01, …], "dimensions": 768 }`. `--mode query`
+(default) applies the search prefix for asymmetric models; `--mode document`
+matches how `retain` embeds stored text. Stores nothing. You will almost never
+need this in a turn loop — it exists for consumers doing their own vector math
+(it is the bridge surface `engram-aql` uses for AQL vector search).
+
 ## Turn loop (typical)
 
 ```bash

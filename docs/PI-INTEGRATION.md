@@ -17,7 +17,7 @@ Pi coding agent
         ├── lifecycle hooks (session_start opens DB, message_end auto-retains, turn_end consolidates, session_shutdown flushes + closes)
         │
         └── Engram (in-process import — no subprocess, no MCP)
-            ├── retain (~5ms, local Transformers.js embeddings)
+            ├── retain (no LLM; local Transformers.js embeddings)
             ├── recall (4-strategy: semantic + keyword + graph + temporal)
             ├── forget (soft-delete)
             └── stats  (chunks/entities/opinions/observations + queue)
@@ -141,11 +141,12 @@ What's captured, and with what provenance:
 
 | Message role | Stored as | Trust |
 |--------------|-----------|-------|
-| user | `experience` / `user_stated` | 0.7 |
+| user (interactive TUI) | `experience` / `user_stated` | 0.7 |
+| user (non-interactive: `pi -p`, rpc/json) | `experience` / `inferred` | 0.3 |
 | assistant | `experience` / `agent_generated` | 0.5 |
 | tool / bash output | `experience` / `tool_result` | 0.4 |
 
-Tool output lands in the **lowest trust tier** (`tool_result`), so even high volumes of captured output can never outrank a user-stated directive at recall — the trust layer enforces this structurally.
+A `user`-role message only earns `user_stated` trust in an interactive TUI session; non-interactive invocations (scheduled jobs, one-shot `pi -p` runs) are downgraded because their "user" text is often automation, not a human directive (override via `ENGRAM_PI_AUTO_RETAIN_NONINTERACTIVE_SOURCE_TYPE`). Tool output lands in the **lowest trust tier** (`tool_result`), so even high volumes of captured output can never outrank a user-stated directive at recall — the trust layer enforces this structurally.
 
 Gating keeps the DB sane:
 

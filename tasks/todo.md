@@ -66,9 +66,190 @@ Follow-up enhancements (Mira's #8/#9), same session:
       skills/cli-memory/SKILL.md, CLAUDE.md+AGENTS.md (mirrored).
       Root suite 403 → 411; Pi suite 102 green; mirror diff clean.
 
+## Planned — 2026-07-09 codebase-review remediation
+
+Source: full-codebase review (2026-07-09) at HEAD `4cd4630`. Verified green
+before planning: root 413, Pi 104, openclaw-import 67, build clean, AQL
+cross-process suites passing. Findings fall into four buckets: doc drift,
+correctness quick-wins, agent-surface gaps, and scaling walls. Phases are
+ordered by leverage-per-risk; each phase is independently shippable and ends
+with the verification-loop pipeline. Phases 1–2 are parallel-safe (disjoint
+files); Phase 3+ items each get their own worktree per the parallel-builder
+policy.
+
+### Phase 0 — Docs truth + drift guard (no behavior change) [builder, single slice]
+
+**DONE 2026-07-09** (branch `fix/phase0-surface-parity-docs`). Root suite
+413 → 418 (2 embed CLI tests + 3 parity tests, embed added to the --json
+contract sweep). Also fixed pre-existing lint/format failures from `4cd4630`
+(9 files unformatted + one unused var in `tests/context-store.test.ts`) —
+main was red on CI before this branch.
+
+The review found CLAUDE.md's tool-surface claims stale (the `engram_embed`
+Phase-2a tool made it 10 MCP tools, not 9, and broke the documented CLI↔MCP
+1:1 mapping). Fix the docs AND make this class of drift a test failure.
+
+- [x] **Add `embed` CLI subcommand** (`src/cli.ts` + `src/cli-args.ts`) —
+      restores the 1:1 CLI↔MCP invariant (decision: keep the invariant rather
+      than mark `engram_embed` internal; it's trivial and the invariant is
+      what makes the skill docs trustworthy). `--json` emits the raw
+      `embedForMode` return; text from arg or stdin like every other command.
+- [x] **Drift-guard test** (new `tests/surface-parity.test.ts`): asserts
+      `ENGRAM_TOOLS` ↔ `CLI_COMMANDS` (new canonical list in `cli-args.ts`)
+      set-equality, pins the count at 10, and behaviorally invokes every
+      command through `runCli` so the list can't drift from the dispatch
+      switch either. Doc counts can still drift; the *surface* no longer can.
+- [x] **Docs sweep** (CLAUDE.md + AGENTS.md together, mirror rule):
+      "9 tools" → 10 everywhere (Decisions bullet, MCP surface bullet,
+      `mcp-tools.ts:5` header comment, `skills/engram.md`,
+      `skills/cli-memory/SKILL.md`, README tool table); test counts
+      411→current root / 102→current Pi; **soften the "~5ms retain" claim**
+      (SQLite write is ~5ms; default in-process CPU embedding dominates at
+      tens-to-hundreds of ms — say so, and note the mock/Ollama-GPU paths);
+      document the FTS sanitizer tradeoff (punctuation stripped ⇒ no phrase
+      queries, implicit AND); `docs/PI-INTEGRATION.md` — add the
+      non-interactive auto-retain downgrade path (`inferred`/0.3,
+      `adapter.ts:660`); `skills/engram-session.md` — drop the phantom
+      `status: "in_progress"` field from the example response shape.
+- [x] Verification: full pipeline + mirror diff clean — lint, format:check,
+      typecheck, build all green; root 418 + Pi 104; mirror regenerated from
+      CLAUDE.md and diff-verified with the CI guard's exact filter.
+
+### Phase 1 — Correctness quick-wins [builder ×2, parallel-safe: disjoint files]
+
+Slice A (`src/engram.ts`, `src/reflect.ts`):
+- [ ] **Atomic `supersede()`** (`engram.ts:702-714`) — wrap the retain +
+      `UPDATE … superseded_by` in one better-sqlite3 transaction. Note:
+      `retain()` currently owns its own transaction; nested transaction via
+      savepoint or restructure so the UPDATE joins retain's transaction.
+      Test: crash-window semantics (inject a throw between the two steps,
+      assert rollback leaves the old chunk active and no orphan new chunk).
+- [ ] **Dedup `direction:'new'` opinions** (`reflect.ts:710-726`) — route
+      through the existing `findMatchingOpinion`/`beliefSimilarity` before
+      insert; a match converts the verdict to a reinforcement instead of a
+      duplicate row. Test: same belief re-stated as "new" across two cycles
+      yields 1 opinion with raised confidence, not 2 rows.
+
+Slice B (`src/temporal-parser.ts`, `src/recall.ts`):
+- [ ] **Gate bare-year temporal auto-parse** (`temporal-parser.ts:378-389`) —
+      a bare 2000–2100 integer only becomes a year filter with corroborating
+      context (month name, "in/since/during/before/after <year>", date-ish
+      punctuation). "error code 2048" / "port 2020" must NOT constrain
+      recall. Keep explicit `after`/`before` options untouched. Tests for
+      both directions (real year phrases still parse; numeric false
+      positives don't).
+- [ ] **FTS phrase support** (`recall.ts:269-274`) — instead of stripping all
+      punctuation, preserve double-quoted phrases as FTS5 phrase queries
+      (escape internal quotes); strip only genuinely unsafe operators
+      outside quotes. Test: quoted phrase matches adjacent tokens, unquoted
+      behavior unchanged, no FTS5 syntax error on pathological input
+      (fuzz the sanitizer with the existing pathological-query test corpus).
+- [ ] Verification per slice; both land before Phase 2 starts (Phase 2
+      builds on recall.ts).
+
+### Phase 2 — Agent-surface completion [builder, sequential slices; recall.ts is the shared spine]
+
+- [ ] **`minScore` relevance threshold + score observability**
+      (`src/recall.ts`, `src/mcp-tools.ts`, `src/cli-args.ts`):
+      `RecallOptions.minScore` filters the fused set post-weighting;
+      each result gains an optional `strategyScores` breakdown (per-strategy
+      rank/score that fed RRF) behind a `explainScores?: boolean` opt so the
+      default payload stays lean. Add one plain sentence to the
+      `engram_recall` tool description + skills: "`results[0]` is
+      best-in-highest-tier, not best-overall; re-sort by `score` for pure
+      relevance." Expose `--min-score` / `--explain-scores` in the CLI.
+- [ ] **Session lifecycle over MCP + CLI** (`src/mcp-tools.ts`, `src/cli.ts`):
+      extend `engram_session` (or add `engram_session_update` /
+      `engram_session_snapshot` — prefer extending the existing tool with an
+      `action` enum to keep tool count from creeping; decision for the
+      architect if ambiguous) so an MCP-only agent can resume→update→snapshot
+      a working session, matching what Pi already has. CLI `session`
+      subcommand grows the same actions. Update `skills/engram-session.md`
+      to drop the "direct API only" caveat.
+- [ ] **ContextStore agent surface** (`src/mcp-tools.ts`, `src/cli.ts`):
+      `engram_context_commit` / `engram_context_query` /
+      `engram_context_promote` wrapping the existing tested core fns —
+      the subagent-handoff feature is fully built but unreachable by any
+      LLM today. CLI subcommands to match (keeps the parity test honest —
+      it will FAIL when the tools land without CLI twins, by design).
+      Skills: new section in `skills/engram.md`.
+- [ ] **Widen Pi `engram_recall`** (`integrations/pi/src/{types,index}.ts`) —
+      pass through `memoryTypes` / `after` / `before` / `strategies` /
+      `minScore`; typebox schemas + adapter plumbing + tests.
+- [ ] Docs: README tool table, CLAUDE.md/AGENTS.md Decisions bullet updated
+      (tool count changes again here — the Phase 0 parity test keeps us
+      honest), `docs/PI-INTEGRATION.md` tool list.
+- [ ] Verification: full pipeline; MCP round-trip tests for every new/changed
+      tool; CLI `--json` contract tests.
+
+### Phase 3 — Scaling walls [architect spike first, then builder+operator]
+
+Both issues are invisible at the current largest deployment (~6.5k chunks)
+and will surface as unexplained slowness at 50k+. Benchmark-gated: no
+optimization lands without a before/after number.
+
+- [ ] **Benchmark harness first** [operator] — script (scratch, not shipped)
+      that builds synthetic `.engram` files at 5k/50k/200k chunks +
+      proportional entities, measures p50/p95 `retain()` and `recall()`.
+      This is the acceptance gate for both items below.
+- [ ] **Semantic-scan fix** [architect spike → builder] — today
+      `vec_distance_cosine` full-scans every active chunk
+      (`recall.ts:379-390`). Options to evaluate: (a) sqlite-vec `vec0`
+      virtual table (true ANN, but a schema migration + backfill of existing
+      BLOBs + the Rust crate reads the same file — check `engram-aql`
+      compatibility), (b) FTS/entity candidate pre-filter feeding a bounded
+      cosine re-rank (no migration, weaker recall). Spike output: one-page
+      decision doc in `docs/superpowers/specs/`, then implement the winner.
+      Constraint: existing `.engram` files must keep working (guarded
+      migration pattern already established in `engram.ts`).
+- [ ] **Tier-1 extraction off the hot path** [builder] — the `INSTR()`
+      entity full-scan (`extract-cpu.ts:231-240`) runs inside the retain
+      transaction. Fix: move Tier-1 linking out of the write transaction
+      (post-commit, still synchronous-cheap) AND bound the scan (candidate
+      tokens → indexed exact/prefix lookup on `canonical_name` instead of
+      INSTR over all rows). Acceptance: retain p95 flat as entity count
+      grows 1k→30k in the benchmark.
+- [ ] Verification: benchmark before/after in the PR description; full suite;
+      AQL L2/L3 suites specifically (shared-file schema compatibility).
+
+### Phase 4 — Memory quality (design-heavy) [architect first]
+
+- [ ] **Near-duplicate consolidation** [architect design → builder] —
+      auto-retain accumulates paraphrases that exact `text_hash` dedup
+      misses. Candidate design: at retain time, optional cosine check
+      against top-1 semantic neighbor above a similarity threshold →
+      reinforce (bump access metadata / merge provenance) instead of insert;
+      or a batch `consolidate()` pass alongside reflect. Decide: write-time
+      vs batch (write-time adds an embedding-space query to the hot path —
+      weigh against Phase 3 gains). One-page design doc first.
+- [ ] **Entity resolution** [architect design → builder] — Tier-1 makes
+      every capitalized mid-sentence word a `concept` entity, never captures
+      multi-word entities, and nothing merges aliases ("TJ Swift" vs
+      "Tom Swift", Mira's live report). Scope: (a) multi-word proper-noun
+      capture in `extract-cpu.ts`, (b) an alias table or
+      `entities.canonical_id` self-reference + merge pass during Tier-2
+      extraction, (c) a `resolveEntity()` surface so graph recall follows
+      aliases. This is the biggest open design in the memory-quality bucket
+      — spec in `docs/superpowers/specs/` before any code.
+- [ ] Verification: full pipeline + a regression corpus (the pathological
+      inputs from Mira's deployment make good fixtures).
+
+### Cross-cutting rules for all phases
+
+- Every doc edit lands in CLAUDE.md AND AGENTS.md (CI mirror guard).
+- Conventional commits on feature branches; one PR per phase (Phase 1 may be
+  two PRs, one per slice).
+- Parallel builders (Phase 1 A/B) get separate worktrees + lead-resolved
+  base SHA per the global claim-lock policy.
+- No phase is "done" on a green suite alone — the verification-loop skill
+  pipeline runs per slice, and Phase 3 additionally requires benchmark
+  numbers.
+
 ## Next session — start here
 
-The Pi adapter's big auto-behaviors (session bridge, consolidation, auto-retain) are all in and CI-gated. Remaining open work, roughly by leverage:
+**A full-codebase review (2026-07-09) produced a phased remediation plan — see "Planned — 2026-07-09 codebase-review remediation" above. Phase 0 (docs truth + drift guard) is the cheapest highest-leverage start.**
+
+The Pi adapter's big auto-behaviors (session bridge, consolidation, auto-retain) are all in and CI-gated. Other open work, roughly by leverage:
 
 1. **Live-validate the remaining Pi lifecycle behaviors** — the 2026-07-05 session confirmed slash commands, auto-retain (`message_end`), and startup recall end-to-end against a real Pi install + real model (Ollama). Still not separately live-verified: background consolidation cadence (`turn_end` → `processExtractions()`/`reflect()`, needs Ollama for extraction/reflection, not just embeddings) and the `engram` CLI shell-out loop (`skills/cli-memory/SKILL.md`'s documented recall→answer→retain cadence via a real Pi agent shelling out per-call).
 2. **AQL Phase 2 — write statements** (`engram-aql`): the largest remaining lift; design challenge is coordinating Rust-side writes with the TS retain pipeline (embeddings + extraction queue). See the AQL section below.

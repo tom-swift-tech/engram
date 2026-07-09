@@ -25,7 +25,7 @@ export const ENGRAM_TOOLS = [
   {
     name: 'engram_retain' as const,
     description:
-      'Store a memory trace. Fast path (~5ms, no LLM). Parameters use camelCase: text (required), memoryType (world|experience|observation|opinion), sourceType (user_stated|inferred|external_doc|tool_result|agent_generated), trustScore (0.0-1.0). Example: {text: "Tom prefers Terraform", memoryType: "world", sourceType: "user_stated", trustScore: 0.9}',
+      'Store a memory trace. Fast path (no LLM call; embeds locally). Parameters use camelCase: text (required), memoryType (world|experience|observation|opinion), sourceType (user_stated|inferred|external_doc|tool_result|agent_generated), trustScore (0.0-1.0). Example: {text: "Tom prefers Terraform", memoryType: "world", sourceType: "user_stated", trustScore: 0.9}',
     inputSchema: {
       type: 'object' as const,
       properties: {

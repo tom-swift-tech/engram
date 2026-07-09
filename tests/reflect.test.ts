@@ -714,7 +714,9 @@ describe('reflect()', () => {
 
       const db = new Database(dbPath);
       const hint = db
-        .prepare(`SELECT value FROM bank_config WHERE key = 'reflect_batch_hint'`)
+        .prepare(
+          `SELECT value FROM bank_config WHERE key = 'reflect_batch_hint'`,
+        )
         .get() as { value: string } | undefined;
       db.close();
 
@@ -739,7 +741,9 @@ describe('reflect()', () => {
 
       const verify = new Database(dbPath);
       const reflectedCount = verify
-        .prepare(`SELECT COUNT(*) as cnt FROM chunks WHERE reflected_at IS NOT NULL`)
+        .prepare(
+          `SELECT COUNT(*) as cnt FROM chunks WHERE reflected_at IS NOT NULL`,
+        )
         .get() as { cnt: number };
       verify.close();
 
@@ -765,7 +769,9 @@ describe('reflect()', () => {
 
       const verify = new Database(dbPath);
       const reflectedCount = verify
-        .prepare(`SELECT COUNT(*) as cnt FROM chunks WHERE reflected_at IS NOT NULL`)
+        .prepare(
+          `SELECT COUNT(*) as cnt FROM chunks WHERE reflected_at IS NOT NULL`,
+        )
         .get() as { cnt: number };
       verify.close();
 
@@ -789,7 +795,9 @@ describe('reflect()', () => {
 
       const verify = new Database(dbPath);
       const hint = verify
-        .prepare(`SELECT value FROM bank_config WHERE key = 'reflect_batch_hint'`)
+        .prepare(
+          `SELECT value FROM bank_config WHERE key = 'reflect_batch_hint'`,
+        )
         .get();
       verify.close();
 
@@ -806,7 +814,9 @@ describe('reflect()', () => {
 
       const db = new Database(dbPath);
       const hint = db
-        .prepare(`SELECT value FROM bank_config WHERE key = 'reflect_batch_hint'`)
+        .prepare(
+          `SELECT value FROM bank_config WHERE key = 'reflect_batch_hint'`,
+        )
         .get() as { value: string };
       db.close();
 
@@ -835,19 +845,16 @@ describe('reflect()', () => {
       db.close();
 
       let capturedPrompt = '';
-      vi.stubGlobal(
-        'fetch',
-        async (_url: unknown, init?: RequestInit) => {
-          const body = JSON.parse(String(init?.body ?? '{}'));
-          capturedPrompt = body.prompt ?? '';
-          return {
-            ok: true,
-            status: 200,
-            json: async () => ({ response: REFLECT_RESPONSE }),
-            text: async () => REFLECT_RESPONSE,
-          } as unknown as Response;
-        },
-      );
+      vi.stubGlobal('fetch', async (_url: unknown, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body ?? '{}'));
+        capturedPrompt = body.prompt ?? '';
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ response: REFLECT_RESPONSE }),
+          text: async () => REFLECT_RESPONSE,
+        } as unknown as Response;
+      });
 
       // Budget small enough that only a couple of the 500-char summaries fit
       await reflect({ dbPath, existingContextCharBudget: 1200 });

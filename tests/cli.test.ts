@@ -312,6 +312,36 @@ describe('engram CLI', () => {
     expect(row.attempts).toBe(0);
   });
 
+  // ─── embed ───────────────────────────────────────────────────────────────
+
+  it('embed returns the embedding vector and its dimensions as JSON', async () => {
+    const cap = captureIo();
+    const code = await runCli(
+      args('embed', 'deploy pipeline', '--json'),
+      cap.io,
+      overrides,
+    );
+    expect(code).toBe(0);
+    const parsed = JSON.parse(cap.stdout());
+    expect(Array.isArray(parsed.embedding)).toBe(true);
+    expect(parsed.dimensions).toBe(parsed.embedding.length);
+    expect(parsed.embedding.every((n: unknown) => Number.isFinite(n))).toBe(
+      true,
+    );
+  });
+
+  it('embed reads text from stdin and accepts --mode document', async () => {
+    const cap = captureIo('piped text to embed');
+    const code = await runCli(
+      args('embed', '--mode', 'document', '--json'),
+      cap.io,
+      overrides,
+    );
+    expect(code).toBe(0);
+    const parsed = JSON.parse(cap.stdout());
+    expect(parsed.dimensions).toBeGreaterThan(0);
+  });
+
   // ─── error paths ──────────────────────────────────────────────────────────
 
   it('exits 1 when no database path is given', async () => {
@@ -382,6 +412,7 @@ describe('engram CLI', () => {
         argv: args('requeue-failed', '--json'),
         label: 'requeue-failed',
       },
+      { argv: args('embed', 'some text', '--json'), label: 'embed' },
       { argv: args('forget', seededId, '--json'), label: 'forget' },
     ];
 

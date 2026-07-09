@@ -857,7 +857,9 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
       // A cycle that actually produced insights is evidence the current
       // batch size works — clear any prior shrink hint so future cycles
       // go back to the configured/default size.
-      db.prepare(`DELETE FROM bank_config WHERE key = 'reflect_batch_hint'`).run();
+      db.prepare(
+        `DELETE FROM bank_config WHERE key = 'reflect_batch_hint'`,
+      ).run();
     }
 
     result.status = wasSilentFailure ? 'partial' : 'completed';

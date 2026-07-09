@@ -212,7 +212,9 @@ describe('retain() — deduplication', () => {
 
     expect(r2.chunkId).toBe(r1.chunkId);
     const chunk = db
-      .prepare('SELECT source_type, trust_score, source, context FROM chunks WHERE id = ?')
+      .prepare(
+        'SELECT source_type, trust_score, source, context FROM chunks WHERE id = ?',
+      )
       .get(r1.chunkId) as any;
     expect(chunk.source_type).toBe('user_stated');
     expect(chunk.trust_score).toBe(0.95);
@@ -752,7 +754,9 @@ describe('requeueFailedExtractions()', () => {
     await seedFailed('network failure', 'fetch failed: ECONNREFUSED');
     await seedFailed('missing model', 'model "nope" not found');
 
-    const requeued = requeueFailedExtractions(db, { errorLike: 'fetch failed' });
+    const requeued = requeueFailedExtractions(db, {
+      errorLike: 'fetch failed',
+    });
     expect(requeued).toBe(1);
 
     const stillFailed = db

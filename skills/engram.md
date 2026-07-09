@@ -118,6 +118,15 @@ npx mcporter call engram.engram_requeue_failed errorLike="fetch failed"
 
 Failed is a terminal state — after 3 attempts an item never retries on its own. Once the underlying cause is fixed (LLM host back online, missing model pulled), call this to reset failed items to pending with a fresh attempt counter. Optional `errorLike` substring targets one failure class from the `failed_reasons` breakdown. Returns `{"requeued": <count>}`. Items whose chunk was forgotten are skipped.
 
+### Embed text — `engram_embed`
+
+```bash
+npx mcporter call engram.engram_embed text="deploy pipeline"
+npx mcporter call engram.engram_embed text="stored document text" mode=document
+```
+
+Returns `{"embedding": [...], "dimensions": <n>}` — a vector in the bank's stored embedding space. `mode=query` (the default) applies the search prefix for asymmetric models like nomic-embed-text; `mode=document` matches how `engram_retain` embeds stored text. Most agents never need this directly — it exists for consumers that do their own vector math (it is the bridge `engram-aql` uses for AQL `LIKE`/`PATTERN` vector search). It does not store anything.
+
 ## Usage Patterns
 
 ### Before answering a user question

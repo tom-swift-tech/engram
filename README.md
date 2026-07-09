@@ -15,7 +15,7 @@
 
 ---
 
-Each agent gets its own SQLite file — an **engram** — containing everything it knows, has experienced, believes, and has learned. Raw facts are retained in ~5ms with no LLM call. Entities and relationships are extracted in the background. Periodic reflection cycles synthesize higher-order observations and confidence-scored beliefs.
+Each agent gets its own SQLite file — an **engram** — containing everything it knows, has experienced, believes, and has learned. Raw facts are retained with no LLM call — a fast in-process embed plus a ~5ms SQLite write. Entities and relationships are extracted in the background. Periodic reflection cycles synthesize higher-order observations and confidence-scored beliefs.
 
 One file. Zero infrastructure. Full cognitive architecture.
 
@@ -27,7 +27,7 @@ npm install engram
 
 Most agent memory systems are either too simple (append-only logs) or too heavy (Postgres + Redis + vector DB). Engram sits in the sweet spot:
 
-- **~5ms writes** — embedding + SQLite, no LLM in the hot path
+- **Fast writes** — no LLM in the hot path; the SQLite write is ~5ms, and total latency is dominated by the local embedding (tens of ms on CPU, faster with Ollama GPU embeddings)
 - **Four-way retrieval** — semantic vectors, BM25 keyword, knowledge graph traversal, and temporal filtering fused via Reciprocal Rank Fusion
 - **Trust layer** — every memory carries provenance and a confidence score that weights recall
 - **Learns over time** — scheduled reflection synthesizes observations and forms beliefs that strengthen or weaken with evidence
@@ -136,7 +136,7 @@ const agent = await Engram.create('./myAgent.engram', {
   retainMission: 'Prioritize technical decisions and project context. Ignore greetings.',
 });
 
-// Store a fact (~5ms, no LLM call)
+// Store a fact (fast path, no LLM call)
 await agent.retain('Tom prefers Terraform with the bpg provider for Proxmox IaC', {
   memoryType: 'world',
   sourceType: 'user_stated',
@@ -184,7 +184,7 @@ const agent = await Engram.open('./agent.engram');
 
 ### `retain(text, options?)`
 
-Store a memory. Embeds and writes to SQLite in ~5ms. Tier 1 CPU extraction links entities inline. Tier 2 LLM extraction is queued for background processing. No LLM call blocks this path.
+Store a memory. Embeds in-process and writes to SQLite (the write is ~5ms; the embedding dominates total latency). Tier 1 CPU extraction links entities inline. Tier 2 LLM extraction is queued for background processing. No LLM call blocks this path.
 
 ```typescript
 await agent.retain('Tom prefers Terraform with the bpg provider for Proxmox IaC', {
@@ -493,6 +493,7 @@ npx engram-mcp ./agent.engram --anthropic-api-key sk-ant-... --anthropic-model c
 | `engram_session` | Infer or resume a working memory session |
 | `engram_queue_stats` | Extraction queue depth, processing metrics, and failure-reason breakdown |
 | `engram_requeue_failed` | Re-queue failed extractions after an outage (optional error filter) |
+| `engram_embed` | Embed text in the bank's stored vector space (query or document mode) |
 
 ## CLI
 
@@ -521,7 +522,7 @@ accepted: `--ollama-url`, `--use-ollama-embeddings`, `--reflect-model`,
 **Exit codes:** `0` success · `2` not-found (`forget`/`supersede` on a missing
 chunk) · `1` error (bad/missing argument, no DB path, operation failure).
 
-The nine commands:
+The ten commands:
 
 ```bash
 # Store a fact
@@ -551,11 +552,15 @@ engram queue-stats --json
 # Re-drive failed extractions after an outage (all, or one failure class)
 engram requeue-failed --json
 engram requeue-failed --error-like "fetch failed" --json
+
+# Embed text in the bank's vector space (query mode by default)
+engram embed "deploy pipeline" --json
+engram embed "stored document text" --mode document --json
 ```
 
-The primary text argument for `retain`, `recall`, `session`, and the `newText`
-of `supersede` is read from **stdin** when the positional is omitted, so an agent
-can pipe context straight in:
+The primary text argument for `retain`, `recall`, `session`, `embed`, and the
+`newText` of `supersede` is read from **stdin** when the positional is omitted,
+so an agent can pipe context straight in:
 
 ```bash
 echo "long pasted context to remember" | engram retain --db ./agent.engram --json
@@ -637,7 +642,7 @@ See **[docs/PI-INTEGRATION.md](docs/PI-INTEGRATION.md)** for full setup, lifecyc
 
 Portable skill files for agents using Engram via mcporter:
 
-- **[skills/engram.md](skills/engram.md)** — Complete tool reference with all 9 MCP tools, usage patterns, and common mistakes
+- **[skills/engram.md](skills/engram.md)** — Complete tool reference with all 10 MCP tools, usage patterns, and common mistakes
 - **[skills/engram-session.md](skills/engram-session.md)** — Working memory session lifecycle and tuning guide
 - **[skills/cli-memory/SKILL.md](skills/cli-memory/SKILL.md)** — `engram` CLI contract for coding agents (e.g. Pi): per-command `--json` schemas, exit codes, and when to recall vs. retain vs. supersede vs. session
 

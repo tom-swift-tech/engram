@@ -328,7 +328,9 @@ export class Engram {
       db.exec('ALTER TABLE chunks ADD COLUMN expires_at TIMESTAMP');
     }
     if (!scopeColumns.some((c) => c.name === 'parent_ref')) {
-      db.exec('ALTER TABLE chunks ADD COLUMN parent_ref TEXT REFERENCES chunks(id)');
+      db.exec(
+        'ALTER TABLE chunks ADD COLUMN parent_ref TEXT REFERENCES chunks(id)',
+      );
     }
     if (!scopeColumns.some((c) => c.name === 'agent_id')) {
       db.exec('ALTER TABLE chunks ADD COLUMN agent_id TEXT');
@@ -549,7 +551,8 @@ export class Engram {
   // Core operations
   // ---------------------------------------------------------------------------
 
-  /** Store a memory trace. Fast path — embeds locally, no LLM call. ~5ms. */
+  /** Store a memory trace. Fast path — no LLM call. The SQLite write is ~5ms;
+   *  total latency is dominated by the local embedding (tens of ms on CPU). */
   async retain(text: string, options?: RetainOptions): Promise<RetainResult> {
     return retain(this.db, text, this.embedder, options);
   }
