@@ -798,7 +798,7 @@ export default function engramPiExtension(pi: ExtensionAPI): void {
     name: 'engram_recall',
     label: 'Recall',
     description:
-      'Search Engram memory using semantic, keyword, graph, and temporal strategies. Natural-language queries with phrases like "last week" auto-activate temporal filtering.',
+      'Search Engram memory using semantic, keyword, graph, and temporal strategies. Natural-language queries with phrases like "last week" auto-activate temporal filtering. Optional filters: memoryTypes, after/before (ISO dates), strategies (restrict which of the four run), minScore (drop low-relevance results).',
     parameters: RecallParams,
     async execute(_id, params: RecallToolParams) {
       const engram = await getEngram();
@@ -806,6 +806,11 @@ export default function engramPiExtension(pi: ExtensionAPI): void {
         query: params.query,
         topK: params.topK,
         minTrust: params.minTrust,
+        memoryTypes: params.memoryTypes,
+        after: params.after,
+        before: params.before,
+        strategies: params.strategies,
+        minScore: params.minScore,
       });
       return {
         content: [

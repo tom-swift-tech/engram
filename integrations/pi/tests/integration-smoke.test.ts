@@ -543,6 +543,49 @@ describe('engram-pi integration smoke (built dist + real Engram)', () => {
     });
   });
 
+  it('engram_recall LLM tool honors memoryTypes, strategies, and minScore filters', async () => {
+    await captured.commands.get('remember')!.handler(
+      'we use Fly.io for edge deployment regions',
+      makeCtx(makeFakeUi()),
+    );
+    const tool = captured.tools.get('engram_recall')!;
+
+    const filteredByType = await tool.execute(
+      'tool-call-memtype',
+      {
+        query: 'Fly.io edge deployment',
+        strategies: ['keyword'],
+        memoryTypes: ['world'],
+      },
+      undefined,
+      undefined,
+      makeCtx(makeFakeUi()),
+    );
+    expect(filteredByType.content[0].text).toContain('Fly.io');
+
+    const baseline = await tool.execute(
+      'tool-call-baseline',
+      { query: 'Fly.io edge deployment', strategies: ['keyword'] },
+      undefined,
+      undefined,
+      makeCtx(makeFakeUi()),
+    );
+    expect((baseline.details as { resultCount: number }).resultCount).toBeGreaterThan(0);
+
+    const overStrict = await tool.execute(
+      'tool-call-minscore',
+      {
+        query: 'Fly.io edge deployment',
+        strategies: ['keyword'],
+        minScore: 1, // above any realistic fused score
+      },
+      undefined,
+      undefined,
+      makeCtx(makeFakeUi()),
+    );
+    expect((overStrict.details as { resultCount: number }).resultCount).toBe(0);
+  });
+
   it('engram_forget LLM tool succeeds for a known id and reports failure for an unknown id', async () => {
     const rememberUi = makeFakeUi();
     await captured.commands.get('remember')!.handler(
