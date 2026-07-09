@@ -214,7 +214,11 @@ export async function queryContext(
   });
 
   if (response.results.length === 0) {
-    return { artifacts: [], truncated: false, totalCandidates: response.totalCandidates };
+    return {
+      artifacts: [],
+      truncated: false,
+      totalCandidates: response.totalCandidates,
+    };
   }
 
   const ids = response.results.map((r) => r.id);

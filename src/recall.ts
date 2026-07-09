@@ -794,8 +794,12 @@ function applyWeighting(
     memoryRankOf?: (memoryType: string) => number;
   } = {},
 ): void {
-  const { decayHalfLifeDays = 180, sourceBoost, contextBoost, memoryRankOf } =
-    options;
+  const {
+    decayHalfLifeDays = 180,
+    sourceBoost,
+    contextBoost,
+    memoryRankOf,
+  } = options;
 
   for (const [, entry] of fused) {
     // Trust: 0.5 trust → 0.9x, 1.0 trust → 1.2x

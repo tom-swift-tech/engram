@@ -13,7 +13,7 @@
 //   engram reflect                  engram process-extractions
 //   engram forget <chunkId>         engram supersede <oldChunkId> <newText>
 //   engram session <message>        engram queue-stats
-//   engram requeue-failed
+//   engram requeue-failed           engram embed <text>
 //
 // Contract:
 //   --json        emit the raw method return as JSON to stdout, nothing else.
@@ -245,6 +245,8 @@ Commands:
   queue-stats                      Extraction queue health
   requeue-failed                   Re-queue failed extractions for retry
                                    (--error-like <substring> to filter)
+  embed <text>                     Embed text in the bank's vector space
+                                   (text from stdin if omitted)
 
 Database:
   --db <path>                      Path to the .engram file (or set ENGRAM_DB)
@@ -277,6 +279,10 @@ session options:
 
 process-extractions options:
   --batch-size <n>
+
+embed options:
+  --mode <query|document>          query applies the search prefix for
+                                   asymmetric models (default: query)
 
 Exit codes: 0 success · 2 not-found · 1 error
 `;
@@ -437,6 +443,19 @@ async function dispatch(
       });
       if (json) emitJson(io, result);
       else io.stdout(`requeued ${result.requeued} failed item(s)\n`);
+      return EXIT_OK;
+    }
+
+    case 'embed': {
+      const text = await resolveText(args.positionals[0], io);
+      if (!text) return missingArg(io, 'text');
+      // Same clamp as the engram_embed MCP handler: anything not 'document' is 'query'.
+      const mode =
+        args.values.get('--mode') === 'document' ? 'document' : 'query';
+      const vec = await engram.embedForMode(text, mode);
+      const result = { embedding: Array.from(vec), dimensions: vec.length };
+      if (json) emitJson(io, result);
+      else io.stdout(`embedded: ${result.dimensions} dims (${mode} mode)\n`);
       return EXIT_OK;
     }
 

@@ -59,6 +59,27 @@ export function filterEnums<T extends string>(
   return filtered.length > 0 ? filtered : undefined;
 }
 
+// ─── Subcommand surface ──────────────────────────────────────────────────────
+
+/**
+ * Canonical CLI subcommand list — one kebab-cased twin per `engram_*` MCP tool
+ * in mcp-tools.ts. tests/surface-parity.test.ts asserts this stays 1:1 with
+ * ENGRAM_TOOLS (and that cli.ts dispatch handles every entry), so adding an
+ * MCP tool without its CLI twin fails the suite instead of drifting silently.
+ */
+export const CLI_COMMANDS = [
+  'retain',
+  'recall',
+  'reflect',
+  'process-extractions',
+  'forget',
+  'supersede',
+  'session',
+  'queue-stats',
+  'requeue-failed',
+  'embed',
+] as const;
+
 // ─── argv parsing ────────────────────────────────────────────────────────────
 
 /** Flags that take no value — their presence is the signal. */

@@ -20,7 +20,10 @@ describe('ContextStore', () => {
   });
   afterEach(() => db.close());
 
-  const artifact = (decision: string, extra?: Partial<DecisionArtifact>): DecisionArtifact => ({
+  const artifact = (
+    decision: string,
+    extra?: Partial<DecisionArtifact>,
+  ): DecisionArtifact => ({
     decision,
     rationale: `because ${decision}`,
     confidence: 0.8,
@@ -33,13 +36,27 @@ describe('ContextStore', () => {
   // ---------------------------------------------------------------------------
 
   it('commits an artifact and queries it back as a child of its parent scope', async () => {
-    const root = await commitContext(db, embedder, artifact('root task started'));
-    const child = await commitContext(db, embedder, artifact('use Terraform for IaC'), {
-      parent: root,
-    });
+    const root = await commitContext(
+      db,
+      embedder,
+      artifact('root task started'),
+    );
+    const child = await commitContext(
+      db,
+      embedder,
+      artifact('use Terraform for IaC'),
+      {
+        parent: root,
+      },
+    );
     expect(child.scope).toBe('task');
 
-    const slice = await queryContext(db, embedder, root, 'Terraform IaC decision');
+    const slice = await queryContext(
+      db,
+      embedder,
+      root,
+      'Terraform IaC decision',
+    );
     expect(slice.artifacts).toHaveLength(1);
     expect(slice.artifacts[0].ref.id).toBe(child.id);
     expect(slice.artifacts[0].artifact.decision).toBe('use Terraform for IaC');
@@ -47,10 +64,19 @@ describe('ContextStore', () => {
   });
 
   it('a fresh commit is queryable as a child of itself only if referenced as parent', async () => {
-    const root = await commitContext(db, embedder, artifact('root task started'));
-    const child = await commitContext(db, embedder, artifact('picked option A'), {
-      parent: root,
-    });
+    const root = await commitContext(
+      db,
+      embedder,
+      artifact('root task started'),
+    );
+    const child = await commitContext(
+      db,
+      embedder,
+      artifact('picked option A'),
+      {
+        parent: root,
+      },
+    );
 
     // Querying the root's own ref returns its children, not the root itself.
     const slice = await queryContext(db, embedder, root, 'option A');
@@ -71,13 +97,20 @@ describe('ContextStore', () => {
 
   it('excludes an artifact past its TTL from query(), with no reaper involved', async () => {
     const root = await commitContext(db, embedder, artifact('root'));
-    const child = await commitContext(db, embedder, artifact('short-lived note'), {
-      parent: root,
-      ttlMs: -1, // already expired the instant it's committed
-    });
+    const child = await commitContext(
+      db,
+      embedder,
+      artifact('short-lived note'),
+      {
+        parent: root,
+        ttlMs: -1, // already expired the instant it's committed
+      },
+    );
 
     // Row still physically exists (is_active untouched) — only the read is filtered.
-    const row = db.prepare('SELECT is_active, scope FROM chunks WHERE id = ?').get(child.id) as {
+    const row = db
+      .prepare('SELECT is_active, scope FROM chunks WHERE id = ?')
+      .get(child.id) as {
       is_active: number;
       scope: string;
     };
@@ -89,18 +122,27 @@ describe('ContextStore', () => {
   });
 
   it('never surfaces task-scoped artifacts from a default recall() call', async () => {
-    await retain(db, 'a durable long-term fact', embedder, { memoryType: 'world' });
-    const root = await commitContext(db, embedder, artifact('root'));
-    await commitContext(db, embedder, artifact('a task-scoped decision about Terraform'), {
-      parent: root,
+    await retain(db, 'a durable long-term fact', embedder, {
+      memoryType: 'world',
     });
+    const root = await commitContext(db, embedder, artifact('root'));
+    await commitContext(
+      db,
+      embedder,
+      artifact('a task-scoped decision about Terraform'),
+      {
+        parent: root,
+      },
+    );
 
     const response = await recall(db, 'Terraform decision', embedder, {
       strategies: ['keyword'],
     });
-    expect(response.results.every((r) => r.text !== 'a task-scoped decision about Terraform')).toBe(
-      true,
-    );
+    expect(
+      response.results.every(
+        (r) => r.text !== 'a task-scoped decision about Terraform',
+      ),
+    ).toBe(true);
   });
 
   // ---------------------------------------------------------------------------
@@ -112,11 +154,18 @@ describe('ContextStore', () => {
     // Every artifact is the same shape/size, so its serialized length is
     // deterministic — compute it instead of guessing, so the budget below
     // reliably admits exactly 2 of the 5 committed artifacts.
-    const sampleSize = JSON.stringify(artifact('decision 0 about widgets')).length;
+    const sampleSize = JSON.stringify(
+      artifact('decision 0 about widgets'),
+    ).length;
     for (let i = 0; i < 5; i++) {
-      await commitContext(db, embedder, artifact(`decision ${i} about widgets`), {
-        parent: root,
-      });
+      await commitContext(
+        db,
+        embedder,
+        artifact(`decision ${i} about widgets`),
+        {
+          parent: root,
+        },
+      );
     }
 
     const tight = await queryContext(db, embedder, root, 'widgets decision', {
@@ -125,9 +174,15 @@ describe('ContextStore', () => {
     expect(tight.artifacts).toHaveLength(2);
     expect(tight.truncated).toBe(true);
 
-    const generous = await queryContext(db, embedder, root, 'widgets decision', {
-      maxChars: 1_000_000,
-    });
+    const generous = await queryContext(
+      db,
+      embedder,
+      root,
+      'widgets decision',
+      {
+        maxChars: 1_000_000,
+      },
+    );
     expect(generous.artifacts).toHaveLength(5);
     expect(generous.truncated).toBe(false);
   });
@@ -138,9 +193,14 @@ describe('ContextStore', () => {
 
   it('ranks task-scoped results consistently with a direct recall() call using the same scope filter', async () => {
     const root = await commitContext(db, embedder, artifact('root'));
-    await commitContext(db, embedder, artifact('prefers Rust for systems programming'), {
-      parent: root,
-    });
+    await commitContext(
+      db,
+      embedder,
+      artifact('prefers Rust for systems programming'),
+      {
+        parent: root,
+      },
+    );
     await commitContext(db, embedder, artifact('a recipe for chocolate cake'), {
       parent: root,
     });
@@ -151,11 +211,19 @@ describe('ContextStore', () => {
       includeOpinions: false,
       includeObservations: false,
     });
-    const slice = await queryContext(db, embedder, root, 'Rust systems programming', {
-      maxChars: 1_000_000,
-    });
+    const slice = await queryContext(
+      db,
+      embedder,
+      root,
+      'Rust systems programming',
+      {
+        maxChars: 1_000_000,
+      },
+    );
 
-    expect(slice.artifacts.map((a) => a.ref.id)).toEqual(direct.results.map((r) => r.id));
+    expect(slice.artifacts.map((a) => a.ref.id)).toEqual(
+      direct.results.map((r) => r.id),
+    );
   });
 
   // ---------------------------------------------------------------------------
@@ -164,13 +232,20 @@ describe('ContextStore', () => {
 
   it('expireContext soft-deletes an artifact ahead of its natural TTL', async () => {
     const root = await commitContext(db, embedder, artifact('root'));
-    const child = await commitContext(db, embedder, artifact('to be expired early'), {
-      parent: root,
-    });
+    const child = await commitContext(
+      db,
+      embedder,
+      artifact('to be expired early'),
+      {
+        parent: root,
+      },
+    );
 
     await expireContext(db, child);
 
-    const row = db.prepare('SELECT is_active FROM chunks WHERE id = ?').get(child.id) as {
+    const row = db
+      .prepare('SELECT is_active FROM chunks WHERE id = ?')
+      .get(child.id) as {
       is_active: number;
     };
     expect(row.is_active).toBe(0);
@@ -198,7 +273,9 @@ describe('ContextStore', () => {
     await promoteToDurable(db, child);
 
     const row = db
-      .prepare('SELECT scope, expires_at, parent_ref, reflected_at FROM chunks WHERE id = ?')
+      .prepare(
+        'SELECT scope, expires_at, parent_ref, reflected_at FROM chunks WHERE id = ?',
+      )
       .get(child.id) as {
       scope: string;
       expires_at: string | null;
@@ -228,7 +305,11 @@ describe('ContextStore', () => {
   // ---------------------------------------------------------------------------
 
   it('two artifacts under a shared parent scope: a child query pulls only the relevant one under a tight budget', async () => {
-    const parent = await commitContext(db, embedder, artifact('lead: decompose the migration task'));
+    const parent = await commitContext(
+      db,
+      embedder,
+      artifact('lead: decompose the migration task'),
+    );
 
     const dbDecision = artifact('use Postgres database for the service', {
       rationale: 'runs Postgres database in production already',
@@ -236,17 +317,25 @@ describe('ContextStore', () => {
     const uiDecision = artifact('use React for the frontend', {
       rationale: 'matches the existing component library',
     });
-    const dbArtifact = await commitContext(db, embedder, dbDecision, { parent });
-    const uiArtifact = await commitContext(db, embedder, uiDecision, { parent });
+    const dbArtifact = await commitContext(db, embedder, dbDecision, {
+      parent,
+    });
+    await commitContext(db, embedder, uiDecision, { parent });
 
     // A subagent handed only `parent` asks specifically about the database choice —
     // every query term is a literal substring of dbArtifact's text and absent
     // from uiArtifact's, so FTS5 keyword search ranks it first deterministically.
     // Budget fits exactly the top-ranked artifact, not both.
     const budget = JSON.stringify(dbDecision).length + 20;
-    const slice = await queryContext(db, embedder, parent, 'Postgres database production', {
-      maxChars: budget,
-    });
+    const slice = await queryContext(
+      db,
+      embedder,
+      parent,
+      'Postgres database production',
+      {
+        maxChars: budget,
+      },
+    );
 
     expect(slice.artifacts).toHaveLength(1);
     expect(slice.artifacts[0].ref.id).toBe(dbArtifact.id);
