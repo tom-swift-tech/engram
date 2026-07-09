@@ -68,7 +68,7 @@ The system mirrors how biological memory works:
 
 3. **Reconsolidation** (reflect) — Periodic review of accumulated traces produces higher-order understanding. Observations emerge from patterns. Beliefs form and update with confidence. Old observations get refined as new evidence arrives. This is the learning loop.
 
-4. **Retrieval** (recall) — Multi-pathway access to stored traces. Semantic similarity (pattern matching), keyword (direct access), graph traversal (associative recall), temporal (episodic memory). Results are fused via RRF, weighted by trace strength (trust score), then sorted lexicographically by source tier (see Trust Layer) so external content can never outrank user-stated directives. When temporal bounds are detected (auto-parsed or explicit), ALL strategies filter by date — not just the temporal strategy. Queries are sanitized (punctuation stripped) before keyword/graph to prevent FTS5 syntax errors — the tradeoff is that quoted-phrase queries aren't supported and multi-word keyword queries match as an implicit AND of terms.
+4. **Retrieval** (recall) — Multi-pathway access to stored traces. Semantic similarity (pattern matching), keyword (direct access), graph traversal (associative recall), temporal (episodic memory). Results are fused via RRF, weighted by trace strength (trust score), then sorted lexicographically by source tier (see Trust Layer) so external content can never outrank user-stated directives. When temporal bounds are detected (auto-parsed or explicit), ALL strategies filter by date — not just the temporal strategy. Queries are sanitized before keyword/graph to prevent FTS5 syntax errors — balanced double-quoted segments are preserved as FTS5 phrase queries for the keyword strategy (`sanitizeQueryForFts`); everything else is punctuation-stripped, so unquoted multi-word keyword queries match as an implicit AND of terms. Bare 4-digit years only auto-parse as temporal bounds with corroborating context ("in 2024", "March 2026", "Q1 2026") — a bare number in "port 2020" or "error code 2048" no longer date-filters recall.
 
 ## Key Design Decisions
 
@@ -155,7 +155,7 @@ engram/
 │   ├── mcp-server.ts            ← standalone MCP stdio server (engram-mcp bin)
 │   ├── cli.ts                   ← `engram` CLI: one subcommand per MCP tool, --json contract for Pi (engram bin)
 │   └── cli-args.ts              ← CLI argv parser + Engram.open option-builder + shared validation/clamp helpers
-├── tests/                        ← TS suites incl. aql-* cross-process (418 tests via npm test; +104 from integrations/pi, +67 from tools/openclaw-import)
+├── tests/                        ← TS suites incl. aql-* cross-process (460 tests via npm test; +104 from integrations/pi, +67 from tools/openclaw-import)
 │   ├── helpers.ts
 │   ├── retain.test.ts
 │   ├── retain-gate.test.ts
