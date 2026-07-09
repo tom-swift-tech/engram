@@ -1,71 +1,81 @@
-# Handoff — 2026-07-07 (evening: Mira field-report session)
+# Handoff — 2026-07-09 (codebase review → remediation; Phases 0–1 MERGED)
 
 ## State
-`main` is at `b6b162b`, pushed to `origin/main`, working tree clean (only this
-handoff file). No open issues, no open PRs, no worktrees, no extra remotes.
 
-Verification actually run this session: root suite **411 tests green** (23
-files, includes the cargo-gated AQL suites), Pi extension suite **102 green**
-(after rebuilding `integrations/pi/dist`), `npm run build` clean, CLAUDE.md ↔
-AGENTS.md mirror diff clean (only the two "you are here" marker lines).
+**All three stacked PRs merged into `main`.** Local tree on `main` at
+`0882743` (= origin/main), clean except this handoff file. Local + remote
+feature branches deleted, remote refs pruned. No worktrees.
 
-## What happened (three commits, all direct to main)
+Merge commits (merge-commit strategy, not squash — preserved slice history):
 
-Mira (largest live deployment: 6.5k chunks / 29k entities) sent a field
-assessment. Triage: her #1 issue (reflection, 4×0-result runs) is bug #17
-already fixed in `4486306` — her deploy base `d5d7dd8` predates it, plus the
-#18 ranking and #19 decay fixes. Two of her reports were real library bugs;
-both confirmed in code and fixed.
+- `8dc44c0` — PR #23, Phase 0: `engram embed` CLI subcommand (restores
+  CLI↔MCP 1:1), `tests/surface-parity.test.ts` drift guard (ENGRAM_TOOLS ↔
+  `CLI_COMMANDS` set-equality + count pinned at 10 + behavioral dispatch
+  check), docs truth sweep, and the CI repair for `4cd4630`'s lint/format
+  failures.
+- `8cbbcf0` — PR #24, Phase 1A: atomic `supersede()` via
+  `RetainOptions.supersedes` inside retain's transaction + reflect
+  `direction:'new'` opinion dedup via shared `reinforceExisting()`.
+- `0882743` — PR #25, Phase 1B: bare-year temporal gating ("port 2020" no
+  longer date-filters recall) + FTS5 quoted-phrase support
+  (`sanitizeQueryForFts`, keyword strategy only) + doc-pass commit.
 
-1. `30476f7` — **fix(retain)**: (a) LLM-emitted `entity_type` is now clamped
-   to the schema CHECK list ('concept' fallback) and entities missing
-   `canonical_name` are skipped — previously one off-list type ("company")
-   aborted the whole chunk's extraction and burned all 3 retries; (b)
-   `recoverStalledExtractions` now treats `last_attempt IS NULL` as stalled
-   in both branches — `NULL < datetime(...)` matched neither branch, which is
-   exactly how Mira's `chk-9d1d3b65-f60` sat in 'processing' 3+ hours.
-2. `a87b402` — **feat(queue)**: `getQueueStats()` gained a `failed_reasons`
-   breakdown (top-10 error messages with counts); new
-   `requeueFailedExtractions()` + `Engram` method + 9th MCP tool
-   `engram_requeue_failed` + CLI `requeue-failed [--error-like <substr>]`.
-   Failed was terminal after 3 attempts; this is the post-outage re-drive.
-   Resets attempts/backoff, keeps the old error message until overwritten,
-   skips deactivated chunks. CLI↔MCP 1:1 mapping preserved.
-3. `b6b162b` — **docs**: refreshed stale test counts in the CLAUDE/AGENTS
-   file tree (390→411 root, 82→102 Pi, 21→22 cli.test.ts); cross-linked
-   `requeue-failed` in the cli-memory skill intro.
+## Verification actually run post-merge (this session)
 
-Docs updated for the feature: README (tool table, "nine commands", examples),
-`skills/engram.md`, `skills/cli-memory/SKILL.md`, CLAUDE.md + AGENTS.md
-(mirrored). `tasks/todo.md` has a dated section recording all of it.
+On merged `main` at `0882743`:
 
-**Mira upgrade note relayed via Tom** (see session transcript): pull `main`,
-run one reflect cycle and read stderr + `reflect_log.status` before touching
-models; `engram requeue-failed --error-like "fetch failed"` replaces the
-manual SQL for her 11 CITADEL-outage items; check `decayHalfLifeDays: 0` for
-her long-horizon recall (#19).
+- Root suite: **460/460 green** (`npm test`, 24 files).
+- Pi suite: **104/104 green** (`npm test` in `integrations/pi`, 6 files).
+- The lint/format red that `main` carried at `4cd4630` is fixed by #23 —
+  main should now be green on CI (repo CI runs the same commands that
+  passed locally per-branch; not re-checked on GitHub Actions this session).
 
-## Next steps
-Nothing pending. Repo idle. Candidate follow-ups if Tom asks:
-- `engram health` CLI subcommand aggregating queue-stats + recent
-  `reflect_log` rows (Mira's enhancement #2).
-- Entity dedup pass (her "TJ Swift / Tom Swift" — entity resolution is
-  currently exact-canonical-name only).
-- Await Mira's post-upgrade report; if reflect still zeroes out on her data,
-  the new logging will say whether it's parser or model.
-- On generic resume: `gh issue list` / `gh pr list`, then whatever Tom brings.
+Not re-run post-merge: openclaw-import suite (67, untouched by the stack),
+AQL suites (need `cargo`), `npm run lint`/`format:check` (passed on each
+branch tip; #25's tip == main's tree content).
+
+## The plan being executed
+
+`tasks/todo.md` → "Planned — 2026-07-09 codebase-review remediation".
+Phases 0–1 done and merged. Remaining, in order:
+
+- **Phase 2 — Agent-surface completion** (next, base on `0882743`):
+  `minScore` + `explainScores` on recall + `results[0]`-is-tier-major
+  caveat in tool descriptions; session update/snapshot over MCP+CLI
+  (prefer extending `engram_session` with an `action` enum); ContextStore
+  MCP/CLI tools (`engram_context_commit/_query/_promote`); widen Pi
+  `engram_recall` passthrough. Note: the surface-parity test will force a
+  CLI twin + a new pinned count for every MCP tool added — by design.
+  recall.ts is the shared spine — single builder or sequential slices,
+  don't parallelize blindly.
+- **Phase 3 — Scaling** (benchmark-gated): operator benchmark harness
+  first (5k/50k/200k chunks), then architect spike on vec0-ANN vs
+  candidate pre-filter for the O(N) semantic scan, then Tier-1 `INSTR()`
+  entity scan off the retain transaction. AQL shared-file compatibility is
+  a constraint.
+- **Phase 4 — Memory quality** (architect-first, spec before code):
+  near-duplicate consolidation; entity resolution (multi-word capture +
+  alias merge — Mira's "TJ Swift"/"Tom Swift").
 
 ## Gotchas carried forward
-- Rebuild `integrations/pi/dist` before trusting any smoke-test failure there
-  (stale dist reproduces as a deterministic "flake").
-- Windows Application Control policy blocks `cargo build` in some worktree
-  paths — AQL failures saying "Application Control policy has blocked this
-  file" are environment, not regression.
-- Git Bash mangles leading-slash args when shelling out to `pi` — use
-  `MSYS_NO_PATHCONV=1` + `cygpath -w` for live-Pi testing.
-- PR #22 shows "Closed" not "Merged" on GitHub — intentional cosmetic
-  artifact; don't "fix" it. Mira's-fork thread is closed for good (her fork
-  has zero unique commits); do not reopen.
+
+- Rebuild `integrations/pi/dist` before trusting any smoke-test failure
+  there (stale dist reproduces as a deterministic "flake").
+- AQL suites need `cargo`; Windows Application Control policy blocks cargo
+  in SOME worktree paths — "Application Control policy has blocked this
+  file" is environment, not regression.
+- CLAUDE.md ↔ AGENTS.md are verbatim mirrors (CI-guarded). Trick: edit
+  CLAUDE.md, regenerate AGENTS.md with the two tree-marker lines swapped
+  (node one-liner; see git history of `2a54741`/`08bcd6c`).
 - `gh auth` here is `tom-swift-tech` (maintainer).
-- CLAUDE.md ↔ AGENTS.md are verbatim mirrors (CI-guarded); every doc edit
-  lands in both or CI fails.
+- PR #22 shows "Closed" not "Merged" — intentional cosmetic artifact; don't
+  "fix" it.
+- Parallel-builder protocol (worktree + positive scope + resolved base SHA)
+  worked cleanly for Phase 1 — reuse the same brief template for Phase 3/4.
+
+## Next steps
+
+1. Phase 2 off `main@0882743` (see plan above; `tasks/todo.md` has the
+   full task list with acceptance criteria).
+2. Optionally confirm GitHub Actions is green on the three merge commits
+   before starting.
