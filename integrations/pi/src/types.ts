@@ -53,6 +53,46 @@ export const RecallParams = Type.Object({
       description: 'Minimum trust score filter (default 0)',
     }),
   ),
+  memoryTypes: Type.Optional(
+    Type.Array(
+      Type.Union([
+        Type.Literal('world'),
+        Type.Literal('experience'),
+        Type.Literal('observation'),
+        Type.Literal('opinion'),
+      ]),
+      { description: 'Filter to specific memory types. Omit to search all.' },
+    ),
+  ),
+  after: Type.Optional(
+    Type.String({
+      description: 'ISO 8601 date — only include facts after this date.',
+    }),
+  ),
+  before: Type.Optional(
+    Type.String({
+      description: 'ISO 8601 date — only include facts before this date.',
+    }),
+  ),
+  strategies: Type.Optional(
+    Type.Array(
+      Type.Union([
+        Type.Literal('semantic'),
+        Type.Literal('keyword'),
+        Type.Literal('graph'),
+        Type.Literal('temporal'),
+      ]),
+      { description: 'Retrieval strategies to use. Omit to use all four.' },
+    ),
+  ),
+  minScore: Type.Optional(
+    Type.Number({
+      minimum: 0,
+      maximum: 1,
+      description:
+        'Drop results whose final weighted relevance score falls below this threshold (default: no filtering).',
+    }),
+  ),
 });
 
 export type RecallToolParams = Static<typeof RecallParams>;

@@ -78,6 +78,9 @@ export const CLI_COMMANDS = [
   'queue-stats',
   'requeue-failed',
   'embed',
+  'context-commit',
+  'context-query',
+  'context-promote',
 ] as const;
 
 // ─── argv parsing ────────────────────────────────────────────────────────────
@@ -90,6 +93,7 @@ const BOOLEAN_FLAGS = new Set([
   '--no-opinions',
   '--observations',
   '--no-observations',
+  '--explain-scores',
 ]);
 
 export interface ParsedArgs {

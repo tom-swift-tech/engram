@@ -130,6 +130,62 @@ describe('Pi adapter', () => {
       });
       expect(response.results.length).toBeLessThanOrEqual(2);
     });
+
+    it('passes memoryTypes, after, before, strategies, and minScore through to engram.recall', async () => {
+      const recallMock = vi.fn().mockResolvedValue({
+        results: [],
+        opinions: [],
+        observations: [],
+      });
+      const fakeEngram = { recall: recallMock } as unknown as Engram;
+
+      await recall(fakeEngram, {
+        query: 'terraform migration',
+        topK: 3,
+        minTrust: 0.5,
+        memoryTypes: ['world', 'observation'],
+        after: '2026-01-01T00:00:00Z',
+        before: '2026-12-31T00:00:00Z',
+        strategies: ['keyword', 'graph'],
+        minScore: 0.02,
+      });
+
+      expect(recallMock).toHaveBeenCalledWith('terraform migration', {
+        topK: 3,
+        minTrust: 0.5,
+        memoryTypes: ['world', 'observation'],
+        after: '2026-01-01T00:00:00Z',
+        before: '2026-12-31T00:00:00Z',
+        strategies: ['keyword', 'graph'],
+        minScore: 0.02,
+        decayHalfLifeDays: 0,
+      });
+    });
+
+    it('filters to the requested memoryTypes against a real Engram', async () => {
+      await remember(engram, { text: 'world fact about the release process' });
+      const response = await recall(engram, {
+        query: 'release process',
+        memoryTypes: ['world'],
+      });
+      expect(response.results.length).toBeGreaterThan(0);
+      expect(response.results.every((r) => r.memoryType === 'world')).toBe(
+        true,
+      );
+    });
+
+    it('drops results below minScore against a real Engram', async () => {
+      await remember(engram, { text: 'threshold test fact about widgets' });
+      const baseline = await recall(engram, { query: 'threshold test widgets' });
+      expect(baseline.results.length).toBeGreaterThan(0);
+      const topScore = baseline.results[0].score;
+
+      const filtered = await recall(engram, {
+        query: 'threshold test widgets',
+        minScore: topScore + 1,
+      });
+      expect(filtered.results).toHaveLength(0);
+    });
   });
 
   describe('startupRecall', () => {

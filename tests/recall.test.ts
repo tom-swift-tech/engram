@@ -335,6 +335,186 @@ describe('recall() — multi-strategy fusion', () => {
 });
 
 // ---------------------------------------------------------------------------
+// minScore + explainScores
+// ---------------------------------------------------------------------------
+
+describe('recall() — minScore threshold', () => {
+  let db: Database.Database;
+  const embedder = new MockEmbedder();
+
+  beforeEach(() => {
+    db = createTestDb();
+  });
+  afterEach(() => db.close());
+
+  it('default behavior is unchanged when minScore is omitted', async () => {
+    await retain(db, 'widget documentation reference', embedder, {
+      trustScore: 0.9,
+    });
+    // decayHalfLifeDays: 0 pins scores across the two sequential calls —
+    // with decay on, elapsed wall-clock time between them shifts every
+    // score by a representable amount and toEqual flakes.
+    const withoutMinScore = await recall(db, 'widget documentation', embedder, {
+      strategies: ['keyword'],
+      decayHalfLifeDays: 0,
+    });
+    const explicitUndefined = await recall(
+      db,
+      'widget documentation',
+      embedder,
+      {
+        strategies: ['keyword'],
+        decayHalfLifeDays: 0,
+        minScore: undefined,
+      },
+    );
+    expect(explicitUndefined.results).toEqual(withoutMinScore.results);
+    expect(withoutMinScore.results.length).toBeGreaterThan(0);
+  });
+
+  it('drops results below the threshold', async () => {
+    await retain(db, 'widget documentation reference', embedder, {
+      trustScore: 0.9,
+    });
+    const baseline = await recall(db, 'widget documentation', embedder, {
+      strategies: ['keyword'],
+    });
+    expect(baseline.results.length).toBeGreaterThan(0);
+    const topScore = baseline.results[0].score;
+
+    const filtered = await recall(db, 'widget documentation', embedder, {
+      strategies: ['keyword'],
+      minScore: topScore + 1, // above every possible score
+    });
+    expect(filtered.results).toHaveLength(0);
+  });
+
+  it('keeps a result exactly at the threshold (inclusive boundary)', async () => {
+    await retain(db, 'boundary threshold widget test', embedder, {
+      trustScore: 0.9,
+    });
+    // decayHalfLifeDays: 0 makes the captured score reproducible in the
+    // second call — with decay on, the score decays between the two calls
+    // and the inclusive >= boundary fails by a hair.
+    const baseline = await recall(db, 'boundary threshold widget', embedder, {
+      strategies: ['keyword'],
+      decayHalfLifeDays: 0,
+    });
+    expect(baseline.results.length).toBeGreaterThan(0);
+    const exactScore = baseline.results[0].score;
+
+    const atThreshold = await recall(
+      db,
+      'boundary threshold widget',
+      embedder,
+      {
+        strategies: ['keyword'],
+        decayHalfLifeDays: 0,
+        minScore: exactScore,
+      },
+    );
+    expect(
+      atThreshold.results.some((r) => r.id === baseline.results[0].id),
+    ).toBe(true);
+  });
+
+  it('minScore of 0 does not filter anything out', async () => {
+    await retain(db, 'zero threshold widget content', embedder, {
+      trustScore: 0.9,
+    });
+    const result = await recall(db, 'zero threshold widget', embedder, {
+      strategies: ['keyword'],
+      minScore: 0,
+    });
+    expect(result.results.length).toBeGreaterThan(0);
+  });
+});
+
+describe('recall() — explainScores', () => {
+  let db: Database.Database;
+  const embedder = new MockEmbedder();
+
+  beforeEach(() => {
+    db = createTestDb();
+  });
+  afterEach(() => db.close());
+
+  it('omits strategyScores by default', async () => {
+    await retain(db, 'explain scores default widget', embedder);
+    const result = await recall(db, 'explain scores widget', embedder, {
+      strategies: ['keyword'],
+    });
+    expect(result.results.length).toBeGreaterThan(0);
+    expect(result.results[0]).not.toHaveProperty('strategyScores');
+  });
+
+  it('includes a strategyScores breakdown when true', async () => {
+    await retain(db, 'explain scores enabled widget', embedder, {
+      trustScore: 0.8,
+    });
+    const result = await recall(db, 'explain scores widget', embedder, {
+      strategies: ['keyword'],
+      explainScores: true,
+    });
+    expect(result.results.length).toBeGreaterThan(0);
+    const hit = result.results[0];
+    expect(hit.strategyScores).toBeDefined();
+    expect(Array.isArray(hit.strategyScores!.perStrategy)).toBe(true);
+    expect(hit.strategyScores!.perStrategy.length).toBeGreaterThan(0);
+    expect(hit.strategyScores!.perStrategy[0]).toMatchObject({
+      strategy: 'keyword',
+      rank: expect.any(Number),
+      rrfScore: expect.any(Number),
+    });
+    expect(typeof hit.strategyScores!.rawFusedScore).toBe('number');
+    expect(hit.strategyScores!.weighting).toMatchObject({
+      trust: expect.any(Number),
+      strategyBoost: expect.any(Number),
+      decay: expect.any(Number),
+      sourceBoost: expect.any(Number),
+      contextBoost: expect.any(Number),
+      memoryType: expect.any(Number),
+    });
+    // rawFusedScore * product(weighting) === final score
+    const w = hit.strategyScores!.weighting;
+    const recomputed =
+      hit.strategyScores!.rawFusedScore *
+      w.trust *
+      w.strategyBoost *
+      w.decay *
+      w.sourceBoost *
+      w.contextBoost *
+      w.memoryType;
+    expect(recomputed).toBeCloseTo(hit.score, 10);
+  });
+
+  it('aggregates multi-strategy contributions in perStrategy', async () => {
+    const { chunkId } = await retain(db, 'Tom prefers Terraform', embedder, {
+      trustScore: 0.9,
+    });
+    db.prepare(
+      `INSERT INTO entities (id, name, canonical_name, entity_type)
+      VALUES ('ent-tom-explain', 'Tom', 'tom', 'person')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO chunk_entities (chunk_id, entity_id) VALUES (?, 'ent-tom-explain')`,
+    ).run(chunkId);
+
+    const result = await recall(db, 'Tom Terraform', embedder, {
+      strategies: ['keyword', 'graph'],
+      topK: 5,
+      explainScores: true,
+    });
+
+    const hit = result.results.find((r) => r.id === chunkId);
+    expect(hit).toBeDefined();
+    const strategies = hit!.strategyScores!.perStrategy.map((p) => p.strategy);
+    expect(strategies).toContain('keyword');
+    expect(strategies).toContain('graph');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Opinions and observations in recall response
 // ---------------------------------------------------------------------------
 

@@ -16,6 +16,11 @@
 import type { Engram } from './engram.js';
 import type { RetainOptions } from './retain.js';
 import type { RecallOptions } from './recall.js';
+import type {
+  DecisionArtifact,
+  TaskScope,
+  TokenBudget,
+} from './context-store.js';
 
 // =============================================================================
 // Tool Schemas (JSON Schema — MCP spec compliant)
@@ -86,7 +91,7 @@ export const ENGRAM_TOOLS = [
   {
     name: 'engram_recall' as const,
     description:
-      'Retrieve relevant memories via four-strategy search (semantic, keyword, graph, temporal) fused with Reciprocal Rank Fusion. Temporal expressions in queries are auto-parsed — "last week", "yesterday", "March 15th", "past 30 days", "Q1 2026" all work without explicit after/before. QUERY BEST PRACTICES: Use keywords and proper nouns, not full questions. "Tom Swift role background" retrieves better than "Who is Tom?" because BM25 keyword search weights every word equally — question words like "who/what/how" match irrelevant content. For people: use their name + key attributes. For topics: use specific terms, not conversational phrasing. For dates: natural language works ("last March", "in 2023"). Returns results[], opinions[], observations[].',
+      'Retrieve relevant memories via four-strategy search (semantic, keyword, graph, temporal) fused with Reciprocal Rank Fusion. Temporal expressions in queries are auto-parsed — "last week", "yesterday", "March 15th", "past 30 days", "Q1 2026" all work without explicit after/before. QUERY BEST PRACTICES: Use keywords and proper nouns, not full questions. "Tom Swift role background" retrieves better than "Who is Tom?" because BM25 keyword search weights every word equally — question words like "who/what/how" match irrelevant content. For people: use their name + key attributes. For topics: use specific terms, not conversational phrasing. For dates: natural language works ("last March", "in 2023"). Returns results[], opinions[], observations[]. results[0] is the best match in the highest-present source tier, not the best overall; re-sort by score locally where pure relevance is needed.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -137,6 +142,18 @@ export const ENGRAM_TOOLS = [
           type: 'boolean',
           description:
             'Include synthesized observations in response (default: true)',
+        },
+        minScore: {
+          type: 'number',
+          minimum: 0,
+          maximum: 1,
+          description:
+            'Drop results whose final weighted score (post trust/decay/strategy-boost weighting) falls below this threshold. Default: no filtering.',
+        },
+        explainScores: {
+          type: 'boolean',
+          description:
+            'When true, each result includes a strategyScores breakdown of the per-strategy rank/RRF contribution and weighting factors that produced its score (default: false, keeps the payload lean).',
         },
       },
       required: ['query'],
@@ -223,26 +240,47 @@ export const ENGRAM_TOOLS = [
   {
     name: 'engram_session' as const,
     description:
-      'Infer or resume a working memory session for the given message. Call once per incoming user message before the LLM call. Default similarity threshold: 0.55. Example: {message: "plan the deployment"}. Returns session state + related long-term context.',
+      'Manage a working memory session. action="resume" (default — omit action entirely for the original, backward-compatible behavior): infer or resume a session for an incoming message, called once per incoming user message before the LLM call. action="update": merge progress/extensions into an existing session (requires sessionId). action="snapshot": collapse a session to long-term episodic memory and end it (requires sessionId). Example (resume): {message: "plan the deployment"}. Example (update): {action: "update", sessionId: "wm-abc123", progress: "drafted rollback plan"}. Example (snapshot): {action: "snapshot", sessionId: "wm-abc123"}.',
     inputSchema: {
       type: 'object' as const,
       properties: {
+        action: {
+          type: 'string',
+          enum: ['resume', 'update', 'snapshot'],
+          description:
+            'resume (default): infer/resume a session for `message`. update: merge `progress`/`extensions` into the session named by `sessionId`. snapshot: collapse the session named by `sessionId` to long-term memory and end it.',
+        },
         message: {
           type: 'string',
           description:
-            'The incoming user message to match against active sessions',
+            'The incoming user message to match against active sessions (action="resume" only)',
         },
         maxActive: {
           type: 'number',
-          description: 'Max active sessions to keep (default: 5)',
+          description:
+            'Max active sessions to keep (default: 5, action="resume" only)',
         },
         threshold: {
           type: 'number',
           description:
-            'Cosine similarity threshold for session matching (default: 0.55). Lower = more aggressive matching, higher = more new sessions.',
+            'Cosine similarity threshold for session matching (default: 0.55, action="resume" only). Lower = more aggressive matching, higher = more new sessions.',
+        },
+        sessionId: {
+          type: 'string',
+          description:
+            'Session id to operate on (required for action="update"/"snapshot" — the "wm-…" id returned by a prior resume)',
+        },
+        progress: {
+          type: 'string',
+          description:
+            'Free-form progress note merged into the session state (action="update" only)',
+        },
+        extensions: {
+          type: 'object',
+          description:
+            'Agent-defined key/value fields merged into the session state (action="update" only)',
         },
       },
-      required: ['message'],
     },
   },
   {
@@ -288,6 +326,113 @@ export const ENGRAM_TOOLS = [
         },
       },
       required: ['text'],
+    },
+  },
+
+  {
+    name: 'engram_context_commit' as const,
+    description:
+      'Commit a structured DecisionArtifact to task-scoped ephemeral context (NOT durable memory) — cheap handoff from one agent to a subagent. Returns a lightweight ContextRef {id, scope} the subagent can query beneath via engram_context_query. Artifacts expire after ttlMs (default 4 hours) unless later promoted via engram_context_promote.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        decision: {
+          type: 'string',
+          description: 'The decision/artifact text (required)',
+        },
+        rationale: {
+          type: 'string',
+          description: 'Why this decision was made',
+        },
+        scoredOptions: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              option: { type: 'string' },
+              score: { type: 'number' },
+            },
+            required: ['option', 'score'],
+          },
+          description: 'Options considered, with a score for each',
+        },
+        confidence: {
+          type: 'number',
+          minimum: 0,
+          maximum: 1,
+          description: 'Confidence in this decision, 0.0-1.0',
+        },
+        refsToSource: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Chunk ids or other identifiers this decision draws on',
+        },
+        domain: {
+          type: 'string',
+          description:
+            'Freeform tag, e.g. a task/domain label. Stored in chunks.context.',
+        },
+        agentId: {
+          type: 'string',
+          description:
+            'Originating agent Tier/callsign — provenance for later audit',
+        },
+        parentRefId: {
+          type: 'string',
+          description:
+            'ContextRef.id of a parent scope to chain under (chains a reference, never a copy). Omit for a root commit.',
+        },
+        ttlMs: {
+          type: 'number',
+          description:
+            'Milliseconds until this artifact expires (default: 4 hours)',
+        },
+      },
+      required: ['decision'],
+    },
+  },
+
+  {
+    name: 'engram_context_query' as const,
+    description:
+      'Query the task-scoped artifacts committed as direct children of a ContextRef (via engram_context_commit), ranked by the same RRF-fusion pipeline as durable recall and truncated to a character budget. Use this for subagent context handoff — cheaper than re-reading a full transcript.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        refId: {
+          type: 'string',
+          description:
+            'ContextRef.id to query beneath (the id returned by engram_context_commit)',
+        },
+        query: {
+          type: 'string',
+          description:
+            'Relevance query used to rank artifacts committed under refId',
+        },
+        maxChars: {
+          type: 'number',
+          description:
+            'Character budget for returned artifacts (default: 4000)',
+        },
+      },
+      required: ['refId', 'query'],
+    },
+  },
+
+  {
+    name: 'engram_context_promote' as const,
+    description:
+      'Promote a task-scoped artifact into durable memory (scope="durable", TTL cleared) so it survives past its natural expiry and becomes eligible for reflect/consolidation. Does NOT itself run reflect() or synthesize observations. Returns {promoted: false} (not an error) if the ref does not resolve to an active task-scoped artifact.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        refId: {
+          type: 'string',
+          description:
+            'ContextRef.id of the artifact to promote (returned by engram_context_commit)',
+        },
+      },
+      required: ['refId'],
     },
   },
 ] as const;
@@ -343,6 +488,13 @@ function filterEnums<T extends string>(
   const filtered = arr.filter(
     (v) => typeof v === 'string' && valid.has(v),
   ) as T[];
+  return filtered.length > 0 ? filtered : undefined;
+}
+
+/** Filter an array to only its string values. Returns undefined if result is empty or input is not an array. */
+function filterStrings(arr: unknown): string[] | undefined {
+  if (!Array.isArray(arr)) return undefined;
+  const filtered = arr.filter((v) => typeof v === 'string') as string[];
   return filtered.length > 0 ? filtered : undefined;
 }
 
@@ -432,6 +584,11 @@ export function createEngramToolHandler(engram: Engram) {
               typeof input.includeObservations === 'boolean'
                 ? input.includeObservations
                 : undefined,
+            minScore: clampTrust(input.minScore),
+            explainScores:
+              typeof input.explainScores === 'boolean'
+                ? input.explainScores
+                : undefined,
           };
           const result = await engram.recall(queryCheck.value, opts);
           return {
@@ -488,17 +645,81 @@ export function createEngramToolHandler(engram: Engram) {
         }
 
         case 'engram_session': {
-          const msgCheck = requireString(input.message, 'message');
-          if ('error' in msgCheck) return msgCheck.error;
-          const opts = {
-            maxActive:
-              typeof input.maxActive === 'number' ? input.maxActive : undefined,
-            threshold:
-              typeof input.threshold === 'number' ? input.threshold : undefined,
-          };
-          const result = await engram.inferWorkingSession(msgCheck.value, opts);
+          const action =
+            input.action === 'update' || input.action === 'snapshot'
+              ? input.action
+              : 'resume';
+
+          if (action === 'resume') {
+            const msgCheck = requireString(input.message, 'message');
+            if ('error' in msgCheck) return msgCheck.error;
+            const opts = {
+              maxActive:
+                typeof input.maxActive === 'number'
+                  ? input.maxActive
+                  : undefined,
+              threshold:
+                typeof input.threshold === 'number'
+                  ? input.threshold
+                  : undefined,
+            };
+            const result = await engram.inferWorkingSession(
+              msgCheck.value,
+              opts,
+            );
+            return {
+              content: [
+                { type: 'text', text: JSON.stringify(result, null, 2) },
+              ],
+            };
+          }
+
+          const sessionIdCheck = requireString(input.sessionId, 'sessionId');
+          if ('error' in sessionIdCheck) return sessionIdCheck.error;
+          const existing = engram.getWorkingSession(sessionIdCheck.value);
+          if (!existing) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: `engram tool error: working memory session not found: ${sessionIdCheck.value}`,
+                },
+              ],
+              isError: true,
+            };
+          }
+
+          if (action === 'update') {
+            const updates: Record<string, unknown> =
+              input.extensions &&
+              typeof input.extensions === 'object' &&
+              !Array.isArray(input.extensions)
+                ? { ...(input.extensions as Record<string, unknown>) }
+                : {};
+            if (typeof input.progress === 'string') {
+              updates.progress = input.progress;
+            }
+            await engram.updateWorkingSession(sessionIdCheck.value, updates);
+            const state = engram.getWorkingSession(sessionIdCheck.value);
+            return {
+              content: [{ type: 'text', text: JSON.stringify(state, null, 2) }],
+            };
+          }
+
+          // action === 'snapshot'
+          const snapResult = await engram.snapshotWorkingSession(
+            sessionIdCheck.value,
+          );
           return {
-            content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  sessionId: sessionIdCheck.value,
+                  ...snapResult,
+                }),
+              },
+            ],
           };
         }
 
@@ -537,6 +758,81 @@ export function createEngramToolHandler(engram: Engram) {
               },
             ],
           };
+        }
+
+        case 'engram_context_commit': {
+          const decisionCheck = requireString(input.decision, 'decision');
+          if ('error' in decisionCheck) return decisionCheck.error;
+          const artifact: DecisionArtifact = {
+            decision: decisionCheck.value,
+            rationale:
+              typeof input.rationale === 'string' ? input.rationale : undefined,
+            scoredOptions: Array.isArray(input.scoredOptions)
+              ? (input.scoredOptions as DecisionArtifact['scoredOptions'])
+              : undefined,
+            confidence: clampTrust(input.confidence),
+            refsToSource: filterStrings(input.refsToSource),
+            domain: typeof input.domain === 'string' ? input.domain : undefined,
+            agentId:
+              typeof input.agentId === 'string' ? input.agentId : undefined,
+          };
+          const scope: TaskScope = {};
+          if (
+            typeof input.parentRefId === 'string' &&
+            input.parentRefId.trim() !== ''
+          ) {
+            scope.parent = { id: input.parentRefId, scope: 'task' };
+          }
+          if (typeof input.ttlMs === 'number' && !isNaN(input.ttlMs)) {
+            scope.ttlMs = input.ttlMs;
+          }
+          const ref = await engram.commitContext(artifact, scope);
+          return { content: [{ type: 'text', text: JSON.stringify(ref) }] };
+        }
+
+        case 'engram_context_query': {
+          const refIdCheck = requireString(input.refId, 'refId');
+          if ('error' in refIdCheck) return refIdCheck.error;
+          const queryCheck = requireString(input.query, 'query');
+          if ('error' in queryCheck) return queryCheck.error;
+          const budget: TokenBudget | undefined =
+            typeof input.maxChars === 'number' && input.maxChars > 0
+              ? { maxChars: Math.floor(input.maxChars) }
+              : undefined;
+          const slice = await engram.queryContext(
+            { id: refIdCheck.value, scope: 'task' },
+            queryCheck.value,
+            budget,
+          );
+          return {
+            content: [{ type: 'text', text: JSON.stringify(slice, null, 2) }],
+          };
+        }
+
+        case 'engram_context_promote': {
+          const refIdCheck = requireString(input.refId, 'refId');
+          if ('error' in refIdCheck) return refIdCheck.error;
+          try {
+            await engram.promoteContext({
+              id: refIdCheck.value,
+              scope: 'task',
+            });
+            return {
+              content: [
+                { type: 'text', text: JSON.stringify({ promoted: true }) },
+              ],
+            };
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            if (message.includes('not found or already expired')) {
+              return {
+                content: [
+                  { type: 'text', text: JSON.stringify({ promoted: false }) },
+                ],
+              };
+            }
+            throw err;
+          }
         }
       }
     } catch (error: unknown) {

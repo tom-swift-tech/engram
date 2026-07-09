@@ -33,6 +33,16 @@ export interface RecallInput {
   topK?: number;
   /** Min trust score filter */
   minTrust?: number;
+  /** Filter to specific memory types. Omit to search all. */
+  memoryTypes?: Array<'world' | 'experience' | 'observation' | 'opinion'>;
+  /** ISO 8601 date — only include facts after this date. */
+  after?: string;
+  /** ISO 8601 date — only include facts before this date. */
+  before?: string;
+  /** Retrieval strategies to use. Omit to use all four. */
+  strategies?: Array<'semantic' | 'keyword' | 'graph' | 'temporal'>;
+  /** Drop results whose final weighted score falls below this threshold. */
+  minScore?: number;
 }
 
 export interface MemoryStats {
@@ -78,6 +88,11 @@ export async function recall(
   return engram.recall(input.query, {
     topK: input.topK ?? 5,
     minTrust: input.minTrust,
+    memoryTypes: input.memoryTypes,
+    after: input.after,
+    before: input.before,
+    strategies: input.strategies,
+    minScore: input.minScore,
     // Disable the library's default 180-day recency decay. At that default a
     // multi-year-old memory's score is crushed to ~1% before trust/relevance
     // even apply (2^(-1205/180) ≈ 0.01 for a 2023 chunk) — wrong for a
