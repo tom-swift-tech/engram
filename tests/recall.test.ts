@@ -156,6 +156,50 @@ describe('recall() — temporal search', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Bare-year auto-temporal false positives (issue found in codebase review:
+// ANY bare 4-digit number 2000-2100 anywhere in the query used to become a
+// hard date filter applied to every strategy, starving results for queries
+// like "port 2020 configuration").
+// ---------------------------------------------------------------------------
+
+describe('recall() — bare-year query text does not hijack temporal filtering', () => {
+  let db: Database.Database;
+  const embedder = new MockEmbedder();
+
+  beforeEach(() => {
+    db = createTestDb();
+  });
+  afterEach(() => db.close());
+
+  it('"port 2020 configuration" still surfaces an old/undated chunk', async () => {
+    const oldChunk = await retain(
+      db,
+      'port 2020 configuration uses TLS termination',
+      embedder,
+      { trustScore: 0.9 },
+    );
+    // Backdate well outside any window a hijacked "2020" year filter would
+    // allow (2020-01-01 .. 2020-12-31) — proves no date filter was applied.
+    const longAgo = new Date(
+      Date.now() - 2000 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    db.prepare(`UPDATE chunks SET created_at = ? WHERE id = ?`).run(
+      longAgo,
+      oldChunk.chunkId,
+    );
+
+    const result = await recall(db, 'port 2020 configuration', embedder, {
+      strategies: ['keyword', 'temporal'],
+      decayHalfLifeDays: 0,
+    });
+
+    // The bare year must not have auto-activated the temporal strategy.
+    expect(result.strategiesUsed).not.toContain('temporal');
+    expect(result.results.some((r) => r.id === oldChunk.chunkId)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Graph search (entity wiring done directly to avoid needing Ollama)
 // ---------------------------------------------------------------------------
 
@@ -739,5 +783,92 @@ describe('recall() — query-scoped opinions', () => {
 
     // Falls back to global top opinions
     expect(result.opinions.length).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FTS5 phrase support in the keyword-search query sanitizer
+// ---------------------------------------------------------------------------
+
+describe('recall() — quoted-phrase keyword search', () => {
+  let db: Database.Database;
+  const embedder = new MockEmbedder();
+
+  beforeEach(() => {
+    db = createTestDb();
+  });
+  afterEach(() => db.close());
+
+  it('a quoted phrase matches only the chunk with the adjacent token sequence', async () => {
+    const contiguous = await retain(
+      db,
+      'we shipped the blue green deployment last night',
+      embedder,
+      { trustScore: 0.9 },
+    );
+    const scattered = await retain(
+      db,
+      'the deployment was blue, then later turned green',
+      embedder,
+      { trustScore: 0.9, dedupMode: 'none' },
+    );
+
+    const result = await recall(db, '"blue green deployment"', embedder, {
+      strategies: ['keyword'],
+    });
+
+    const ids = result.results.map((r) => r.id);
+    expect(ids).toContain(contiguous.chunkId);
+    expect(ids).not.toContain(scattered.chunkId);
+  });
+
+  it('unquoted multi-word queries behave exactly as before (implicit AND)', async () => {
+    await retain(db, 'Tom uses Terraform for infrastructure', embedder, {
+      trustScore: 0.9,
+    });
+    await retain(db, 'Mira is an AI assistant', embedder, {
+      trustScore: 0.9,
+      dedupMode: 'none',
+    });
+
+    const result = await recall(db, 'Terraform infrastructure', embedder, {
+      strategies: ['keyword'],
+    });
+
+    expect(result.results.length).toBeGreaterThan(0);
+    expect(result.results[0].text).toContain('Terraform');
+  });
+
+  describe('pathological inputs never throw', () => {
+    const pathologicalQueries = [
+      '"unclosed phrase',
+      'unclosed phrase"',
+      '"" ""',
+      'NEAR AND OR NOT',
+      'term NOT',
+      'foo * bar',
+      'foo ^ bar',
+      'foo - bar',
+      'foo : bar',
+      '(foo AND bar)',
+      '🔥💥🎉 emoji query',
+      '!!!???***&&&',
+      '""""""',
+      '"a" "b" "c"',
+    ];
+
+    beforeEach(async () => {
+      await retain(db, 'seed content for pathological query tests', embedder, {
+        trustScore: 0.9,
+      });
+    });
+
+    for (const q of pathologicalQueries) {
+      it(`does not throw for: ${JSON.stringify(q)}`, async () => {
+        await expect(
+          recall(db, q, embedder, { strategies: ['keyword'] }),
+        ).resolves.toBeDefined();
+      });
+    }
   });
 });

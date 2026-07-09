@@ -228,6 +228,106 @@ describe('parseTemporalQuery()', () => {
       parseTemporalQuery('how does the build pipeline work', REF),
     ).toBeNull();
   });
+
+  // ---------------------------------------------------------------------------
+  // Bare-year gating — a bare 4-digit number only parses as a year when
+  // corroborating temporal context is present. Without this, "error code
+  // 2048" or "port 2020" silently hijacked recall into a hard date filter.
+  // ---------------------------------------------------------------------------
+
+  describe('bare-year gating', () => {
+    it('parses "in 2024" (temporal preposition)', () => {
+      const r = parseTemporalQuery('deployments in 2024', REF);
+      expect(r).not.toBeNull();
+      expect(r!.after).toContain('2024-01-01');
+      expect(r!.before).toContain('2024-12-31');
+    });
+
+    it('parses "since 2020"', () => {
+      const r = parseTemporalQuery('all changes since 2020', REF);
+      expect(r).not.toBeNull();
+      expect(r!.after).toContain('2020-01-01');
+      expect(r!.before).toContain('2020-12-31');
+    });
+
+    it('parses "during 2023"', () => {
+      const r = parseTemporalQuery('what happened during 2023', REF);
+      expect(r).not.toBeNull();
+      expect(r!.after).toContain('2023-01-01');
+      expect(r!.before).toContain('2023-12-31');
+    });
+
+    it('parses "before 2022"', () => {
+      const r = parseTemporalQuery('decisions made before 2022', REF);
+      expect(r).not.toBeNull();
+      expect(r!.after).toContain('2022-01-01');
+      expect(r!.before).toContain('2022-12-31');
+    });
+
+    it('parses "after 2022"', () => {
+      const r = parseTemporalQuery('decisions made after 2022', REF);
+      expect(r).not.toBeNull();
+      expect(r!.after).toContain('2022-01-01');
+    });
+
+    it('parses "from 2021"', () => {
+      const r = parseTemporalQuery('notes from 2021', REF);
+      expect(r).not.toBeNull();
+      expect(r!.after).toContain('2021-01-01');
+    });
+
+    it('parses "until 2025"', () => {
+      const r = parseTemporalQuery('roadmap until 2025', REF);
+      expect(r).not.toBeNull();
+      expect(r!.before).toContain('2025-12-31');
+    });
+
+    it('parses "year 2024" (explicit year phrase)', () => {
+      const r = parseTemporalQuery('summary for year 2024', REF);
+      expect(r).not.toBeNull();
+      expect(r!.after).toContain('2024-01-01');
+      expect(r!.before).toContain('2024-12-31');
+    });
+
+    it('parses hyphenated year range "2024-2026"', () => {
+      const r = parseTemporalQuery('roadmap items 2024-2026', REF);
+      expect(r).not.toBeNull();
+      expect(r!.after).toContain('2024-01-01');
+      expect(r!.before).toContain('2026-12-31');
+    });
+
+    it('still parses month + year via the month parser ("March 2026")', () => {
+      const r = parseTemporalQuery('activity in March 2026', REF);
+      expect(r).not.toBeNull();
+      expect(r!.after).toContain('2026-03-01');
+    });
+
+    it('still parses quarter + year via the quarter parser ("Q1 2026")', () => {
+      const r = parseTemporalQuery('metrics for Q1 2026', REF);
+      expect(r).not.toBeNull();
+      expect(r!.after).toContain('2026-01-01');
+    });
+
+    it('does NOT parse a bare year with a non-temporal neighbor: "error code 2048"', () => {
+      expect(parseTemporalQuery('error code 2048', REF)).toBeNull();
+    });
+
+    it('does NOT parse a bare year with a non-temporal neighbor: "port 2020"', () => {
+      expect(parseTemporalQuery('configure port 2020', REF)).toBeNull();
+    });
+
+    it('does NOT parse a bare year with a non-temporal neighbor: "chunk of 2048 bytes"', () => {
+      expect(parseTemporalQuery('read a chunk of 2048 bytes', REF)).toBeNull();
+    });
+
+    it('does NOT parse a bare year with a non-temporal neighbor: "RFC 2046"', () => {
+      expect(parseTemporalQuery('see RFC 2046 for MIME types', REF)).toBeNull();
+    });
+
+    it('does NOT parse an isolated bare year with no context at all', () => {
+      expect(parseTemporalQuery('2026', REF)).toBeNull();
+    });
+  });
 });
 
 // =============================================================================

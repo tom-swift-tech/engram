@@ -264,13 +264,61 @@ function inClausePlaceholders(values: string[]): string {
 
 /**
  * Strip characters that break FTS5 MATCH syntax and graph tokenization.
- * Preserves words and whitespace only.
+ * Preserves words and whitespace only. Used by the graph strategy, which
+ * tokenizes on whitespace and has no concept of quoted phrases.
  */
 function sanitizeQuery(query: string): string {
   return query
     .replace(/[^\w\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+/**
+ * Same punctuation stripping as sanitizeQuery, but preserves balanced
+ * double-quoted segments as genuine FTS5 phrase terms instead of flattening
+ * them into independently-ANDed words — `"blue green deployment"` becomes
+ * an exact-phrase match instead of three unordered terms. Only used by the
+ * keyword strategy, which is the only consumer of FTS5 MATCH syntax.
+ *
+ * Unquoted text (including FTS5 operator keywords like NEAR/AND/OR/NOT and
+ * symbols like * ^ - : ( )) is stripped exactly as before, so unquoted
+ * queries behave identically to sanitizeQuery. An unpaired quote has no
+ * partner to form a phrase with, so the regex below never matches it — it
+ * falls through to the plain strip path along with the rest of the string,
+ * degrading gracefully instead of producing invalid FTS5 syntax.
+ */
+function sanitizeQueryForFts(query: string): string {
+  const stripNonWord = (s: string): string =>
+    s
+      .replace(/[^\w\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const quoteRegex = /"([^"]*)"/g;
+  const parts: string[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = quoteRegex.exec(query)) !== null) {
+    const before = stripNonWord(query.slice(lastIndex, match.index));
+    if (before) parts.push(before);
+
+    const phraseContent = stripNonWord(match[1]);
+    if (phraseContent) {
+      // Double any internal quote per FTS5 phrase-escaping rules. Defensive
+      // only — the capture group is quote-delimited, so it can't itself
+      // contain a literal '"'.
+      parts.push(`"${phraseContent.replace(/"/g, '""')}"`);
+    }
+
+    lastIndex = quoteRegex.lastIndex;
+  }
+
+  const rest = stripNonWord(query.slice(lastIndex));
+  if (rest) parts.push(rest);
+
+  return parts.join(' ').replace(/\s+/g, ' ').trim();
 }
 
 /**
@@ -942,12 +990,17 @@ export async function recall(
   }
 
   // Sanitize for strategies that use raw text (FTS5 MATCH and graph tokenizer
-  // choke on punctuation like '?', '*', '"' etc.)
+  // choke on punctuation like '?', '*', '"' etc.). Keyword search gets the
+  // phrase-aware variant (quoted segments become FTS5 phrase terms); graph
+  // search keeps the plain strip-everything variant — it has no concept of
+  // FTS5 phrase syntax and a stray quote character would corrupt its
+  // whitespace tokenization.
   const sanitized = sanitizeQuery(query);
+  const ftsQuery = sanitizeQueryForFts(query);
 
-  if (strategies.includes('keyword') && sanitized) {
+  if (strategies.includes('keyword') && ftsQuery) {
     const results = withTierZeroReserve((f, limit) =>
-      keywordSearch(db, sanitized, limit, f),
+      keywordSearch(db, ftsQuery, limit, f),
     );
     if (results.length > 0) {
       strategyResults.push(results);
