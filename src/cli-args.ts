@@ -90,6 +90,7 @@ const BOOLEAN_FLAGS = new Set([
   '--no-opinions',
   '--observations',
   '--no-observations',
+  '--explain-scores',
 ]);
 
 export interface ParsedArgs {

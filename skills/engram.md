@@ -41,8 +41,12 @@ npx mcporter call engram.engram_recall query="Your search query" topK=5
 | `minTrust` | no | Minimum trust score 0.0–1.0 |
 | `after` | no | ISO date — only facts after this date. Overrides auto-parsed dates. |
 | `before` | no | ISO date — only facts before this date. Overrides auto-parsed dates. |
+| `minScore` | no | Drop results whose final weighted score (post trust/decay/strategy-boost) falls below this 0.0–1.0 threshold. Default: no filtering. |
+| `explainScores` | no | When `true`, each result gains a `strategyScores` breakdown (per-strategy rank/RRF contribution + weighting factors). Default: `false`, payload stays lean. |
 
 Returns: `results[]` (ranked chunks), `opinions[]` (beliefs with confidence), `observations[]` (synthesized knowledge).
+
+**`results[0]` is the best match in the highest-present source tier, not the best match overall** — re-sort by `score` locally where pure relevance is what you need.
 
 **Temporal query examples:**
 

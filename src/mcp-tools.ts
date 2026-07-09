@@ -86,7 +86,7 @@ export const ENGRAM_TOOLS = [
   {
     name: 'engram_recall' as const,
     description:
-      'Retrieve relevant memories via four-strategy search (semantic, keyword, graph, temporal) fused with Reciprocal Rank Fusion. Temporal expressions in queries are auto-parsed — "last week", "yesterday", "March 15th", "past 30 days", "Q1 2026" all work without explicit after/before. QUERY BEST PRACTICES: Use keywords and proper nouns, not full questions. "Tom Swift role background" retrieves better than "Who is Tom?" because BM25 keyword search weights every word equally — question words like "who/what/how" match irrelevant content. For people: use their name + key attributes. For topics: use specific terms, not conversational phrasing. For dates: natural language works ("last March", "in 2023"). Returns results[], opinions[], observations[].',
+      'Retrieve relevant memories via four-strategy search (semantic, keyword, graph, temporal) fused with Reciprocal Rank Fusion. Temporal expressions in queries are auto-parsed — "last week", "yesterday", "March 15th", "past 30 days", "Q1 2026" all work without explicit after/before. QUERY BEST PRACTICES: Use keywords and proper nouns, not full questions. "Tom Swift role background" retrieves better than "Who is Tom?" because BM25 keyword search weights every word equally — question words like "who/what/how" match irrelevant content. For people: use their name + key attributes. For topics: use specific terms, not conversational phrasing. For dates: natural language works ("last March", "in 2023"). Returns results[], opinions[], observations[]. results[0] is the best match in the highest-present source tier, not the best overall; re-sort by score locally where pure relevance is needed.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -137,6 +137,18 @@ export const ENGRAM_TOOLS = [
           type: 'boolean',
           description:
             'Include synthesized observations in response (default: true)',
+        },
+        minScore: {
+          type: 'number',
+          minimum: 0,
+          maximum: 1,
+          description:
+            'Drop results whose final weighted score (post trust/decay/strategy-boost weighting) falls below this threshold. Default: no filtering.',
+        },
+        explainScores: {
+          type: 'boolean',
+          description:
+            'When true, each result includes a strategyScores breakdown of the per-strategy rank/RRF contribution and weighting factors that produced its score (default: false, keeps the payload lean).',
         },
       },
       required: ['query'],
@@ -431,6 +443,11 @@ export function createEngramToolHandler(engram: Engram) {
             includeObservations:
               typeof input.includeObservations === 'boolean'
                 ? input.includeObservations
+                : undefined,
+            minScore: clampTrust(input.minScore),
+            explainScores:
+              typeof input.explainScores === 'boolean'
+                ? input.explainScores
                 : undefined,
           };
           const result = await engram.recall(queryCheck.value, opts);

@@ -63,7 +63,15 @@ Use keywords and proper nouns, not full questions ("Tom role background", not
 "Who is Tom?"). Temporal phrases auto-activate date filtering ("last week",
 "March 2026"). Options: `--top-k <n>`, `--strategies semantic,keyword,graph,temporal`,
 `--memory-types world,experience,observation,opinion`, `--min-trust <0..1>`,
-`--after <iso>`, `--before <iso>`, `--no-opinions`, `--no-observations`.
+`--after <iso>`, `--before <iso>`, `--no-opinions`, `--no-observations`,
+`--min-score <0..1>` (drop results below this weighted score, post
+trust/decay/strategy-boost — default: no filtering), `--explain-scores`
+(add a `strategyScores` breakdown per result — per-strategy rank/RRF
+contribution + weighting factors — default: off, keeps the payload lean).
+
+**`results[0]` is the best match in the highest-present source tier, not the
+best match overall** — re-sort by `score` locally where pure relevance is
+what you need.
 
 `--json` shape:
 ```json
@@ -77,6 +85,16 @@ Use keywords and proper nouns, not full questions ("Tom role background", not
   "observations": [{ "summary": "…", "domain": "…", "topic": "…" }],
   "totalCandidates": 12,
   "strategiesUsed": ["semantic", "keyword", "graph"]
+}
+```
+
+With `--explain-scores`, each result also carries a `strategyScores` field:
+```json
+{
+  "perStrategy": [{ "strategy": "keyword", "rank": 1, "rrfScore": 0.0164 }],
+  "rawFusedScore": 0.0164,
+  "weighting": { "trust": 1.14, "strategyBoost": 1.0, "decay": 0.98,
+                 "sourceBoost": 1.0, "contextBoost": 1.0, "memoryType": 1.15 }
 }
 ```
 

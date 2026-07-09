@@ -248,6 +248,95 @@ describe('MCP Server', () => {
     expect(Array.isArray(parsed.results)).toBe(true);
   });
 
+  it('engram_recall with explainScores includes a strategyScores breakdown', async () => {
+    await client.callTool({
+      name: 'engram_retain',
+      arguments: {
+        text: 'ExplainScores MCP round-trip test chunk',
+        trustScore: 0.8,
+      },
+    });
+
+    const result = await client.callTool({
+      name: 'engram_recall',
+      arguments: {
+        query: 'ExplainScores MCP round-trip',
+        strategies: ['keyword'],
+        explainScores: true,
+      },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const content = result.content as Array<{ type: string; text: string }>;
+    const parsed = JSON.parse(content[0].text);
+    expect(parsed.results.length).toBeGreaterThan(0);
+    expect(parsed.results[0].strategyScores).toBeDefined();
+    expect(Array.isArray(parsed.results[0].strategyScores.perStrategy)).toBe(
+      true,
+    );
+    expect(typeof parsed.results[0].strategyScores.rawFusedScore).toBe(
+      'number',
+    );
+  });
+
+  it('engram_recall without explainScores omits strategyScores', async () => {
+    await client.callTool({
+      name: 'engram_retain',
+      arguments: { text: 'No explain scores MCP round-trip chunk' },
+    });
+
+    const result = await client.callTool({
+      name: 'engram_recall',
+      arguments: {
+        query: 'No explain scores MCP round-trip',
+        strategies: ['keyword'],
+      },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const content = result.content as Array<{ type: string; text: string }>;
+    const parsed = JSON.parse(content[0].text);
+    expect(parsed.results.length).toBeGreaterThan(0);
+    expect(parsed.results[0]).not.toHaveProperty('strategyScores');
+  });
+
+  it('engram_recall with minScore filters out low-relevance results', async () => {
+    await client.callTool({
+      name: 'engram_retain',
+      arguments: { text: 'MinScore MCP round-trip filter test chunk' },
+    });
+
+    const baseline = await client.callTool({
+      name: 'engram_recall',
+      arguments: {
+        query: 'MinScore MCP round-trip filter',
+        strategies: ['keyword'],
+      },
+    });
+    const baseContent = baseline.content as Array<{
+      type: string;
+      text: string;
+    }>;
+    const baseParsed = JSON.parse(baseContent[0].text);
+    expect(baseParsed.results.length).toBeGreaterThan(0);
+    const topScore = baseParsed.results[0].score;
+
+    const filtered = await client.callTool({
+      name: 'engram_recall',
+      arguments: {
+        query: 'MinScore MCP round-trip filter',
+        strategies: ['keyword'],
+        minScore: topScore + 1,
+      },
+    });
+    const filteredContent = filtered.content as Array<{
+      type: string;
+      text: string;
+    }>;
+    const filteredParsed = JSON.parse(filteredContent[0].text);
+    expect(filteredParsed.results).toHaveLength(0);
+  });
+
   it('engram_retain returns isError when text is missing', async () => {
     const result = await client.callTool({
       name: 'engram_retain',

@@ -128,6 +128,103 @@ describe('engram CLI', () => {
     expect(() => JSON.parse(cap.stdout().trim())).not.toThrow();
   });
 
+  it('recall --explain-scores carries strategyScores through --json untouched', async () => {
+    await runCli(
+      args('retain', 'Tom prefers Terraform explain scores cli test'),
+      captureIo().io,
+      overrides,
+    );
+    const cap = captureIo();
+    const code = await runCli(
+      args(
+        'recall',
+        'Terraform explain scores cli',
+        '--strategies',
+        'keyword',
+        '--explain-scores',
+        '--json',
+      ),
+      cap.io,
+      overrides,
+    );
+    expect(code).toBe(0);
+    const parsed = JSON.parse(cap.stdout());
+    expect(parsed.results.length).toBeGreaterThan(0);
+    expect(parsed.results[0].strategyScores).toBeDefined();
+    expect(Array.isArray(parsed.results[0].strategyScores.perStrategy)).toBe(
+      true,
+    );
+    expect(typeof parsed.results[0].strategyScores.rawFusedScore).toBe(
+      'number',
+    );
+  });
+
+  it('recall without --explain-scores omits strategyScores from --json', async () => {
+    await runCli(
+      args('retain', 'Tom prefers Pulumi no explain scores cli test'),
+      captureIo().io,
+      overrides,
+    );
+    const cap = captureIo();
+    const code = await runCli(
+      args(
+        'recall',
+        'Pulumi no explain scores cli',
+        '--strategies',
+        'keyword',
+        '--json',
+      ),
+      cap.io,
+      overrides,
+    );
+    expect(code).toBe(0);
+    const parsed = JSON.parse(cap.stdout());
+    expect(parsed.results.length).toBeGreaterThan(0);
+    expect(parsed.results[0]).not.toHaveProperty('strategyScores');
+  });
+
+  it('recall --min-score filters out low-relevance results via --json', async () => {
+    await runCli(
+      args('retain', 'MinScore CLI filter test widget content'),
+      captureIo().io,
+      overrides,
+    );
+
+    const baselineCap = captureIo();
+    await runCli(
+      args(
+        'recall',
+        'MinScore CLI filter widget',
+        '--strategies',
+        'keyword',
+        '--json',
+      ),
+      baselineCap.io,
+      overrides,
+    );
+    const baseline = JSON.parse(baselineCap.stdout());
+    expect(baseline.results.length).toBeGreaterThan(0);
+    const topScore: number = baseline.results[0].score;
+
+    const cap = captureIo();
+    const code = await runCli(
+      args(
+        'recall',
+        'MinScore CLI filter widget',
+        '--strategies',
+        'keyword',
+        '--min-score',
+        String(topScore + 1),
+        '--json',
+      ),
+      cap.io,
+      overrides,
+    );
+    expect(code).toBe(0);
+    const parsed = JSON.parse(cap.stdout());
+    expect(parsed.results).toHaveLength(0);
+  });
+
   // ─── reflect ─────────────────────────────────────────────────────────────────
 
   it('reflect runs and returns a result object', async () => {

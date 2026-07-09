@@ -126,6 +126,8 @@ function buildRecallOptions(args: ParsedArgs): RecallOptions {
       '--observations',
       '--no-observations',
     ),
+    minScore: clampTrust(asNumber(args.values.get('--min-score'))),
+    explainScores: args.bools.has('--explain-scores') ? true : undefined,
   };
 }
 
@@ -273,6 +275,10 @@ recall options:
   --memory-types <world,experience,...>  --min-trust <0..1>
   --after <iso8601>  --before <iso8601>
   --[no-]opinions  --[no-]observations
+  --min-score <0..1>               Drop results below this weighted score
+  --explain-scores                 Include a strategyScores breakdown per result
+                                   (results[0] is best-in-highest-tier, not
+                                   best-overall; re-sort by score for that)
 
 session options:
   --max-active <n>  --threshold <0..1>

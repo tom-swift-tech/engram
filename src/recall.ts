@@ -188,6 +188,51 @@ export interface RecallOptions {
    * Orders results within a source tier; unknown types sort last.
    */
   memoryTypeRank?: Record<string, number>;
+  /**
+   * Drop fused results whose final weighted `score` (after applyWeighting —
+   * trust/decay/strategy-boost/memory-type) falls below this threshold.
+   * Applied post-weighting, so the cutoff is on the exact same `score` field
+   * returned to callers, and results are dropped before the tier-major sort
+   * and topK truncation. Nominal range [0, 1] like other 0-1 options
+   * (clamped at the MCP/CLI boundary the same way minTrust is); recall()
+   * itself does not re-clamp. Default: undefined — no filtering, zero
+   * behavior change for existing callers.
+   */
+  minScore?: number;
+  /**
+   * When true, each result gains a `strategyScores` breakdown: the
+   * per-strategy rank/RRF-contribution that fed fusion for this chunk, the
+   * pre-weighting fused score, and the individual weighting multipliers
+   * applied by applyWeighting(). Default false — the field is omitted
+   * entirely (not present, not null) when off, so the payload stays lean.
+   */
+  explainScores?: boolean;
+}
+
+/** One strategy's contribution to a chunk's fused RRF score. */
+export interface StrategyScoreBreakdown {
+  strategy: string;
+  /** This chunk's 1-indexed rank within that strategy's candidate list. */
+  rank: number;
+  /** 1 / (rrfK + rank) — this strategy's contribution to the fused score. */
+  rrfScore: number;
+}
+
+/** Score observability payload attached to a result when explainScores is true. */
+export interface ScoreExplanation {
+  /** One entry per strategy that returned this chunk. */
+  perStrategy: StrategyScoreBreakdown[];
+  /** Fused RRF score before trust/decay/boost/memory-type weighting. */
+  rawFusedScore: number;
+  /** Multiplicative weighting factors applied by applyWeighting(). */
+  weighting: {
+    trust: number;
+    strategyBoost: number;
+    decay: number;
+    sourceBoost: number;
+    contextBoost: number;
+    memoryType: number;
+  };
 }
 
 export interface RecallResult {
@@ -200,6 +245,8 @@ export interface RecallResult {
   eventTime: string | null;
   score: number; // final fused score
   strategies: string[]; // which strategies found this
+  /** Present only when RecallOptions.explainScores is true. */
+  strategyScores?: ScoreExplanation;
 }
 
 export interface RecallResponse {
@@ -787,14 +834,24 @@ function temporalSearch(
 // Reciprocal Rank Fusion
 // =============================================================================
 
+/** Fused per-chunk accumulator. `perStrategy`/`rawScore`/`weighting` are only
+ * populated when explainScores is requested — kept optional so the common
+ * (non-explain) path allocates nothing extra. */
+interface FusedEntry {
+  score: number;
+  strategies: string[];
+  chunk: ScoredChunk;
+  perStrategy?: StrategyScoreBreakdown[];
+  rawScore?: number;
+  weighting?: ScoreExplanation['weighting'];
+}
+
 function reciprocalRankFusion(
   strategyResults: ScoredChunk[][],
   k: number = 60,
-): Map<string, { score: number; strategies: string[]; chunk: ScoredChunk }> {
-  const fused = new Map<
-    string,
-    { score: number; strategies: string[]; chunk: ScoredChunk }
-  >();
+  collectPerStrategy: boolean = false,
+): Map<string, FusedEntry> {
+  const fused = new Map<string, FusedEntry>();
 
   for (const results of strategyResults) {
     for (const chunk of results) {
@@ -806,11 +863,19 @@ function reciprocalRankFusion(
         if (!existing.strategies.includes(chunk.strategy)) {
           existing.strategies.push(chunk.strategy);
         }
+        existing.perStrategy?.push({
+          strategy: chunk.strategy,
+          rank: chunk.rank,
+          rrfScore,
+        });
       } else {
         fused.set(chunk.id, {
           score: rrfScore,
           strategies: [chunk.strategy],
           chunk,
+          perStrategy: collectPerStrategy
+            ? [{ strategy: chunk.strategy, rank: chunk.rank, rrfScore }]
+            : undefined,
         });
       }
     }
@@ -831,15 +896,13 @@ function temporalDecayMultiplier(
 }
 
 function applyWeighting(
-  fused: Map<
-    string,
-    { score: number; strategies: string[]; chunk: ScoredChunk }
-  >,
+  fused: Map<string, FusedEntry>,
   options: {
     decayHalfLifeDays?: number;
     sourceBoost?: { pattern: string; multiplier: number };
     contextBoost?: { pattern: string; multiplier: number };
     memoryRankOf?: (memoryType: string) => number;
+    collectExplain?: boolean;
   } = {},
 ): void {
   const {
@@ -847,6 +910,7 @@ function applyWeighting(
     sourceBoost,
     contextBoost,
     memoryRankOf,
+    collectExplain = false,
   } = options;
 
   for (const [, entry] of fused) {
@@ -875,6 +939,18 @@ function applyWeighting(
     const memoryTypeMultiplier = memoryRankOf
       ? memoryTypeWeightFromRank(memoryRankOf(entry.chunk.memory_type))
       : 1.0;
+
+    if (collectExplain) {
+      entry.rawScore = entry.score;
+      entry.weighting = {
+        trust: trustMultiplier,
+        strategyBoost,
+        decay,
+        sourceBoost: srcMultiplier,
+        contextBoost: ctxMultiplier,
+        memoryType: memoryTypeMultiplier,
+      };
+    }
 
     entry.score *=
       trustMultiplier *
@@ -916,6 +992,8 @@ export async function recall(
     memoryTypeRank,
     scope = ['durable'],
     parentRef,
+    minScore,
+    explainScores = false,
   } = options;
 
   const tiers = { ...DEFAULT_SOURCE_TIERS, ...sourceTiers };
@@ -1029,13 +1107,21 @@ export async function recall(
   }
 
   // Fuse results
-  const fused = reciprocalRankFusion(strategyResults, rrfK);
+  const fused = reciprocalRankFusion(strategyResults, rrfK, explainScores);
   applyWeighting(fused, {
     decayHalfLifeDays,
     sourceBoost,
     contextBoost,
     memoryRankOf,
+    collectExplain: explainScores,
   });
+
+  // minScore filters the fused set post-weighting — same `score` field
+  // callers see — before the tier-major sort and topK truncation.
+  const candidates =
+    minScore !== undefined
+      ? [...fused.values()].filter((entry) => entry.score >= minScore)
+      : [...fused.values()];
 
   // Sort by (source tier, fused score) and take top K. The tier is a
   // structural floor: no amount of trust or relevance lets a lower-tier
@@ -1047,7 +1133,7 @@ export async function recall(
   // 'world' match instead of losing to it categorically. Sorting the FULL
   // fused set before truncation means tier-0 matches always survive the
   // topK cut.
-  const sorted = [...fused.values()]
+  const sorted = candidates
     .sort((a, b) => {
       const tierDiff =
         tierOf(a.chunk.source_type) - tierOf(b.chunk.source_type);
@@ -1056,20 +1142,30 @@ export async function recall(
     })
     .slice(0, topK);
 
-  const results: RecallResult[] = sorted.map((entry) => ({
-    id: entry.chunk.id,
-    text:
-      entry.chunk.text.length > snippetChars
-        ? entry.chunk.text.substring(0, snippetChars) + '...'
-        : entry.chunk.text,
-    memoryType: entry.chunk.memory_type,
-    source: entry.chunk.source,
-    trustScore: entry.chunk.trust_score,
-    sourceType: entry.chunk.source_type,
-    eventTime: entry.chunk.event_time,
-    score: entry.score,
-    strategies: entry.strategies,
-  }));
+  const results: RecallResult[] = sorted.map((entry) => {
+    const result: RecallResult = {
+      id: entry.chunk.id,
+      text:
+        entry.chunk.text.length > snippetChars
+          ? entry.chunk.text.substring(0, snippetChars) + '...'
+          : entry.chunk.text,
+      memoryType: entry.chunk.memory_type,
+      source: entry.chunk.source,
+      trustScore: entry.chunk.trust_score,
+      sourceType: entry.chunk.source_type,
+      eventTime: entry.chunk.event_time,
+      score: entry.score,
+      strategies: entry.strategies,
+    };
+    if (explainScores && entry.perStrategy && entry.weighting) {
+      result.strategyScores = {
+        perStrategy: entry.perStrategy,
+        rawFusedScore: entry.rawScore ?? entry.score,
+        weighting: entry.weighting,
+      };
+    }
+    return result;
+  });
 
   // Gather relevant opinions
   const opinions = includeOpinions
