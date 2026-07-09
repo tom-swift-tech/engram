@@ -41,6 +41,11 @@ import type {
   RetainResult,
   ReflectResult,
   WorkingSessionResult,
+  WorkingMemoryState,
+  DecisionArtifact,
+  TaskScope,
+  TokenBudget,
+  ContextSlice,
 } from './engram.js';
 import type { QueueStats } from './retain.js';
 import {
@@ -131,6 +136,35 @@ function buildRecallOptions(args: ParsedArgs): RecallOptions {
   };
 }
 
+/**
+ * Build a DecisionArtifact from a parsed JSON payload (the context-commit
+ * primary arg/stdin body). Returns undefined when `decision` is missing —
+ * the only required field, same convention as requireString elsewhere.
+ */
+function buildDecisionArtifactFromPayload(
+  parsed: Record<string, unknown>,
+): DecisionArtifact | undefined {
+  if (typeof parsed.decision !== 'string' || parsed.decision.trim() === '') {
+    return undefined;
+  }
+  return {
+    decision: parsed.decision,
+    rationale:
+      typeof parsed.rationale === 'string' ? parsed.rationale : undefined,
+    scoredOptions: Array.isArray(parsed.scoredOptions)
+      ? (parsed.scoredOptions as DecisionArtifact['scoredOptions'])
+      : undefined,
+    confidence: clampTrust(parsed.confidence),
+    refsToSource: Array.isArray(parsed.refsToSource)
+      ? (parsed.refsToSource as unknown[]).filter(
+          (v): v is string => typeof v === 'string',
+        )
+      : undefined,
+    domain: typeof parsed.domain === 'string' ? parsed.domain : undefined,
+    agentId: typeof parsed.agentId === 'string' ? parsed.agentId : undefined,
+  };
+}
+
 // ─── Human-readable formatters ───────────────────────────────────────────────
 
 function formatRetain(r: RetainResult): string {
@@ -192,6 +226,16 @@ function formatSession(r: WorkingSessionResult): string {
   return lines.join('\n') + '\n';
 }
 
+function formatContextSlice(s: ContextSlice): string {
+  const lines = [
+    `${s.artifacts.length} artifact(s) · ${s.totalCandidates} candidate(s) · truncated=${s.truncated}`,
+  ];
+  s.artifacts.forEach((a, i) => {
+    lines.push(`[${i + 1}] ${a.ref.id}: ${a.artifact.decision}`);
+  });
+  return lines.join('\n') + '\n';
+}
+
 function formatQueueStats(s: QueueStats): string {
   let out =
     `queue: pending=${s.pending} processing=${s.processing} ` +
@@ -243,12 +287,19 @@ Commands:
   process-extractions              Drain the entity extraction queue
   forget <chunkId>                 Soft-delete a chunk
   supersede <oldChunkId> <newText> Replace a fact (newText from stdin if omitted)
-  session <message>                Infer/resume a working memory session
+  session <message>                Infer/resume a working memory session (default action)
+                                   --action update --session-id <id> [--progress <text>] [--extensions <json>]
+                                   --action snapshot --session-id <id>
   queue-stats                      Extraction queue health
   requeue-failed                   Re-queue failed extractions for retry
                                    (--error-like <substring> to filter)
   embed <text>                     Embed text in the bank's vector space
                                    (text from stdin if omitted)
+  context-commit <json>            Commit a task-scoped DecisionArtifact
+                                   (JSON from stdin if omitted; see below)
+  context-query <refId> <query>    Query artifacts committed under refId
+                                   (query from stdin if omitted)
+  context-promote <refId>          Promote a task-scoped artifact to durable memory
 
 Database:
   --db <path>                      Path to the .engram file (or set ENGRAM_DB)
@@ -281,7 +332,10 @@ recall options:
                                    best-overall; re-sort by score for that)
 
 session options:
-  --max-active <n>  --threshold <0..1>
+  --max-active <n>  --threshold <0..1>          (action=resume, the default)
+  --action <resume|update|snapshot>
+  --session-id <id>                             (required for update/snapshot)
+  --progress <text>  --extensions <json>         (action=update)
 
 process-extractions options:
   --batch-size <n>
@@ -289,6 +343,15 @@ process-extractions options:
 embed options:
   --mode <query|document>          query applies the search prefix for
                                    asymmetric models (default: query)
+
+context-commit JSON payload fields (all but decision optional):
+  decision, rationale, scoredOptions ([{option,score}]), confidence (0..1),
+  refsToSource (string[]), domain, agentId, parentRefId, ttlMs
+context-commit options:
+  --parent-ref-id <id>  --ttl-ms <n>             (override payload's parentRefId/ttlMs)
+
+context-query options:
+  --max-chars <n>                  Character budget for returned artifacts (default: 4000)
 
 Exit codes: 0 success · 2 not-found · 1 error
 `;
@@ -425,6 +488,57 @@ async function dispatch(
     }
 
     case 'session': {
+      const action = args.values.get('--action');
+
+      if (action === 'update' || action === 'snapshot') {
+        const sessionId = args.values.get('--session-id');
+        if (!sessionId) return missingArg(io, 'sessionId');
+        const existing = engram.getWorkingSession(sessionId);
+        if (!existing) {
+          io.stderr(`engram: working memory session not found: ${sessionId}\n`);
+          return EXIT_NOT_FOUND;
+        }
+
+        if (action === 'update') {
+          const updates: Record<string, unknown> = {};
+          const progress = args.values.get('--progress');
+          if (progress !== undefined) updates.progress = progress;
+          const extensionsRaw = args.values.get('--extensions');
+          if (extensionsRaw !== undefined) {
+            try {
+              const parsed = JSON.parse(extensionsRaw);
+              if (
+                parsed &&
+                typeof parsed === 'object' &&
+                !Array.isArray(parsed)
+              ) {
+                Object.assign(updates, parsed);
+              }
+            } catch {
+              // malformed --extensions JSON — fall back to progress-only update
+            }
+          }
+          await engram.updateWorkingSession(sessionId, updates);
+          const state = engram.getWorkingSession(
+            sessionId,
+          ) as WorkingMemoryState;
+          if (json) emitJson(io, state);
+          else
+            io.stdout(
+              `session ${sessionId} updated (updated_at=${state.updated_at})\n`,
+            );
+          return EXIT_OK;
+        }
+
+        // action === 'snapshot'
+        const result = await engram.snapshotWorkingSession(sessionId);
+        const output = { sessionId, ...result };
+        if (json) emitJson(io, output);
+        else
+          io.stdout(`session ${sessionId} snapshotted -> ${result.chunkId}\n`);
+        return EXIT_OK;
+      }
+
       const message = await resolveText(args.positionals[0], io);
       if (!message) return missingArg(io, 'message');
       const result = await engram.inferWorkingSession(message, {
@@ -463,6 +577,74 @@ async function dispatch(
       if (json) emitJson(io, result);
       else io.stdout(`embedded: ${result.dimensions} dims (${mode} mode)\n`);
       return EXIT_OK;
+    }
+
+    case 'context-commit': {
+      const raw = await resolveText(args.positionals[0], io);
+      if (!raw) return missingArg(io, 'artifact JSON');
+      let payload: Record<string, unknown>;
+      try {
+        payload = JSON.parse(raw) as Record<string, unknown>;
+      } catch {
+        io.stderr('engram: context-commit payload must be valid JSON\n');
+        return EXIT_ERROR;
+      }
+      const artifact = buildDecisionArtifactFromPayload(payload);
+      if (!artifact) return missingArg(io, 'decision');
+
+      const scope: TaskScope = {};
+      const parentRefId =
+        args.values.get('--parent-ref-id') ??
+        (typeof payload.parentRefId === 'string'
+          ? payload.parentRefId
+          : undefined);
+      if (parentRefId) scope.parent = { id: parentRefId, scope: 'task' };
+      const ttlMs =
+        asNumber(args.values.get('--ttl-ms')) ??
+        (typeof payload.ttlMs === 'number' ? payload.ttlMs : undefined);
+      if (ttlMs !== undefined) scope.ttlMs = ttlMs;
+
+      const ref = await engram.commitContext(artifact, scope);
+      if (json) emitJson(io, ref);
+      else io.stdout(`committed context ${ref.id}\n`);
+      return EXIT_OK;
+    }
+
+    case 'context-query': {
+      const refId = args.positionals[0];
+      if (!refId) return missingArg(io, 'refId');
+      const query = await resolveText(args.positionals[1], io);
+      if (!query) return missingArg(io, 'query');
+      const maxChars = asNumber(args.values.get('--max-chars'));
+      const budget: TokenBudget | undefined =
+        maxChars !== undefined && maxChars > 0
+          ? { maxChars: Math.floor(maxChars) }
+          : undefined;
+      const slice = await engram.queryContext(
+        { id: refId, scope: 'task' },
+        query,
+        budget,
+      );
+      if (json) emitJson(io, slice);
+      else io.stdout(formatContextSlice(slice));
+      return EXIT_OK;
+    }
+
+    case 'context-promote': {
+      const refId = args.positionals[0];
+      if (!refId) return missingArg(io, 'refId');
+      try {
+        await engram.promoteContext({ id: refId, scope: 'task' });
+        if (json) emitJson(io, { promoted: true });
+        else io.stdout(`promoted ${refId} to durable\n`);
+        return EXIT_OK;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (!message.includes('not found or already expired')) throw err;
+        if (json) emitJson(io, { promoted: false });
+        else io.stdout(`not found: ${refId}\n`);
+        return EXIT_NOT_FOUND;
+      }
     }
 
     default: {

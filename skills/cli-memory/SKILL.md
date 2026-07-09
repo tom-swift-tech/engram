@@ -153,6 +153,24 @@ Options: `--max-active <n>` (default 5), `--threshold <0..1>` (default 0.55).
 ```
 `reason` is `"new"` for a fresh session, `"match"` when resuming one.
 
+`session` also takes `--action update|snapshot` (default is the resume
+behavior above — unchanged when `--action` is omitted). Both require
+`--session-id <id>` (the `wm-…` id a resume returned):
+
+```bash
+# merge progress (and/or --extensions '<json>') into an existing session
+engram session --action update --session-id wm-abc123 \
+  --progress "Drafted the rollback plan" --json
+# --json shape: the full updated session state, e.g.
+# { "id": "wm-abc123", "goal": "…", "progress": "Drafted the rollback plan", "updated_at": "…" }
+
+# collapse a session to long-term memory and end it
+engram session --action snapshot --session-id wm-abc123 --json
+# --json shape: { "sessionId": "wm-abc123", "chunkId": "chk-…", "queued": true, ... }
+```
+
+Exit **2** if `--session-id` doesn't resolve to an active session.
+
 ### `queue-stats` — extraction queue health
 
 ```bash
@@ -204,6 +222,63 @@ echo "stored document text" | engram embed --mode document --json
 matches how `retain` embeds stored text. Stores nothing. You will almost never
 need this in a turn loop — it exists for consumers doing their own vector math
 (it is the bridge surface `engram-aql` uses for AQL vector search).
+
+### `context-commit`, `context-query`, `context-promote` — task-scoped handoff
+
+A **fifth, short-lived scope**, separate from durable memory (`retain`/`recall`)
+and separate from `session`. Use it for cheap agent-to-subagent handoff: a lead
+commits a structured decision, a subagent queries for only what's relevant
+beneath it. Artifacts expire on their own (default 4 hours) unless promoted —
+there is no `context-expire` command, expiry is enforced lazily at query time.
+
+```bash
+# commit a root artifact (JSON payload as arg or stdin); required field: decision
+engram context-commit '{"decision":"plan the release"}' --json
+# --json shape: { "id": "ctx-…", "scope": "task" }
+
+# commit a follow-up artifact chained under the root (--parent-ref-id, or
+# "parentRefId" inside the JSON payload)
+echo '{"decision":"use blue/green deployment","rationale":"zero-downtime cutover"}' \
+  | engram context-commit --parent-ref-id ctx-root123 --json
+```
+
+Payload fields (all but `decision` optional): `decision`, `rationale`,
+`scoredOptions` (`[{option,score}]`), `confidence` (0..1), `refsToSource`
+(`string[]`), `domain`, `agentId`, `parentRefId`, `ttlMs`. `--parent-ref-id`/
+`--ttl-ms` flags override the same fields in the JSON payload if both are given.
+
+**Important:** a ref is queryable as a **parent** — `context-query` returns
+the children committed *under* `refId`, not the artifact at `refId` itself.
+Commit a root, then commit follow-ups with `--parent-ref-id`/`parentRefId`
+pointing at the root, then query the root's id.
+
+```bash
+engram context-query ctx-root123 "deployment strategy" --json
+echo "deployment strategy" | engram context-query ctx-root123 --json  # query from stdin if omitted
+```
+
+Options: `--max-chars <n>` (default 4000). `--json` shape:
+```json
+{
+  "artifacts": [
+    { "ref": { "id": "ctx-…", "scope": "task" },
+      "artifact": { "decision": "…", "rationale": "…" },
+      "parentRef": { "id": "ctx-root123", "scope": "task" },
+      "createdAt": "…", "expiresAt": "…" }
+  ],
+  "truncated": false,
+  "totalCandidates": 2
+}
+```
+
+```bash
+engram context-promote ctx-abc123 --json
+```
+
+Moves the artifact into durable memory (survives past its TTL, becomes
+eligible for `reflect`). `--json` shape: `{ "promoted": true }`, or
+**exit 2** with `{ "promoted": false }` (not an error) if `ctx-abc123` doesn't
+resolve to an active task-scoped artifact.
 
 ## Turn loop (typical)
 

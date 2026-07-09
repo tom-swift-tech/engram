@@ -67,11 +67,33 @@ npx mcporter call engram.engram_session message="Current user message"
 
 Returns session state + related long-term context. Auto-matches to existing sessions by topic similarity or creates new ones.
 
+`action` selects the operation — `resume` (default, the call above — omit
+`action` entirely for this, unchanged, backward-compatible behavior),
+`update`, or `snapshot`:
+
 | Parameter | Required | Values |
 |-----------|----------|--------|
-| `message` | yes | The incoming user message |
-| `maxActive` | no | Max active sessions before oldest is snapshotted (default: 5) |
-| `threshold` | no | Cosine similarity threshold for matching (default: 0.55) |
+| `action` | no | `resume` (default), `update`, `snapshot` |
+| `message` | yes for `resume` | The incoming user message |
+| `maxActive` | no | `resume` only. Max active sessions before oldest is snapshotted (default: 5) |
+| `threshold` | no | `resume` only. Cosine similarity threshold for matching (default: 0.55) |
+| `sessionId` | yes for `update`/`snapshot` | The `wm-…` id returned by a prior resume |
+| `progress` | no | `update` only. Free-form progress note merged into the session |
+| `extensions` | no | `update` only. Object of agent-defined fields merged into the session |
+
+```bash
+# update: merge progress into an existing session
+npx mcporter call engram.engram_session action=update sessionId=wm-abc123 \
+  progress="Drafted the rollback plan"
+
+# snapshot: collapse a session to long-term memory and end it
+npx mcporter call engram.engram_session action=snapshot sessionId=wm-abc123
+```
+
+`update` returns the full updated session state. `snapshot` returns
+`{sessionId, chunkId, ...}` — the retain result for the episodic chunk the
+session was collapsed into. Both error (isError, "not found") if `sessionId`
+doesn't resolve to an active session.
 
 ### Build knowledge graph — `engram_process_extractions`
 
@@ -130,6 +152,76 @@ npx mcporter call engram.engram_embed text="stored document text" mode=document
 ```
 
 Returns `{"embedding": [...], "dimensions": <n>}` — a vector in the bank's stored embedding space. `mode=query` (the default) applies the search prefix for asymmetric models like nomic-embed-text; `mode=document` matches how `engram_retain` embeds stored text. Most agents never need this directly — it exists for consumers that do their own vector math (it is the bridge `engram-aql` uses for AQL `LIKE`/`PATTERN` vector search). It does not store anything.
+
+## Task-scoped context (ContextStore)
+
+A **fifth, short-lived scope** alongside the four durable memory types — for
+cheap agent-to-subagent handoff, NOT for long-term memory. A lead agent
+commits a structured decision, a subagent queries for only what's relevant
+beneath it. Artifacts expire on their own (default 4 hours) unless promoted.
+Use this instead of `engram_retain`/`engram_recall` when the content is
+task-scoped scratch context that shouldn't pollute durable memory or survive
+past the task.
+
+### Commit a decision — `engram_context_commit`
+
+```bash
+npx mcporter call engram.engram_context_commit decision="Use blue/green deployment for the release" \
+  rationale="Zero-downtime cutover with an easy rollback" domain="deployment-planning"
+```
+
+| Parameter | Required | Values |
+|-----------|----------|--------|
+| `decision` | yes | The decision/artifact text |
+| `rationale` | no | Why this decision was made |
+| `scoredOptions` | no | Array of `{option, score}` — options considered |
+| `confidence` | no | 0.0–1.0 |
+| `refsToSource` | no | Array of chunk ids or other identifiers this draws on |
+| `domain` | no | Freeform tag |
+| `agentId` | no | Originating agent Tier/callsign, for provenance |
+| `parentRefId` | no | `ContextRef.id` of a parent scope to chain under (omit for a root commit) |
+| `ttlMs` | no | Milliseconds until expiry (default: 4 hours) |
+
+Returns a lightweight `{"id": "ctx-…", "scope": "task"}` — pass `id` to a
+subagent as `parentRefId` when it commits its own findings, and as `refId`
+when it queries.
+
+**Important:** a ref is queryable as a **parent** — `engram_context_query`
+returns the children committed *under* a ref (`parentRefId` pointing at it),
+not the artifact at that ref itself. To hand a subagent a queryable scope,
+commit a root artifact first, then have the subagent (or yourself) commit
+follow-up artifacts with `parentRefId` set to the root's id.
+
+### Query committed artifacts — `engram_context_query`
+
+```bash
+npx mcporter call engram.engram_context_query refId=ctx-abc123 query="deployment strategy"
+```
+
+| Parameter | Required | Values |
+|-----------|----------|--------|
+| `refId` | yes | `ContextRef.id` to query beneath (a prior commit's id) |
+| `query` | yes | Relevance query used to rank artifacts committed under `refId` |
+| `maxChars` | no | Character budget for returned artifacts (default: 4000) |
+
+Ranked via the same RRF-fusion pipeline as durable `engram_recall`. Returns
+`{"artifacts": [...], "truncated": bool, "totalCandidates": n}` — each
+artifact carries its `ref`, the full `artifact` (decision/rationale/etc.),
+`parentRef`, `createdAt`, `expiresAt`.
+
+### Promote to durable memory — `engram_context_promote`
+
+```bash
+npx mcporter call engram.engram_context_promote refId=ctx-abc123
+```
+
+Moves the artifact into durable memory (survives past its TTL, becomes
+eligible for `engram_reflect`). Returns `{"promoted": true}`, or
+`{"promoted": false}` (not an error) if `refId` doesn't resolve to an active
+task-scoped artifact. Does not itself run `engram_reflect`.
+
+There is deliberately no `engram_context_expire` tool — TTL expiry is lazy
+(enforced at query time), so an unwanted artifact simply ages out on its own.
 
 ## Usage Patterns
 

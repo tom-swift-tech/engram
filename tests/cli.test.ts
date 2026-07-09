@@ -558,4 +558,204 @@ describe('engram CLI', () => {
     expect(out).not.toContain('[engram]');
     expect(JSON.parse(out.trim()).chunkId).toMatch(/^chk-/);
   });
+
+  // ─── session actions (update / snapshot) ──────────────────────────────────
+
+  it('session --action update merges progress into an existing session', async () => {
+    const created = captureIo();
+    await runCli(
+      args('session', 'Session for CLI update test', '--json'),
+      created.io,
+      overrides,
+    );
+    const sessionId = JSON.parse(created.stdout()).session.id;
+
+    const cap = captureIo();
+    const code = await runCli(
+      args(
+        'session',
+        '--action',
+        'update',
+        '--session-id',
+        sessionId,
+        '--progress',
+        'Drafted the rollback plan',
+        '--json',
+      ),
+      cap.io,
+      overrides,
+    );
+    expect(code).toBe(0);
+    const state = JSON.parse(cap.stdout());
+    expect(state.id).toBe(sessionId);
+    expect(state.progress).toBe('Drafted the rollback plan');
+  });
+
+  it('session --action snapshot collapses a session and returns a chunkId', async () => {
+    const created = captureIo();
+    await runCli(
+      args('session', 'Session for CLI snapshot test', '--json'),
+      created.io,
+      overrides,
+    );
+    const sessionId = JSON.parse(created.stdout()).session.id;
+
+    const cap = captureIo();
+    const code = await runCli(
+      args(
+        'session',
+        '--action',
+        'snapshot',
+        '--session-id',
+        sessionId,
+        '--json',
+      ),
+      cap.io,
+      overrides,
+    );
+    expect(code).toBe(0);
+    const parsed = JSON.parse(cap.stdout());
+    expect(parsed.sessionId).toBe(sessionId);
+    expect(parsed.chunkId).toMatch(/^chk-/);
+  });
+
+  it('session --action update exits 2 for an unknown sessionId', async () => {
+    const cap = captureIo();
+    const code = await runCli(
+      args(
+        'session',
+        '--action',
+        'update',
+        '--session-id',
+        'wm-does-not-exist',
+        '--json',
+      ),
+      cap.io,
+      overrides,
+    );
+    expect(code).toBe(2);
+    expect(cap.stderr()).toContain('not found');
+  });
+
+  // ─── context-commit / context-query / context-promote ────────────────────
+
+  it('context-commit stores a child artifact and context-query finds it under the parent ref', async () => {
+    // A ref is queryable as a PARENT (context-query returns its children,
+    // not itself — see context-store.ts's queryContext doc), so the round
+    // trip needs a root scope plus a child committed under it.
+    const rootCap = captureIo();
+    const rootCode = await runCli(
+      args(
+        'context-commit',
+        JSON.stringify({ decision: 'root: plan the release' }),
+        '--json',
+      ),
+      rootCap.io,
+      overrides,
+    );
+    expect(rootCode).toBe(0);
+    const root = JSON.parse(rootCap.stdout());
+    expect(root.id).toMatch(/^ctx-/);
+    expect(root.scope).toBe('task');
+
+    const commitCap = captureIo();
+    const commitCode = await runCli(
+      args(
+        'context-commit',
+        JSON.stringify({
+          decision: 'Use blue/green deployment for the release',
+          rationale: 'Zero-downtime cutover with an easy rollback',
+          domain: 'deployment-planning',
+          parentRefId: root.id,
+        }),
+        '--json',
+      ),
+      commitCap.io,
+      overrides,
+    );
+    expect(commitCode).toBe(0);
+
+    const queryCap = captureIo();
+    const queryCode = await runCli(
+      args('context-query', root.id, 'deployment strategy', '--json'),
+      queryCap.io,
+      overrides,
+    );
+    expect(queryCode).toBe(0);
+    const slice = JSON.parse(queryCap.stdout());
+    expect(slice.artifacts.length).toBeGreaterThan(0);
+    expect(slice.artifacts[0].artifact.decision).toContain('blue/green');
+  });
+
+  it('context-commit reads the JSON payload from stdin when omitted', async () => {
+    const cap = captureIo(
+      JSON.stringify({ decision: 'Piped decision via stdin' }),
+    );
+    const code = await runCli(
+      args('context-commit', '--json'),
+      cap.io,
+      overrides,
+    );
+    expect(code).toBe(0);
+    const ref = JSON.parse(cap.stdout());
+    expect(ref.id).toMatch(/^ctx-/);
+  });
+
+  it('context-commit exits 1 on invalid JSON', async () => {
+    const cap = captureIo();
+    const code = await runCli(
+      args('context-commit', 'not json', '--json'),
+      cap.io,
+      overrides,
+    );
+    expect(code).toBe(1);
+    expect(cap.stderr()).toContain('JSON');
+  });
+
+  it('context-promote moves an artifact to durable memory findable by recall', async () => {
+    const commitCap = captureIo();
+    await runCli(
+      args(
+        'context-commit',
+        JSON.stringify({
+          decision: 'PromoteMe: adopt trunk-based development',
+        }),
+        '--json',
+      ),
+      commitCap.io,
+      overrides,
+    );
+    const ref = JSON.parse(commitCap.stdout());
+
+    const promoteCap = captureIo();
+    const promoteCode = await runCli(
+      args('context-promote', ref.id, '--json'),
+      promoteCap.io,
+      overrides,
+    );
+    expect(promoteCode).toBe(0);
+    expect(JSON.parse(promoteCap.stdout())).toEqual({ promoted: true });
+
+    const recallCap = captureIo();
+    await runCli(
+      args('recall', 'trunk-based development', '--json'),
+      recallCap.io,
+      overrides,
+    );
+    const recallParsed = JSON.parse(recallCap.stdout());
+    expect(
+      recallParsed.results.some((r: any) => r.text.includes('PromoteMe')),
+    ).toBe(true);
+  });
+
+  it('context-promote exits 2 and reports {promoted:false} for an unknown refId', async () => {
+    const cap = captureIo();
+    const code = await runCli(
+      args('context-promote', 'ctx-does-not-exist', '--json'),
+      cap.io,
+      overrides,
+    );
+    expect(code).toBe(2);
+    expect(JSON.parse(cap.stdout())).toEqual({ promoted: false });
+  });
 });

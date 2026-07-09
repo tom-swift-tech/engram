@@ -91,9 +91,9 @@ describe('MCP Server', () => {
     cleanupDb(dbPath);
   });
 
-  it('ListTools returns all 10 tool schemas', async () => {
+  it('ListTools returns all 13 tool schemas', async () => {
     const result = await client.listTools();
-    expect(result.tools.length).toBe(10);
+    expect(result.tools.length).toBe(13);
     const names = result.tools.map((t) => t.name);
     expect(names).toContain('engram_retain');
     expect(names).toContain('engram_recall');
@@ -105,6 +105,9 @@ describe('MCP Server', () => {
     expect(names).toContain('engram_queue_stats');
     expect(names).toContain('engram_requeue_failed');
     expect(names).toContain('engram_embed');
+    expect(names).toContain('engram_context_commit');
+    expect(names).toContain('engram_context_query');
+    expect(names).toContain('engram_context_promote');
   });
 
   it('engram_retain stores a chunk and returns a chunkId', async () => {
@@ -384,6 +387,305 @@ describe('MCP Server', () => {
     expect(result.isError).toBe(true);
     const content = result.content as Array<{ type: string; text: string }>;
     expect(content[0].text).toContain('query');
+  });
+});
+
+// =============================================================================
+// engram_session action enum: default (resume) stays backward-compatible;
+// update/snapshot wrap the same working-memory methods Pi's adapter uses.
+//
+// Dedicated engram/server/client (not shared with the "MCP Server" describe
+// above) — the working-memory session matcher uses cosine similarity via the
+// same low-dimensional MockEmbedder, and a shared db risks an unrelated
+// earlier session (e.g. "Help me plan the Kubernetes migration") coincidentally
+// matching a later test's message, turning an expected "new" into "match".
+// =============================================================================
+
+describe('engram_session action enum', () => {
+  let engram: Engram;
+  let client: Client;
+  let server: Server;
+  let dbPath: string;
+
+  beforeAll(async () => {
+    dbPath = tmpDbPath();
+    engram = await Engram.create(dbPath, { embedder: new MockEmbedder() });
+
+    const handleTool = createEngramToolHandler(engram);
+
+    server = new Server(
+      { name: 'engram', version: '0.1.0' },
+      { capabilities: { tools: {} } },
+    );
+
+    server.setRequestHandler(ListToolsRequestSchema, async () => ({
+      tools: ENGRAM_TOOLS.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        inputSchema: tool.inputSchema,
+      })),
+    }));
+
+    server.setRequestHandler(CallToolRequestSchema, async (request) => {
+      const { name, arguments: toolArgs } = request.params;
+      return handleTool(
+        name as EngramToolName,
+        (toolArgs ?? {}) as Record<string, unknown>,
+      );
+    });
+
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+
+    client = new Client(
+      { name: 'test-client', version: '1.0.0' },
+      { capabilities: {} },
+    );
+
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+  });
+
+  afterAll(async () => {
+    await client.close();
+    await server.close();
+    engram.close();
+    cleanupDb(dbPath);
+  });
+
+  it('engram_session with no action still resumes/creates a session (backward compat)', async () => {
+    const result = await client.callTool({
+      name: 'engram_session',
+      arguments: { message: 'Backward-compat default action check' },
+    });
+    const content = result.content as Array<{ type: string; text: string }>;
+    const parsed = JSON.parse(content[0].text);
+    expect(parsed.session.id).toMatch(/^wm-/);
+    expect(parsed.diagnostics.reason).toBe('new');
+  });
+
+  it('engram_session action=update merges progress into an existing session', async () => {
+    const created = await client.callTool({
+      name: 'engram_session',
+      arguments: { message: 'Session to be updated via action=update' },
+    });
+    const createdContent = created.content as Array<{
+      type: string;
+      text: string;
+    }>;
+    const sessionId = JSON.parse(createdContent[0].text).session.id;
+
+    const updated = await client.callTool({
+      name: 'engram_session',
+      arguments: {
+        action: 'update',
+        sessionId,
+        progress: 'Drafted the rollback plan',
+      },
+    });
+
+    expect(updated.isError).toBeFalsy();
+    const updatedContent = updated.content as Array<{
+      type: string;
+      text: string;
+    }>;
+    const state = JSON.parse(updatedContent[0].text);
+    expect(state.id).toBe(sessionId);
+    expect(state.progress).toBe('Drafted the rollback plan');
+  });
+
+  it('engram_session action=snapshot collapses a session to long-term memory and returns a chunkId', async () => {
+    const created = await client.callTool({
+      name: 'engram_session',
+      arguments: { message: 'Session to be snapshotted via action=snapshot' },
+    });
+    const createdContent = created.content as Array<{
+      type: string;
+      text: string;
+    }>;
+    const sessionId = JSON.parse(createdContent[0].text).session.id;
+
+    const snapshotted = await client.callTool({
+      name: 'engram_session',
+      arguments: { action: 'snapshot', sessionId },
+    });
+
+    expect(snapshotted.isError).toBeFalsy();
+    const snapContent = snapshotted.content as Array<{
+      type: string;
+      text: string;
+    }>;
+    const parsed = JSON.parse(snapContent[0].text);
+    expect(parsed.sessionId).toBe(sessionId);
+    expect(parsed.chunkId).toMatch(/^chk-/);
+  });
+
+  it('engram_session action=update returns isError for an unknown sessionId', async () => {
+    const result = await client.callTool({
+      name: 'engram_session',
+      arguments: { action: 'update', sessionId: 'wm-does-not-exist' },
+    });
+    expect(result.isError).toBe(true);
+    const content = result.content as Array<{ type: string; text: string }>;
+    expect(content[0].text).toContain('not found');
+  });
+});
+
+// =============================================================================
+// ContextStore MCP tools: engram_context_commit / query / promote
+// =============================================================================
+
+describe('ContextStore MCP tools', () => {
+  let engram: Engram;
+  let client: Client;
+  let server: Server;
+  let dbPath: string;
+
+  beforeAll(async () => {
+    dbPath = tmpDbPath();
+    engram = await Engram.create(dbPath, { embedder: new MockEmbedder() });
+
+    const handleTool = createEngramToolHandler(engram);
+
+    server = new Server(
+      { name: 'engram', version: '0.1.0' },
+      { capabilities: { tools: {} } },
+    );
+
+    server.setRequestHandler(ListToolsRequestSchema, async () => ({
+      tools: ENGRAM_TOOLS.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        inputSchema: tool.inputSchema,
+      })),
+    }));
+
+    server.setRequestHandler(CallToolRequestSchema, async (request) => {
+      const { name, arguments: toolArgs } = request.params;
+      return handleTool(
+        name as EngramToolName,
+        (toolArgs ?? {}) as Record<string, unknown>,
+      );
+    });
+
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+
+    client = new Client(
+      { name: 'test-client', version: '1.0.0' },
+      { capabilities: {} },
+    );
+
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+  });
+
+  afterAll(async () => {
+    await client.close();
+    await server.close();
+    engram.close();
+    cleanupDb(dbPath);
+  });
+
+  it('commit -> query round trip returns a child artifact committed under the parent ref', async () => {
+    // A commit is queryable as a CHILD of its parentRefId, not as itself —
+    // querying a ref returns chunks whose parent_ref === refId (see
+    // context-store.ts's queryContext doc). So the round trip needs a root
+    // scope plus a child committed under it.
+    const rootResult = await client.callTool({
+      name: 'engram_context_commit',
+      arguments: { decision: 'root: plan the release' },
+    });
+    const rootContent = rootResult.content as Array<{
+      type: string;
+      text: string;
+    }>;
+    const root = JSON.parse(rootContent[0].text);
+    expect(root.id).toMatch(/^ctx-/);
+    expect(root.scope).toBe('task');
+
+    const childResult = await client.callTool({
+      name: 'engram_context_commit',
+      arguments: {
+        decision: 'Use blue/green deployment for the release',
+        rationale: 'Zero-downtime cutover with an easy rollback',
+        domain: 'deployment-planning',
+        agentId: 'builder-1',
+        parentRefId: root.id,
+      },
+    });
+    expect(childResult.isError).toBeFalsy();
+
+    const queryResult = await client.callTool({
+      name: 'engram_context_query',
+      arguments: { refId: root.id, query: 'deployment strategy' },
+    });
+    expect(queryResult.isError).toBeFalsy();
+    const queryContent = queryResult.content as Array<{
+      type: string;
+      text: string;
+    }>;
+    const slice = JSON.parse(queryContent[0].text);
+    expect(slice.artifacts.length).toBeGreaterThan(0);
+    expect(slice.artifacts[0].artifact.decision).toContain('blue/green');
+  });
+
+  it('promote moves an artifact into durable memory findable by recall', async () => {
+    const commitResult = await client.callTool({
+      name: 'engram_context_commit',
+      arguments: {
+        decision: 'PromoteMe: adopt trunk-based development',
+      },
+    });
+    const commitContent = commitResult.content as Array<{
+      type: string;
+      text: string;
+    }>;
+    const ref = JSON.parse(commitContent[0].text);
+
+    const promoteResult = await client.callTool({
+      name: 'engram_context_promote',
+      arguments: { refId: ref.id },
+    });
+    expect(promoteResult.isError).toBeFalsy();
+    const promoteContent = promoteResult.content as Array<{
+      type: string;
+      text: string;
+    }>;
+    expect(JSON.parse(promoteContent[0].text)).toEqual({ promoted: true });
+
+    const recallResult = await client.callTool({
+      name: 'engram_recall',
+      arguments: { query: 'trunk-based development' },
+    });
+    const recallContent = recallResult.content as Array<{
+      type: string;
+      text: string;
+    }>;
+    const recallParsed = JSON.parse(recallContent[0].text);
+    expect(
+      recallParsed.results.some((r: any) => r.text.includes('PromoteMe')),
+    ).toBe(true);
+  });
+
+  it('promote returns {promoted:false} (not an error) for an unknown refId', async () => {
+    const result = await client.callTool({
+      name: 'engram_context_promote',
+      arguments: { refId: 'ctx-does-not-exist' },
+    });
+    expect(result.isError).toBeFalsy();
+    const content = result.content as Array<{ type: string; text: string }>;
+    expect(JSON.parse(content[0].text)).toEqual({ promoted: false });
+  });
+
+  it('engram_context_commit returns isError when decision is missing', async () => {
+    const result = await client.callTool({
+      name: 'engram_context_commit',
+      arguments: { rationale: 'no decision field' },
+    });
+    expect(result.isError).toBe(true);
+    const content = result.content as Array<{ type: string; text: string }>;
+    expect(content[0].text).toContain('decision');
   });
 });
 

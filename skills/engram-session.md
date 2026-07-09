@@ -75,20 +75,32 @@ npx mcporter call engram.engram_session message="plan the deployment" threshold=
 
 ## Updating Session Progress
 
+`engram_session` takes an `action` field: `resume` (default — omit `action`
+entirely for the original, backward-compatible behavior above), `update`, and
+`snapshot`. `update`/`snapshot` require `sessionId` (the id returned by a prior
+resume).
+
 After the agent responds, update the session with what was accomplished:
 
 ```bash
-npx mcporter call engram.engram_session message="update progress"
-# Note: progress updates go through the direct API, not the MCP tool
+npx mcporter call engram.engram_session action=update sessionId=wm-abc123 \
+  progress="Queried prod — v2.3.1. Found 3 pending migrations. Drafted rollback plan."
 ```
 
-In direct API usage:
-```typescript
-await engram.updateWorkingSession(session.id, {
-  goal: 'Updated goal if it evolved',
-  progress: 'Queried prod — v2.3.1. Found 3 pending migrations. Drafted rollback plan.',
-});
+`extensions` (an object) merges agent-defined fields into the session state
+alongside or instead of `progress`:
+
+```bash
+npx mcporter call engram.engram_session action=update sessionId=wm-abc123 \
+  extensions='{"blockedOn": "waiting on staging approval"}'
 ```
+
+Returns the full updated session state (id, goal, progress, updated_at, plus
+any extension fields). Errors (isError, "not found") if `sessionId` doesn't
+resolve to an active session.
+
+This wraps the same `engram.updateWorkingSession()` method the direct API and
+the Pi adapter use — no behavior difference between them.
 
 ## Tuning the Threshold
 
@@ -103,6 +115,14 @@ await engram.updateWorkingSession(session.id, {
 ### Snapshot and close a session
 
 When work on a topic is complete, snapshot the session to long-term memory:
+
+```bash
+npx mcporter call engram.engram_session action=snapshot sessionId=wm-abc123
+# Returns { sessionId, chunkId, queued, ... } — goal + progress are retained
+# as an 'experience' chunk (chunkId) and the session is then expired.
+```
+
+Or via the direct API:
 
 ```typescript
 await engram.snapshotWorkingSession(sessionId);

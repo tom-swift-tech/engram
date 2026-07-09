@@ -78,6 +78,9 @@ export const CLI_COMMANDS = [
   'queue-stats',
   'requeue-failed',
   'embed',
+  'context-commit',
+  'context-query',
+  'context-promote',
 ] as const;
 
 // ─── argv parsing ────────────────────────────────────────────────────────────
