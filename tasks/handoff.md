@@ -1,13 +1,14 @@
-# Handoff — 2026-07-09 (Phase 2 agent-surface completion — PR open)
+# Handoff — 2026-07-09 (Phase 2 agent-surface completion — MERGED)
 
 ## State
 
-**Phase 2 of the 2026-07-09 remediation plan is implemented, reviewed, and
-verified** on branch `feat/phase2-agent-surface` (based on `main@d11733b`).
-PR opening was the last act of the session — check `gh pr list` if the PR
-number isn't referenced below.
+**Phase 2 is MERGED to `main` via PR #26** (merge commit `906a92c`,
+merge-commit strategy matching Phases 0–1). CI green on both matrix legs
+(Node 20/24) pre-merge. Local `main` synced to `906a92c`, feature branch
+deleted locally and remotely, tree clean. Phases 0–2 of the 2026-07-09
+remediation plan are now all done; Phase 3 (scaling) is next.
 
-Commits on the branch, in order:
+Commits that made up the PR, in order:
 
 - `2c27338` — Slice A: `RecallOptions.minScore` (post-weighting inclusive
   filter) + `explainScores` (per-result `strategyScores` breakdown:
@@ -70,12 +71,13 @@ Commits on the branch, in order:
 
 ## Next steps
 
-1. Merge the Phase 2 PR once CI is green (merge-commit strategy, matching
-   Phases 0–1).
-2. **Phase 3 — Scaling** (see tasks/todo.md): operator benchmark harness
+1. **Phase 3 — Scaling** (see tasks/todo.md): operator benchmark harness
    FIRST (5k/50k/200k chunks, p50/p95 retain/recall) — it is the
    acceptance gate; then architect spike on vec0-ANN vs candidate
-   pre-filter; then Tier-1 INSTR() scan off the retain transaction.
-   AQL shared-file compatibility is a hard constraint.
-3. Phase 4 (memory quality: near-dup consolidation, entity resolution)
+   pre-filter for the O(N) semantic scan; then Tier-1 INSTR() scan off
+   the retain transaction. AQL shared-file compatibility is a hard
+   constraint. Phase 3 items each get their own worktree per the
+   parallel-builder policy (isolation constraints in the task description
+   at creation time — see lessons.md).
+2. Phase 4 (memory quality: near-dup consolidation, entity resolution)
    is architect-first — spec before code.
