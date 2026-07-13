@@ -1,83 +1,70 @@
-# Handoff — 2026-07-09 (Phase 2 agent-surface completion — MERGED)
+# Handoff — Engram remediation sprint (2026-07-13)
 
-## State
+## Where we are
 
-**Phase 2 is MERGED to `main` via PR #26** (merge commit `906a92c`,
-merge-commit strategy matching Phases 0–1). CI green on both matrix legs
-(Node 20/24) pre-merge. Local `main` synced to `906a92c`, feature branch
-deleted locally and remotely, tree clean. Phases 0–2 of the 2026-07-09
-remediation plan are now all done; Phase 3 (scaling) is next.
+**Model-resolver fix: DONE & MERGED.** PR #27 → `main@aa149af`. Eliminated
+silent model-fallback (single resolver + preflight + fail-loud sentinel). 692
+tests green, CI green on Node 20 + 24. Branch deleted local + remote.
 
-Commits that made up the PR, in order:
+**Remediation sprint: PLANNED, branch cut, ready to execute.**
+- Branch: `fix/engram-remediation` (HEAD `7b20e8e`, off `main@aa149af`).
+- Full plan: `tasks/todo.md` (committed). Six defects D1–D6, all mechanisms
+  verified against the tree (four parallel investigations, findings in the plan).
+- Note: D1 (Tier-1 `INSTR` scan) and D2/D6 (memory-quality) were already
+  foreshadowed in the prior Phase 3/4 backlog — this sprint absorbs them.
 
-- `2c27338` — Slice A: `RecallOptions.minScore` (post-weighting inclusive
-  filter) + `explainScores` (per-result `strategyScores` breakdown:
-  perStrategy rank/rrfScore, rawFusedScore, weighting multipliers), wired
-  through `engram_recall` MCP schema + `--min-score`/`--explain-scores`
-  CLI + skills. results[0]-is-tier-major caveat added to tool description.
-- `7ab99cd` — Slice C: Pi `engram_recall` passthrough widened with
-  memoryTypes/after/before/strategies/minScore (typebox schemas, adapter,
-  tool registration); preserves the deliberate `decayHalfLifeDays: 0`
-  override.
-- `6c78405` — Slice B: `engram_session` action enum
-  (`resume` default = byte-compatible with pre-enum tool / `update` /
-  `snapshot`) + three ContextStore MCP tools
-  (`engram_context_commit`/`_query`/`_promote`) + CLI twins
-  (`context-commit`/`context-query`/`context-promote`); surface-parity
-  pins move 10 → 13. Promote-miss returns `{promoted: false}` (exit 2 on
-  CLI), mirroring `engram_forget`'s convention. expireContext deliberately
-  NOT exposed (lazy expiry covers it; noted in skills).
-- `70c51ed` — flake fix: the two cross-call minScore tests pin
-  `decayHalfLifeDays: 0` (recency decay made scores wall-clock-dependent,
-  so sequential recalls were never bit-identical — see lessons.md).
-- `d1cc7fe` — docs sweep: CLAUDE.md + AGENTS.md (mirror regenerated,
-  guard-verified), README tool table (13 tools), PI-INTEGRATION.md,
-  todo.md Phase 2 checkboxes done + "Next session" pointer moved to
-  Phase 3.
+## Decisions locked
 
-## Verification actually run (this session, at `d1cc7fe`)
+1. **Scope:** full six-defect sprint, dependency order.
+2. **D3 gate:** content heuristic in `planAutoRetain` (in-repo, ships now) +
+   purge the 56 cron chunks. Leave issue #21 (upstream scheduler signal) open;
+   note the residual brittleness in a code comment.
+3. **Base:** model-resolver merged first (done). Remediation off clean main.
 
-- Root: typecheck, build, lint, format:check clean; `npm test` 489/489
-  (24 files). Pi: 108/108 (6 files). Mirror guard clean (CI's exact
-  filter, run independently of the builder that regenerated it).
-- Recall suite additionally run 6× consecutively to prove the flake fix.
-- Reviewer pass (committed range `d11733b..70c51ed`): clean approval,
-  zero blocking. Two non-blocking nits on record: (1) `engram_session`
-  schema no longer marks `message` required (runtime-validated instead —
-  deliberate, enables action enum); (2) `engram_context_commit` accepts
-  negative `ttlMs` un-clamped (immediate expiry; a clamp would need a
-  decision on whether 0 means "no TTL" first — do NOT blind-fix).
-- AQL suites not run (need cargo); untouched by this phase.
-- CI on `main` is fully green — `d11733b`'s earlier red was GitHub
-  runner-acquisition flake, fixed by re-run, no code change.
+## Next step — spawn 4 parallel builders (disjoint files, one worktree each)
 
-## Gotchas carried forward
+Base SHA for all worktrees: `7b20e8e`. Lead creates worktrees before spawning;
+each builder owns a disjoint file set; brief from
+`~/.claude/builder-brief-template.md`.
+
+| Lane | Owns | Defect |
+|------|------|--------|
+| **D1** | `src/extract-cpu.ts`, `tests/extract-cpu.test.ts` | word-boundary + stopword + min-len ≥4 in `strategyGraphMatching` (`:221-265`); replace `INSTR` substring matching. |
+| **D6** | `src/recall.ts`, `tests/recall.test.ts`, `tests/trust-tier.test.ts` | thread cosine out of `semanticSearch` (`:446-512`), within-tier cosine-primary score + `minScore` gate; **leave `(tier,score)` comparator `:1136-1143` untouched** (security floor). Port assessment params: `cosine × 0.94–0.99 trust-bias · minScore 0.42`. |
+| **D2+D4** | `src/reflect.ts`, `tests/reflect.test.ts` | D2: `findMatchingObservation` mirroring `findMatchingOpinion` (`:488-511`), route new obs into the `observation_refreshes` seam (`:675-703`), lexical (no schema change). D4: durability rubric at prompt `:256`/`:261`; attribution guard in `resolveEntityIds` (`:478-486`). |
+| **D3-gate** | `integrations/pi/src/adapter.ts`, `integrations/pi/tests/auto-retain.test.ts` | cron/job detector in `planAutoRetain` (`:667-703`)/`ROLE_MAP` (`:600-605`): refuse or downgrade job prompts so they never store as `user_stated`/0.7. |
+
+## Sequential, NOT parallelized — gated on explicit go + backup
+
+**Purge (D1/D3 live-store cleanup).** Irreversible hard-delete on the real
+`mira.engram` (location TBD — ask; not in repo). MUST: `engram.backup()` first,
+then hard-delete in FK-safe child-first order `relations → chunk_entities →
+entities` (no `ON DELETE CASCADE`), then `VACUUM`. `forget()` is a soft delete
+and reclaims nothing — the purge needs a dedicated maintenance script. Cron-chunk
+purge filter: `memory_type='experience' AND source='pi:conversation' AND
+source_type='user_stated' AND trust_score=0.7`, narrowed by FTS/`text` on the
+known cron phrases (no session-id column). Build the script in-sprint; run it
+supervised. Projected 329 MB → ~100–120 MB.
+
+**D5 (reflection catch-up)** and **Step 6 (consolidate vs expand)** come after
+the code lanes; D5 is cheaper once D2/D4 cut wasted writes.
+
+## Verification per lane
+
+Root vitest + affected integration suite, typecheck, lint, format. Baseline
+**692 green** (root 517 / pi 108 / openclaw 67). Surface-parity (13 tools) must
+stay green — none of these touch the tool surface. Cargo/AQL out of scope. D6
+additionally needs a live-store before/after recall measurement (target:
+cron-noise-in-top-6 15 → 1). Purge needs before/after DB size + a recall smoke.
+
+## Gotchas carried forward (still live)
 
 - **Never compare scores across two recall() calls in tests without
-  `decayHalfLifeDays: 0`** — decay makes scores time-dependent (lessons.md
-  2026-07-09).
-- ContextStore query semantics: a ref is queried as a PARENT —
-  `context_query(refId)` returns children committed with
-  `parentRefId: refId`, never the artifact at refId itself. Documented in
-  skills/engram.md; it tripped a builder mid-phase.
-- Multi-agent process: put isolation constraints (worktree, base SHA,
-  file scope) in the task description at creation time — an ownership
-  assignment notification races a separately-sent brief (lessons.md).
-- Rebuild `integrations/pi/dist` before trusting a smoke-test failure.
-- cargo blocked by Windows Application Control in SOME worktree paths.
-- CLAUDE.md ↔ AGENTS.md mirror: edit CLAUDE.md, regenerate, verify with
-  the CI filter (see git history `2a54741`/`08bcd6c`).
-- PR #22 shows "Closed" not "Merged" — intentional, don't "fix".
-
-## Next steps
-
-1. **Phase 3 — Scaling** (see tasks/todo.md): operator benchmark harness
-   FIRST (5k/50k/200k chunks, p50/p95 retain/recall) — it is the
-   acceptance gate; then architect spike on vec0-ANN vs candidate
-   pre-filter for the O(N) semantic scan; then Tier-1 INSTR() scan off
-   the retain transaction. AQL shared-file compatibility is a hard
-   constraint. Phase 3 items each get their own worktree per the
-   parallel-builder policy (isolation constraints in the task description
-   at creation time — see lessons.md).
-2. Phase 4 (memory quality: near-dup consolidation, entity resolution)
-   is architect-first — spec before code.
+  `decayHalfLifeDays: 0`** — decay makes scores time-dependent. Directly
+  relevant to D6's new score assertions.
+- CLAUDE.md ↔ AGENTS.md mirror: edit both together, verify with the CI filter.
+- Rebuild `integrations/pi/dist` before trusting a Pi smoke-test failure.
+- cargo blocked by Windows Application Control in SOME worktree paths (AQL only).
+- Put isolation constraints (worktree, base SHA, file scope) in each builder's
+  task description at creation time — an ownership notification races a
+  separately-sent brief.
