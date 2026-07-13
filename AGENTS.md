@@ -147,7 +147,8 @@ engram/
 │   ├── reflect.ts               ← scheduled learning engine + prompt templates
 │   ├── extract-cpu.ts           ← zero-LLM inline entity extraction (Tier 1)
 │   ├── temporal-parser.ts       ← natural language date parsing for temporal recall
-│   ├── generation.ts            ← pluggable generation providers (Ollama, OpenAI-compat, Anthropic)
+│   ├── generation.ts            ← pluggable generation providers (Ollama, OpenAI-compat, Anthropic); model is REQUIRED (no default) + UnconfiguredGeneration fail-loud sentinel
+│   ├── model-resolver.ts        ← single source of generation-model selection (no silent default) + Ollama /api/tags preflight; roles reflect/extract/integration
 │   ├── local-embedder.ts        ← in-process embeddings via @huggingface/transformers
 │   ├── working-memory-types.ts  ← types for working memory session management
 │   ├── context-store.ts         ← ContextStore: task-scoped ephemeral artifacts (commit/query/expire/promote), reuses recall()'s RRF pipeline via chunks.scope='task'
@@ -155,7 +156,7 @@ engram/
 │   ├── mcp-server.ts            ← standalone MCP stdio server (engram-mcp bin)
 │   ├── cli.ts                   ← `engram` CLI: one subcommand per MCP tool, --json contract for Pi (engram bin)
 │   └── cli-args.ts              ← CLI argv parser + Engram.open option-builder + shared validation/clamp helpers
-├── tests/                        ← TS suites incl. aql-* cross-process (489 tests via npm test; +108 from integrations/pi, +67 from tools/openclaw-import)
+├── tests/                        ← TS suites incl. aql-* cross-process (517 tests via npm test; +108 from integrations/pi, +67 from tools/openclaw-import)
 │   ├── helpers.ts
 │   ├── retain.test.ts
 │   ├── retain-gate.test.ts
@@ -165,6 +166,7 @@ engram/
 │   ├── extract-cpu.test.ts
 │   ├── temporal-parser.test.ts
 │   ├── generation.test.ts
+│   ├── model-resolver.test.ts     ← model selection precedence + required-model throw + preflight
 │   ├── engram.test.ts
 │   ├── working-memory.test.ts
 │   ├── context-store.test.ts      ← commit/query round-trip, TTL expiry, budget truncation, RRF parity, shared-parent integration example
@@ -360,6 +362,8 @@ git init && git branch -M main
 - [x] **Reflect schedule**: Library default is manual (call `engram.reflect()` or the CLI). `ReflectScheduler` class ships for timer-based use. Recommendation for valor-engine: `ReflectScheduler` with a 6-hour default, configurable per operative.
 
 - [x] **Embedding model**: `nomic-ai/nomic-embed-text-v1.5` (768d) runs in-process via `@huggingface/transformers` (v3+, the maintained successor to the deprecated `@xenova/transformers`) as default — no Ollama required for retain/recall, and no Hugging Face token (the `nomic-ai` upstream repo is public). Override via `embedModel` option. `Xenova/all-MiniLM-L6-v2` (384d) is a valid alternative for lower disk/memory use. The legacy `Xenova/nomic-embed-text-v1.5` mirror is now gated (401 without a token) so it's no longer the default, but ships identical 768-dim weights — existing `.engram` files stay valid. Opt into Ollama embeddings via `useOllamaEmbeddings: true` (e.g., for GPU acceleration). Existing `.engram` files with Ollama-generated vectors are fully compatible — same model weights, same 768-dim space.
+
+- [x] **No default generation model (fail-loud model selection)**: The library applies **no hardcoded model default** anywhere. `OllamaGeneration`/`AnthropicGeneration` require a non-empty `model` (throw at construction); the previous `?? 'llama3.1:8b'` / `?? 'claude-haiku-...'` defaults are gone, as are the copies in `engram.ts`, `reflect.ts`, `cli-args.ts`, and `mcp-server.ts`. A single resolver (`src/model-resolver.ts`) is the only place a model is chosen from config: `resolveModelSpec({role})` reads `ENGRAM_<ROLE>_MODEL` → `ENGRAM_MODEL` (role ∈ reflect/extract/integration; recall is embedding-based, no generation model) and **throws** if unconfigured; `resolveModelSpecOrNull` returns null for the optional path. When nothing is configured, `Engram.open` installs a fail-loud `UnconfiguredGeneration` sentinel — retain/recall still work with zero config, but the first reflect/extract throws instead of silently 404ing on a default the host may not serve. A `preflightModel({host,model})` hits the host's `/api/tags` and confirms the model is served **before** a pipeline commits, logging the served-model list on failure and flagging `:cloud`/non-LAN models as remote; it is wired into the generation entrypoints (reflect CLI entry, `engram` CLI reflect/process-extractions, `engram-mcp` startup, and the Pi integration's background consolidation, which warns once loudly). This closes a class of silent failure: a model name dropped before reaching the library used to fall back to an unserved default and 404 downstream, decoupled in time from the misconfiguration.
 
 - [ ] **`.engram` MIME type**: Deferred. Extension is established; OS MIME registration is future work if IDE/tooling support becomes valuable.
 

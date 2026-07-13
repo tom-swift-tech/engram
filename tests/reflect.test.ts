@@ -49,7 +49,7 @@ describe('reflect()', () => {
       throw new Error('fetch should not be called when threshold not met');
     });
 
-    const result = await reflect({ dbPath });
+    const result = await reflect({ dbPath, reflectModel: 'llama-test' });
     expect(result.status).toBe('completed');
     expect(result.factsProcessed).toBe(0);
   });
@@ -59,7 +59,7 @@ describe('reflect()', () => {
     await setupDb(dbPath, 5);
     vi.stubGlobal('fetch', mockOllamaFetch(REFLECT_RESPONSE));
 
-    const result = await reflect({ dbPath });
+    const result = await reflect({ dbPath, reflectModel: 'llama-test' });
     expect(result.status).toBe('completed');
     expect(result.factsProcessed).toBe(5);
   });
@@ -69,7 +69,7 @@ describe('reflect()', () => {
     await setupDb(dbPath, 5);
     vi.stubGlobal('fetch', mockOllamaFetch(REFLECT_RESPONSE));
 
-    const result = await reflect({ dbPath });
+    const result = await reflect({ dbPath, reflectModel: 'llama-test' });
     expect(result.observationsCreated).toBe(1);
 
     const db = new Database(dbPath);
@@ -84,7 +84,7 @@ describe('reflect()', () => {
     await setupDb(dbPath, 5);
     vi.stubGlobal('fetch', mockOllamaFetch(REFLECT_RESPONSE));
 
-    const result = await reflect({ dbPath });
+    const result = await reflect({ dbPath, reflectModel: 'llama-test' });
     expect(result.opinionsFormed).toBe(1);
 
     const db = new Database(dbPath);
@@ -101,7 +101,7 @@ describe('reflect()', () => {
     await setupDb(dbPath, 5);
     vi.stubGlobal('fetch', mockOllamaFetch(REFLECT_RESPONSE));
 
-    await reflect({ dbPath });
+    await reflect({ dbPath, reflectModel: 'llama-test' });
 
     const db = new Database(dbPath);
     const unreflected = db
@@ -116,7 +116,7 @@ describe('reflect()', () => {
     await setupDb(dbPath, 5);
     vi.stubGlobal('fetch', mockOllamaFetch(REFLECT_RESPONSE));
 
-    const result = await reflect({ dbPath });
+    const result = await reflect({ dbPath, reflectModel: 'llama-test' });
 
     const db = new Database(dbPath);
     const log = db
@@ -136,7 +136,7 @@ describe('reflect()', () => {
     await setupDb(dbPath, 5);
     vi.stubGlobal('fetch', mockOllamaFetch('this is not json at all'));
 
-    const result = await reflect({ dbPath });
+    const result = await reflect({ dbPath, reflectModel: 'llama-test' });
     // Graceful recovery: unparseable JSON → empty arrays, not a hard failure.
     // But this IS a silent-failure cycle (0 insights despite chunks meeting
     // the threshold) — status is 'partial', not 'completed', so it's
@@ -151,7 +151,7 @@ describe('reflect()', () => {
     await setupDb(dbPath, 3);
     vi.stubGlobal('fetch', mockOllamaFetch('this is not json at all'));
 
-    await reflect({ dbPath });
+    await reflect({ dbPath, reflectModel: 'llama-test' });
 
     // Facts should still be unreflected so the next cycle can retry them
     const db = new Database(dbPath);
@@ -175,7 +175,7 @@ describe('reflect()', () => {
         }) as unknown as Response,
     );
 
-    const result = await reflect({ dbPath });
+    const result = await reflect({ dbPath, reflectModel: 'llama-test' });
     expect(result.status).toBe('failed');
   });
 
@@ -184,7 +184,7 @@ describe('reflect()', () => {
     await setupDb(dbPath, 5);
     vi.stubGlobal('fetch', mockOllamaFetch(REFLECT_RESPONSE));
 
-    const result = await reflect({ dbPath });
+    const result = await reflect({ dbPath, reflectModel: 'llama-test' });
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
   });
 
@@ -229,7 +229,7 @@ describe('reflect()', () => {
       ),
     );
 
-    const result = await reflect({ dbPath });
+    const result = await reflect({ dbPath, reflectModel: 'llama-test' });
     expect(result.opinionsReinforced).toBe(1);
 
     const verify = new Database(dbPath);
@@ -288,7 +288,7 @@ describe('reflect()', () => {
       ),
     );
 
-    const result = await reflect({ dbPath });
+    const result = await reflect({ dbPath, reflectModel: 'llama-test' });
     expect(result.opinionsReinforced).toBe(1);
 
     const verify = new Database(dbPath);
@@ -346,7 +346,7 @@ describe('reflect()', () => {
       ),
     );
 
-    const result = await reflect({ dbPath });
+    const result = await reflect({ dbPath, reflectModel: 'llama-test' });
     expect(result.opinionsReinforced).toBe(1);
 
     const verify = new Database(dbPath);
@@ -387,7 +387,7 @@ describe('reflect()', () => {
       ),
     );
 
-    await reflect({ dbPath });
+    await reflect({ dbPath, reflectModel: 'llama-test' });
 
     const verify = new Database(dbPath);
     const op = verify
@@ -431,7 +431,7 @@ describe('reflect()', () => {
       ),
     );
 
-    const result = await reflect({ dbPath });
+    const result = await reflect({ dbPath, reflectModel: 'llama-test' });
     expect(result.opinionsReinforced).toBe(1);
 
     const verify = new Database(dbPath);
@@ -477,7 +477,7 @@ describe('reflect()', () => {
       ),
     );
 
-    const result = await reflect({ dbPath });
+    const result = await reflect({ dbPath, reflectModel: 'llama-test' });
     expect(result.opinionsChallenged).toBe(1);
 
     const verify = new Database(dbPath);
@@ -514,7 +514,7 @@ describe('reflect()', () => {
       ),
     );
 
-    const result = await reflect({ dbPath });
+    const result = await reflect({ dbPath, reflectModel: 'llama-test' });
     expect(result.opinionsFormed).toBe(1);
 
     const verify = new Database(dbPath);
@@ -553,7 +553,7 @@ describe('reflect()', () => {
     vi.stubGlobal('fetch', mockOllamaFetch(sameNewOpinionResponse));
 
     // Cycle 1: no matching opinion yet — genuinely new, inserts.
-    const result1 = await reflect({ dbPath });
+    const result1 = await reflect({ dbPath, reflectModel: 'llama-test' });
     expect(result1.opinionsFormed).toBe(1);
     expect(result1.opinionsReinforced).toBe(0);
 
@@ -580,7 +580,7 @@ describe('reflect()', () => {
     vi.unstubAllGlobals();
     vi.stubGlobal('fetch', mockOllamaFetch(sameNewOpinionResponse));
 
-    const result2 = await reflect({ dbPath });
+    const result2 = await reflect({ dbPath, reflectModel: 'llama-test' });
     expect(result2.opinionsFormed).toBe(0);
     expect(result2.opinionsReinforced).toBe(1);
 
@@ -613,7 +613,7 @@ describe('reflect()', () => {
     // REFLECT_RESPONSE's belief/domain don't match the pre-existing opinion.
     vi.stubGlobal('fetch', mockOllamaFetch(REFLECT_RESPONSE));
 
-    const result = await reflect({ dbPath });
+    const result = await reflect({ dbPath, reflectModel: 'llama-test' });
     expect(result.opinionsFormed).toBe(1);
     expect(result.opinionsReinforced).toBe(0);
 
@@ -653,7 +653,7 @@ describe('reflect()', () => {
       ),
     );
 
-    const result = await reflect({ dbPath });
+    const result = await reflect({ dbPath, reflectModel: 'llama-test' });
     expect(result.observationsUpdated).toBe(1);
 
     const verify = new Database(dbPath);
@@ -701,7 +701,7 @@ describe('reflect()', () => {
       ),
     );
 
-    const result = await reflect({ dbPath });
+    const result = await reflect({ dbPath, reflectModel: 'llama-test' });
     // The refresh is silently skipped (observation not found), but the new observation counts
     expect(result.observationsUpdated).toBe(0);
     expect(result.observationsCreated).toBe(1);
@@ -722,7 +722,7 @@ describe('reflect()', () => {
       ),
     );
 
-    const result = await reflect({ dbPath });
+    const result = await reflect({ dbPath, reflectModel: 'llama-test' });
     // 0 insights with a full batch (>= minFactsThreshold) is a silent-failure
     // signal for monitoring purposes, even though the JSON parsed cleanly —
     // status is 'partial', not 'completed' (issue #17).
@@ -783,7 +783,7 @@ describe('reflect()', () => {
       ),
     );
 
-    const result = await reflect({ dbPath });
+    const result = await reflect({ dbPath, reflectModel: 'llama-test' });
     expect(result.opinionsReinforced).toBe(1);
 
     const verify = new Database(dbPath);
@@ -806,7 +806,7 @@ describe('reflect()', () => {
       await setupDb(dbPath, 10);
       vi.stubGlobal('fetch', mockOllamaFetch('this is not json at all'));
 
-      await reflect({ dbPath, batchSize: 10 });
+      await reflect({ dbPath, reflectModel: 'llama-test', batchSize: 10 });
 
       const db = new Database(dbPath);
       const hint = db
@@ -833,7 +833,7 @@ describe('reflect()', () => {
 
       vi.stubGlobal('fetch', mockOllamaFetch(REFLECT_RESPONSE));
 
-      await reflect({ dbPath }); // no explicit batchSize — should honor the hint
+      await reflect({ dbPath, reflectModel: 'llama-test' }); // no explicit batchSize — should honor the hint
 
       const verify = new Database(dbPath);
       const reflectedCount = verify
@@ -861,7 +861,7 @@ describe('reflect()', () => {
       vi.stubGlobal('fetch', mockOllamaFetch(REFLECT_RESPONSE));
 
       // Explicit override of 12 must win over the persisted hint of 5
-      await reflect({ dbPath, batchSize: 12 });
+      await reflect({ dbPath, reflectModel: 'llama-test', batchSize: 12 });
 
       const verify = new Database(dbPath);
       const reflectedCount = verify
@@ -886,7 +886,7 @@ describe('reflect()', () => {
 
       vi.stubGlobal('fetch', mockOllamaFetch(REFLECT_RESPONSE));
 
-      const result = await reflect({ dbPath });
+      const result = await reflect({ dbPath, reflectModel: 'llama-test' });
       expect(result.observationsCreated).toBeGreaterThan(0);
 
       const verify = new Database(dbPath);
@@ -906,7 +906,12 @@ describe('reflect()', () => {
       vi.stubGlobal('fetch', mockOllamaFetch('this is not json at all'));
 
       // floor(6/2) = 3, which is below minFactsThreshold (5) → clamp to 5
-      await reflect({ dbPath, batchSize: 6, minFactsThreshold: 5 });
+      await reflect({
+        dbPath,
+        reflectModel: 'llama-test',
+        batchSize: 6,
+        minFactsThreshold: 5,
+      });
 
       const db = new Database(dbPath);
       const hint = db
@@ -953,7 +958,11 @@ describe('reflect()', () => {
       });
 
       // Budget small enough that only a couple of the 500-char summaries fit
-      await reflect({ dbPath, existingContextCharBudget: 1200 });
+      await reflect({
+        dbPath,
+        reflectModel: 'llama-test',
+        existingContextCharBudget: 1200,
+      });
 
       // The most-recently-synthesized observation (obs-9) should always be
       // present under a most-recent-first ordering; an old one inserted
@@ -988,7 +997,11 @@ describe('reflect()', () => {
         } as unknown as Response;
       });
 
-      await reflect({ dbPath, existingContextCharBudget: 100 });
+      await reflect({
+        dbPath,
+        reflectModel: 'llama-test',
+        existingContextCharBudget: 100,
+      });
 
       expect(capturedPrompt).toContain('obs-huge');
     });
@@ -1000,7 +1013,7 @@ describe('reflect()', () => {
       await setupDb(dbPath, 5);
       vi.stubGlobal('fetch', mockOllamaFetch('this is not json at all'));
 
-      const result = await reflect({ dbPath });
+      const result = await reflect({ dbPath, reflectModel: 'llama-test' });
 
       const db = new Database(dbPath);
       const log = db
@@ -1019,7 +1032,7 @@ describe('reflect()', () => {
         throw new Error('fetch should not be called when threshold not met');
       });
 
-      const result = await reflect({ dbPath });
+      const result = await reflect({ dbPath, reflectModel: 'llama-test' });
 
       const db = new Database(dbPath);
       const log = db
@@ -1038,7 +1051,7 @@ describe('reflect()', () => {
       await setupDb(dbPath, 5);
       vi.stubGlobal('fetch', mockOllamaFetch(REFLECT_RESPONSE));
 
-      const result = await reflect({ dbPath });
+      const result = await reflect({ dbPath, reflectModel: 'llama-test' });
 
       const db = new Database(dbPath);
       const log = db

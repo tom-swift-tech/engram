@@ -62,6 +62,11 @@ import {
   VALID_STRATEGIES,
   type ParsedArgs,
 } from './cli-args.js';
+import {
+  resolveModelSpec,
+  preflightModel,
+  formatPreflightFailure,
+} from './model-resolver.js';
 
 // ─── Exit codes ──────────────────────────────────────────────────────────────
 
@@ -381,10 +386,14 @@ export async function runCli(
     return EXIT_ERROR;
   }
 
-  const engramOptions: EngramOptions = {
-    ...buildEngramOptions(args),
-    ...optionOverrides,
-  };
+  let engramOptions: EngramOptions;
+  try {
+    engramOptions = { ...buildEngramOptions(args), ...optionOverrides };
+  } catch (err) {
+    // e.g. --anthropic-api-key without --anthropic-model (no default model).
+    io.stderr(`engram: ${errMessage(err)}\n`);
+    return EXIT_ERROR;
+  }
 
   let engram: Engram;
   try {
@@ -399,7 +408,7 @@ export async function runCli(
   const json = args.bools.has('--json');
 
   try {
-    return await dispatch(args, engram, dbPath, io, json);
+    return await dispatch(args, engram, dbPath, io, json, engramOptions);
   } catch (err) {
     io.stderr(`engram: ${errMessage(err)}\n`);
     return EXIT_ERROR;
@@ -408,12 +417,55 @@ export async function runCli(
   }
 }
 
+/**
+ * Preflight the generation model for reflect/extract subcommands. Only the
+ * default Ollama path is preflighted: resolve the model (no default → error)
+ * and confirm the host actually serves it BEFORE running, so a misconfigured or
+ * unserved model exits non-zero here at startup rather than 404-ing mid-run.
+ * Skipped when the effective provider isn't Ollama's /api/tags surface — an
+ * injected generator (programmatic/test), Anthropic, or an OpenAI-compatible
+ * endpoint each validate on use instead.
+ */
+async function preflightGenerationModel(
+  args: ParsedArgs,
+  engramOptions: EngramOptions,
+  io: CliIO,
+): Promise<number> {
+  if (
+    engramOptions.generator ||
+    engramOptions.anthropicGeneration ||
+    engramOptions.generationEndpoint
+  ) {
+    return EXIT_OK;
+  }
+
+  let spec;
+  try {
+    spec = resolveModelSpec({
+      role: 'reflect',
+      explicitModel: args.values.get('--reflect-model'),
+      explicitHost: args.values.get('--ollama-url'),
+    });
+  } catch (err) {
+    io.stderr(`engram: ${errMessage(err)}\n`);
+    return EXIT_ERROR;
+  }
+
+  const pf = await preflightModel(spec);
+  if (!pf.ok) {
+    io.stderr(`engram: ${formatPreflightFailure(pf)}\n`);
+    return EXIT_ERROR;
+  }
+  return EXIT_OK;
+}
+
 async function dispatch(
   args: ParsedArgs,
   engram: Engram,
   dbPath: string,
   io: CliIO,
   json: boolean,
+  engramOptions: EngramOptions,
 ): Promise<number> {
   switch (args.command) {
     case 'retain': {
@@ -435,6 +487,8 @@ async function dispatch(
     }
 
     case 'reflect': {
+      const pf = await preflightGenerationModel(args, engramOptions, io);
+      if (pf !== EXIT_OK) return pf;
       const result = await engram.reflect();
       if (json) emitJson(io, result);
       else io.stdout(formatReflect(result));
@@ -442,6 +496,8 @@ async function dispatch(
     }
 
     case 'process-extractions': {
+      const pf = await preflightGenerationModel(args, engramOptions, io);
+      if (pf !== EXIT_OK) return pf;
       const batchSize = asNumber(args.values.get('--batch-size'));
       const result = await engram.processExtractions(
         batchSize !== undefined

@@ -303,7 +303,7 @@ describe('reflect() — prompt hardening', () => {
     await seedFacts(dbPath);
     const capture = captureReflectPrompt();
 
-    await reflect({ dbPath });
+    await reflect({ dbPath, reflectModel: 'llama-test' });
 
     const prompt = capture.prompt();
     expect(prompt).toContain('<untrusted_data>');
@@ -319,7 +319,7 @@ describe('reflect() — prompt hardening', () => {
     await seedFacts(dbPath, { reflect_mission: 'Focus on infrastructure.' });
     const capture = captureReflectPrompt();
 
-    await reflect({ dbPath });
+    await reflect({ dbPath, reflectModel: 'llama-test' });
 
     const prompt = capture.prompt();
     expect(prompt).toContain(
@@ -339,7 +339,7 @@ describe('reflect() — prompt hardening', () => {
     });
     const capture = captureReflectPrompt();
 
-    await reflect({ dbPath });
+    await reflect({ dbPath, reflectModel: 'llama-test' });
 
     const prompt = capture.prompt();
     expect(prompt).toContain('- Skepticism: 1 ');
@@ -353,7 +353,7 @@ describe('reflect() — prompt hardening', () => {
     await seedFacts(dbPath, { disposition: '{not valid json' });
     const capture = captureReflectPrompt();
 
-    const result = await reflect({ dbPath });
+    const result = await reflect({ dbPath, reflectModel: 'llama-test' });
 
     expect(result.status).toBe('completed');
     expect(capture.prompt()).toContain('- Skepticism: 0.5 ');

@@ -438,8 +438,16 @@ export function planConsolidation(
 export interface ConsolidationResult {
   extracted: { processed: number; failed: number } | null;
   reflected: Awaited<ReturnType<Engram['reflect']>> | null;
-  /** False if a connection-class error was seen (Ollama down/unconfigured). */
+  /** False if a connection-class error was seen (Ollama down/unreachable). */
   ollamaReachable: boolean;
+  /**
+   * A non-connection generation failure to surface once — e.g. no model
+   * configured (fail-loud UnconfiguredGeneration) or the host 404ing a model it
+   * doesn't serve. Distinct from `ollamaReachable` (a transient outage): this is
+   * a config error that won't fix itself, so the binding warns loudly rather
+   * than letting the extraction queue fill up silently.
+   */
+  generationError?: string;
 }
 
 /**
@@ -506,22 +514,26 @@ export async function runConsolidation(
   let ollamaReachable = true;
   let extracted: ConsolidationResult['extracted'] = null;
   let reflected: ConsolidationResult['reflected'] = null;
+  let generationError: string | undefined;
 
   if (plan.extract) {
     extracted = await engram.processExtractions(config.extractBatchSize);
-    if (extracted.failed > 0 && isConnectionError(latestQueueError(engram))) {
-      ollamaReachable = false;
+    if (extracted.failed > 0) {
+      const qerr = latestQueueError(engram);
+      if (isConnectionError(qerr)) ollamaReachable = false;
+      else if (qerr) generationError = qerr;
     }
   }
 
   if (plan.reflect && ollamaReachable) {
     reflected = await engram.reflect();
-    if (reflected.status === 'failed' && isConnectionError(reflected.error)) {
-      ollamaReachable = false;
+    if (reflected.status === 'failed') {
+      if (isConnectionError(reflected.error)) ollamaReachable = false;
+      else if (reflected.error) generationError = reflected.error;
     }
   }
 
-  return { extracted, reflected, ollamaReachable };
+  return { extracted, reflected, ollamaReachable, generationError };
 }
 
 // =============================================================================

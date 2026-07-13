@@ -20,6 +20,12 @@ import {
 import { Engram, DEFAULT_OLLAMA_URL } from './engram.js';
 import { ENGRAM_TOOLS, createEngramToolHandler } from './mcp-tools.js';
 import type { EngramToolName } from './mcp-tools.js';
+import {
+  resolveModelSpecOrNull,
+  preflightModel,
+  formatPreflightFailure,
+  type ModelSpec,
+} from './model-resolver.js';
 
 // ─── CLI Args ───────────────────────────────────────────────────────────────
 
@@ -37,7 +43,7 @@ if (!dbPath) {
     '  --use-ollama-embeddings     Use Ollama for embeddings instead of local Transformers.js',
   );
   console.error(
-    '  --reflect-model <model>     LLM for extraction + reflection (default: llama3.1:8b)',
+    '  --reflect-model <model>     LLM for extraction + reflection (or ENGRAM_MODEL; no default)',
   );
   console.error(
     '  --generation-endpoint <url> OpenAI-compatible endpoint for generation',
@@ -52,7 +58,7 @@ if (!dbPath) {
     '  --anthropic-api-key <key>   Anthropic API key (uses Claude for generation)',
   );
   console.error(
-    '  --anthropic-model <model>   Anthropic model (default: claude-haiku-4-5-20251001)',
+    '  --anthropic-model <model>   Anthropic model (required with --anthropic-api-key)',
   );
   process.exit(1);
 }
@@ -64,7 +70,6 @@ function getArg(flag: string): string | undefined {
 
 const ollamaUrl = getArg('--ollama-url') ?? DEFAULT_OLLAMA_URL;
 const useOllamaEmbeddings = args.includes('--use-ollama-embeddings');
-const reflectModel = getArg('--reflect-model') ?? 'llama3.1:8b';
 const generationEndpointUrl = getArg('--generation-endpoint');
 const generationModel = getArg('--generation-model');
 const generationApiKey = getArg('--generation-api-key');
@@ -77,10 +82,19 @@ async function main() {
   const engramOptions: Parameters<typeof Engram.open>[1] = {
     ollamaUrl,
     useOllamaEmbeddings,
-    reflectModel,
   };
 
+  // Ollama-model spec (resolved once) — kept for the startup preflight below.
+  // Only meaningful on the default Ollama path.
+  let ollamaSpec: ModelSpec | null = null;
+
   if (anthropicApiKey) {
+    if (!anthropicModel || !anthropicModel.trim()) {
+      console.error(
+        'engram-mcp: --anthropic-api-key requires --anthropic-model — no default model.',
+      );
+      process.exit(1);
+    }
     engramOptions.anthropicGeneration = {
       apiKey: anthropicApiKey,
       model: anthropicModel,
@@ -91,6 +105,36 @@ async function main() {
       model: generationModel,
       apiKey: generationApiKey,
     };
+  } else {
+    // Ollama path: choose the model through the single resolver (no default).
+    // Leave reflectModel unset when unconfigured — the engram opens with a
+    // fail-loud UnconfiguredGeneration, so retain/recall still serve and only
+    // reflect/extract error. We surface the state loudly at startup below.
+    ollamaSpec = resolveModelSpecOrNull({
+      role: 'reflect',
+      explicitModel: getArg('--reflect-model'),
+      explicitHost: getArg('--ollama-url'),
+    });
+    if (ollamaSpec) engramOptions.reflectModel = ollamaSpec.model;
+  }
+
+  // Startup preflight (Ollama path only). The server is long-lived and may only
+  // ever serve retain/recall, so a preflight failure WARNS loudly rather than
+  // exiting — but it is never silent, and reflect/extract will still fail loud
+  // on use if the model is missing/unserved.
+  if (ollamaSpec) {
+    const pf = await preflightModel(ollamaSpec);
+    if (!pf.ok) {
+      console.error(`engram-mcp: ${formatPreflightFailure(pf)}`);
+      console.error(
+        'engram-mcp: retain/recall will work; reflect/extract will fail until the model is served.',
+      );
+    }
+  } else if (!anthropicApiKey && !(generationEndpointUrl && generationModel)) {
+    console.error(
+      'engram-mcp: no generation model configured (set --reflect-model or ENGRAM_MODEL). ' +
+        'retain/recall work; reflect/extract are disabled until a model is set.',
+    );
   }
 
   const engram = await Engram.open(dbPath!, engramOptions);

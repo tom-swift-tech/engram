@@ -52,7 +52,7 @@ import type {
   ExtensionCommandContext,
   ExtensionContext,
 } from '@earendil-works/pi-coding-agent';
-import { Engram } from 'engram';
+import { Engram, resolveModelSpecOrNull } from 'engram';
 
 import {
   remember,
@@ -154,6 +154,7 @@ let schedulingConfig: SchedulingConfig = {
 let turnCounter = 0;
 let consolidationInFlight = false;
 let ollamaWarned = false;
+let generationErrorWarned = false;
 // Holds the most recent detached consolidation promise purely so tests can
 // await it deterministically (production never reads this).
 let pendingConsolidation: Promise<void> | null = null;
@@ -162,6 +163,7 @@ function resetSchedulingState(): void {
   turnCounter = 0;
   consolidationInFlight = false;
   ollamaWarned = false;
+  generationErrorWarned = false;
   pendingConsolidation = null;
 }
 
@@ -248,7 +250,22 @@ let startupRecallConfig: StartupRecallConfig = {
 // without paying the LocalEmbedder model download. Production never touches
 // this; the only setter is the test-only export below, prefixed `_`.
 type EngineFactory = (path: string) => Promise<Engram>;
-let engineFactory: EngineFactory = (path) => Engram.open(path);
+
+/**
+ * Default (production) engine factory. Resolves the background-consolidation
+ * model through the single resolver (role: integration) from env — no silent
+ * default. When no model is configured, `reflectModel` is left unset and the
+ * engram opens with a fail-loud UnconfiguredGeneration: retain/recall and
+ * startup-recall still work, but background extract/reflect surfaces a loud
+ * once-per-session warning (see scheduleConsolidation) instead of 404ing on a
+ * default model the host may not serve.
+ */
+function openWithResolvedModel(path: string): Promise<Engram> {
+  const spec = resolveModelSpecOrNull({ role: 'integration', env: process.env });
+  return Engram.open(path, spec ? { reflectModel: spec.model } : {});
+}
+
+let engineFactory: EngineFactory = openWithResolvedModel;
 
 /**
  * Lazy Engram opener. Called on first command/tool invocation. Reuses the
@@ -311,7 +328,7 @@ export function _resetEngineFactoryForTesting(): void {
     maxChars: DEFAULT_STARTUP_RECALL_CONFIG.maxChars,
     topK: DEFAULT_STARTUP_RECALL_CONFIG.topK,
   };
-  engineFactory = (path) => Engram.open(path);
+  engineFactory = openWithResolvedModel;
 }
 
 /** Test-only: shrink the cadence so a test can trigger cycles in a few turns. */
@@ -435,6 +452,19 @@ function scheduleConsolidation(ctx: ExtensionContext): void {
       if (!result.ollamaReachable && !ollamaWarned) {
         ollamaWarned = true;
         notifyOrLog(ctx, OLLAMA_DOWN_MESSAGE, 'warning');
+      }
+      // A config-class generation failure (no model configured, or the host
+      // 404ing a model it doesn't serve) won't fix itself — surface it loudly
+      // once rather than let the extraction queue fill silently. This is the
+      // integration-side guard against the silent-model-fallback class of bug.
+      if (result.generationError && !generationErrorWarned) {
+        generationErrorWarned = true;
+        notifyOrLog(
+          ctx,
+          `Engram: background consolidation cannot generate — ${result.generationError} ` +
+            `(set ENGRAM_MODEL / ENGRAM_INTEGRATION_MODEL to a model your Ollama host serves).`,
+          'warning',
+        );
       }
     } catch (err) {
       // Background work must never surface as a turn failure.

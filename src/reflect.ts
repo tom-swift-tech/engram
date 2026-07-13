@@ -21,6 +21,11 @@ import {
   DEFAULT_OLLAMA_URL,
   type GenerationProvider,
 } from './generation.js';
+import {
+  resolveModelSpec,
+  preflightModel,
+  formatPreflightFailure,
+} from './model-resolver.js';
 
 // =============================================================================
 // Types
@@ -31,9 +36,12 @@ export interface ReflectConfig {
   dbPath: string;
   /** Generation provider for reflection. If not set, falls back to Ollama. */
   generator?: GenerationProvider;
-  /** Ollama endpoint — used only if generator is not set (backward compat) */
+  /** Ollama endpoint — used only when building an Ollama generator from reflectModel */
   ollamaUrl?: string;
-  /** Ollama model — used only if generator is not set (backward compat) */
+  /**
+   * Ollama model — used only if `generator` is not set. NO default: if neither
+   * `generator` nor `reflectModel` is provided, reflect() throws.
+   */
   reflectModel?: string;
   /** Max unreflected facts to process per cycle (default: 50) */
   batchSize?: number;
@@ -510,15 +518,27 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
   const {
     dbPath,
     ollamaUrl = DEFAULT_OLLAMA_URL,
-    reflectModel = 'llama3.1:8b',
+    reflectModel,
     batchSize: configuredBatchSize = 50,
     minFactsThreshold = 5,
     existingContextCharBudget = DEFAULT_EXISTING_CONTEXT_CHAR_BUDGET,
   } = config;
 
-  const generator =
-    config.generator ??
-    new OllamaGeneration({ url: ollamaUrl, model: reflectModel });
+  // No default model. Use an injected generator, or build an Ollama generator
+  // only when a model is explicitly configured; otherwise fail loud rather than
+  // reflect against a default that may not be served.
+  let generator: GenerationProvider;
+  if (config.generator) {
+    generator = config.generator;
+  } else if (reflectModel && reflectModel.trim()) {
+    generator = new OllamaGeneration({ url: ollamaUrl, model: reflectModel });
+  } else {
+    throw new Error(
+      'reflect() requires a generator or an explicit reflectModel — ' +
+        'the library applies no default model. ' +
+        'Resolve one via model-resolver.ts (ENGRAM_REFLECT_MODEL / ENGRAM_MODEL).',
+    );
+  }
 
   // Separate connection from the main Engram instance so reflect's long-running
   // read doesn't hold the instance's connection busy. Writes (updating reflected_at,
@@ -1014,12 +1034,34 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
     process.exit(1);
   }
 
-  const ollamaUrl = process.env.OLLAMA_URL || 'http://localhost:11434';
-  const model = process.env.REFLECT_MODEL || 'llama3.1:8b';
+  // Resolve the model from config (no default) and preflight it against the
+  // host BEFORE running — a misconfigured/unserved model halts here at startup
+  // with the served-model list, never 404s silently mid-cycle.
+  let spec;
+  try {
+    spec = resolveModelSpec({
+      role: 'reflect',
+      env: process.env,
+      explicitModel: process.env.REFLECT_MODEL,
+      explicitHost: process.env.OLLAMA_URL,
+    });
+  } catch (err) {
+    console.error(`[Reflect] ${err instanceof Error ? err.message : err}`);
+    process.exit(1);
+  }
 
-  console.log(`[Reflect] Manual run: ${dbPath} via ${model} @ ${ollamaUrl}`);
+  const preflight = await preflightModel(spec);
+  if (!preflight.ok) {
+    console.error(`[Reflect] ${formatPreflightFailure(preflight)}`);
+    process.exit(1);
+  }
 
-  reflect({ dbPath, ollamaUrl, reflectModel: model })
+  console.log(
+    `[Reflect] Manual run: ${dbPath} via ${spec.model} @ ${spec.host}` +
+      (spec.isRemote ? ' [remote/:cloud]' : ''),
+  );
+
+  reflect({ dbPath, ollamaUrl: spec.host, reflectModel: spec.model })
     .then((result) => {
       console.log('[Reflect] Result:', JSON.stringify(result, null, 2));
       process.exit(result.status === 'completed' ? 0 : 1);

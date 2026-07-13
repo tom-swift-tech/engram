@@ -18,6 +18,8 @@ const myAgent = await Engram.create('./myAgent.engram', {
   reflectMission: 'Focus on architecture preferences, project patterns, and infrastructure decisions.',
   retainMission: 'Prioritize technical decisions, code patterns, and project context. Ignore greetings.',
   ollamaUrl: 'http://localhost:11434',
+  // Model is required for extraction/reflection — no library default.
+  reflectModel: 'llama3.1:8b',
 });
 
 console.log('Engram initialized. Storing memories...\n');
