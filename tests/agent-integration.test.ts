@@ -109,6 +109,7 @@ describe('Agent Integration — multi-topic conversation lifecycle', () => {
     dbPath = tmpDbPath();
     engram = await Engram.create(dbPath, {
       embedder,
+      reflectModel: 'llama-test',
       reflectMission:
         'Focus on infrastructure decisions, deployment patterns, and performance optimization.',
       retainMission:
@@ -306,7 +307,10 @@ describe('Agent Integration — multi-topic conversation lifecycle', () => {
 
     vi.stubGlobal('fetch', mockOllamaFetch(REFLECT_K8S));
 
-    engram = await Engram.open(dbPath, { embedder });
+    engram = await Engram.open(dbPath, {
+      embedder,
+      reflectModel: 'llama-test',
+    });
     const result = await engram.reflect();
 
     expect(result.status).toBe('completed');

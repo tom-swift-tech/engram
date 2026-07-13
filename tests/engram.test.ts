@@ -116,7 +116,10 @@ describe('Engram', () => {
 
   it('processExtractions() drains the queue via Ollama', async () => {
     dbPath = tmpDbPath();
-    engram = await Engram.create(dbPath, { embedder: new MockEmbedder() });
+    engram = await Engram.create(dbPath, {
+      embedder: new MockEmbedder(),
+      reflectModel: 'llama-test',
+    });
 
     // Dispatch fetch based on endpoint
     vi.stubGlobal('fetch', async (url: string | URL | Request) => {
@@ -162,7 +165,9 @@ describe('Engram', () => {
     engram = undefined;
 
     vi.stubGlobal('fetch', mockOllamaFetch(REFLECT_RESPONSE));
-    const result = await (await Engram.open(dbPath, { embedder })).reflect();
+    const result = await (
+      await Engram.open(dbPath, { embedder, reflectModel: 'llama-test' })
+    ).reflect();
     expect(result.status).toBe('completed');
     expect(result.factsProcessed).toBe(5);
   });

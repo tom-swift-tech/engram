@@ -15,6 +15,7 @@
 
 import type { EngramOptions } from './engram.js';
 import { DEFAULT_OLLAMA_URL } from './engram.js';
+import { resolveModelSpecOrNull } from './model-resolver.js';
 
 // ─── Validation / clamp helpers (mirror mcp-tools.ts) ────────────────────────
 
@@ -194,7 +195,6 @@ export function buildEngramOptions(args: ParsedArgs): EngramOptions {
   const opts: EngramOptions = {
     ollamaUrl: args.values.get('--ollama-url') ?? DEFAULT_OLLAMA_URL,
     useOllamaEmbeddings: args.bools.has('--use-ollama-embeddings'),
-    reflectModel: args.values.get('--reflect-model') ?? 'llama3.1:8b',
   };
 
   const anthropicApiKey = args.values.get('--anthropic-api-key');
@@ -204,6 +204,11 @@ export function buildEngramOptions(args: ParsedArgs): EngramOptions {
   const generationApiKey = args.values.get('--generation-api-key');
 
   if (anthropicApiKey) {
+    if (!anthropicModel || !anthropicModel.trim()) {
+      throw new Error(
+        '--anthropic-api-key requires --anthropic-model — no default model.',
+      );
+    }
     opts.anthropicGeneration = {
       apiKey: anthropicApiKey,
       model: anthropicModel,
@@ -214,6 +219,18 @@ export function buildEngramOptions(args: ParsedArgs): EngramOptions {
       model: generationModel,
       apiKey: generationApiKey,
     };
+  } else {
+    // Ollama path: choose the model through the single resolver (no literal
+    // default here). When nothing is configured, leave reflectModel unset —
+    // Engram.open then installs the fail-loud UnconfiguredGeneration, so
+    // retain/recall still work and only reflect/extract error out. Generation
+    // subcommands (reflect / process-extractions) additionally preflight.
+    const spec = resolveModelSpecOrNull({
+      role: 'reflect',
+      explicitModel: args.values.get('--reflect-model'),
+      explicitHost: args.values.get('--ollama-url'),
+    });
+    if (spec) opts.reflectModel = spec.model;
   }
 
   return opts;

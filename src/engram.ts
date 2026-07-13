@@ -75,6 +75,7 @@ import {
   OllamaGeneration,
   OpenAICompatibleGeneration,
   AnthropicGeneration,
+  UnconfiguredGeneration,
   DEFAULT_OLLAMA_URL,
   type GenerationProvider,
   type GenerationOptions,
@@ -141,12 +142,29 @@ export {
   OllamaGeneration,
   OpenAICompatibleGeneration,
   AnthropicGeneration,
+  UnconfiguredGeneration,
   parseTemporalQuery,
   DEFAULT_OLLAMA_URL,
   DEFAULT_SOURCE_TIERS,
   DEFAULT_MEMORY_TYPE_RANK,
 };
 export type { TemporalRange, ChunkOptions };
+
+// Model selection + preflight — the single surface for choosing a generation
+// model. Re-exported so harness adapters (Pi, OpenClaw) resolve the same way.
+export {
+  resolveModelSpec,
+  resolveModelSpecOrNull,
+  preflightModel,
+  formatPreflightFailure,
+  isModelServed,
+} from './model-resolver.js';
+export type {
+  ModelRole,
+  ModelSpec,
+  ResolveModelInput,
+  PreflightResult,
+} from './model-resolver.js';
 
 export interface EngramOptions {
   /** Mission for the reflection engine: what to focus on during synthesis */
@@ -165,7 +183,12 @@ export interface EngramOptions {
   embedModel?: string;
   /** Embedding dimensions (default: 768 for nomic-embed-text) */
   embedDimensions?: number;
-  /** LLM for extraction + reflection (default: llama3.1:8b) */
+  /**
+   * LLM for extraction + reflection. NO default — if omitted (and no
+   * `generator`/`anthropicGeneration`/`generationEndpoint` is given), the
+   * engram opens with a fail-loud `UnconfiguredGeneration`: retain/recall work,
+   * but the first reflect()/extract() throws. Resolve via model-resolver.ts.
+   */
   reflectModel?: string;
   /** Override the embedding provider — useful for testing without Ollama */
   embedder?: EmbeddingProvider;
@@ -179,10 +202,10 @@ export interface EngramOptions {
     model: string;
     apiKey?: string;
   };
-  /** Shorthand: use Anthropic API for generation */
+  /** Shorthand: use Anthropic API for generation. Model is required (no default). */
   anthropicGeneration?: {
     apiKey: string;
-    model?: string;
+    model: string;
   };
 }
 
@@ -220,7 +243,7 @@ export class Engram {
       ollamaUrl = DEFAULT_OLLAMA_URL,
       embedModel,
       embedDimensions,
-      reflectModel = 'llama3.1:8b',
+      reflectModel,
       embedder: injectedEmbedder,
       useOllamaEmbeddings = false,
       generator: injectedGenerator,
@@ -423,7 +446,9 @@ export class Engram {
     // 1. Injected generator — caller controls everything (tests, custom providers)
     // 2. Anthropic generation — direct API
     // 3. OpenAI-compatible endpoint — OpenRouter, Herd, vLLM, etc.
-    // 4. Ollama generation — default, uses ollamaUrl + reflectModel
+    // 4. Ollama generation — ONLY when a model is configured (no default)
+    // 5. Unconfigured — fail-loud placeholder; retain/recall still work, but
+    //    reflect()/extract() throw. No silent fallback to a default model.
     let generator: GenerationProvider;
     if (injectedGenerator) {
       generator = injectedGenerator;
@@ -438,8 +463,10 @@ export class Engram {
         options.generationEndpoint.model,
         options.generationEndpoint.apiKey,
       );
-    } else {
+    } else if (reflectModel && reflectModel.trim()) {
       generator = new OllamaGeneration({ url: ollamaUrl, model: reflectModel });
+    } else {
+      generator = new UnconfiguredGeneration();
     }
 
     // Validate embedding dimensions against existing data.

@@ -45,9 +45,19 @@ export class OllamaGeneration implements GenerationProvider {
   private url: string;
   private model: string;
 
-  constructor(options?: { url?: string; model?: string }) {
-    this.url = options?.url ?? DEFAULT_OLLAMA_URL; // exported above
-    this.model = options?.model ?? 'llama3.1:8b';
+  constructor(options: { url?: string; model: string }) {
+    // Model is REQUIRED. The library applies no default model name: an unset
+    // model must be un-runnable, not quietly-runnable on the wrong thing.
+    // Choose the model via model-resolver.ts before constructing this.
+    if (!options?.model || !options.model.trim()) {
+      throw new Error(
+        'OllamaGeneration requires an explicit, non-empty model name. ' +
+          'The library no longer falls back to a default model — ' +
+          'resolve one via model-resolver.ts (ENGRAM_<ROLE>_MODEL / ENGRAM_MODEL).',
+      );
+    }
+    this.url = options.url ?? DEFAULT_OLLAMA_URL; // exported above
+    this.model = options.model;
     this.name = `ollama/${this.model}`;
   }
 
@@ -166,9 +176,16 @@ export class AnthropicGeneration implements GenerationProvider {
   private apiKey: string;
   private model: string;
 
-  constructor(apiKey: string, model?: string) {
+  constructor(apiKey: string, model: string) {
+    // Model is REQUIRED — same rule as OllamaGeneration. No hardcoded default.
+    if (!model || !model.trim()) {
+      throw new Error(
+        'AnthropicGeneration requires an explicit, non-empty model name. ' +
+          'The library no longer falls back to a default model.',
+      );
+    }
     this.apiKey = apiKey;
-    this.model = model ?? 'claude-haiku-4-5-20251001';
+    this.model = model;
     this.name = `anthropic/${this.model}`;
   }
 
@@ -202,5 +219,34 @@ export class AnthropicGeneration implements GenerationProvider {
       content?: Array<{ text: string }>;
     };
     return data.content?.[0]?.text ?? '';
+  }
+}
+
+// =============================================================================
+// UnconfiguredGeneration — fail-loud placeholder
+// =============================================================================
+
+/**
+ * A generator that carries no model and refuses to run.
+ *
+ * Installed by `Engram.open` when no generator/model is configured. It exists
+ * so that an Engram can still retain/recall with zero generation config (those
+ * paths never touch the generator), while the FIRST reflect()/extract() call on
+ * an unconfigured engram fails loudly — which, for a background/cron generation
+ * job, is that job's startup. This is the deliberate inverse of a silent
+ * default: it can never run generation on the wrong model, because it runs on
+ * no model at all.
+ */
+export class UnconfiguredGeneration implements GenerationProvider {
+  readonly name = 'unconfigured';
+
+  async generate(): Promise<string> {
+    throw new Error(
+      'No generation model is configured for this Engram. ' +
+        'reflect() and entity extraction require a model — pass reflectModel, ' +
+        'generator, anthropicGeneration, or generationEndpoint to Engram.open(), ' +
+        'or set ENGRAM_MODEL / ENGRAM_<ROLE>_MODEL. ' +
+        'The library applies no default model.',
+    );
   }
 }

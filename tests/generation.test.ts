@@ -3,6 +3,7 @@ import {
   OllamaGeneration,
   OpenAICompatibleGeneration,
   AnthropicGeneration,
+  UnconfiguredGeneration,
 } from '../src/generation.js';
 
 // ---------------------------------------------------------------------------
@@ -40,14 +41,14 @@ afterEach(() => {
 
 describe('OllamaGeneration', () => {
   it('has correct name', () => {
-    const gen = new OllamaGeneration();
+    const gen = new OllamaGeneration({ model: 'llama3.1:8b' });
     expect(gen.name).toBe('ollama/llama3.1:8b');
   });
 
   it('sends correct URL and payload, returns data.response', async () => {
     const calls = mockFetch({ response: 'hello world' });
 
-    const gen = new OllamaGeneration();
+    const gen = new OllamaGeneration({ model: 'llama3.1:8b' });
     const result = await gen.generate('test prompt');
 
     expect(result).toBe('hello world');
@@ -65,7 +66,7 @@ describe('OllamaGeneration', () => {
   it('includes format: json when jsonMode is true', async () => {
     const calls = mockFetch({ response: '{}' });
 
-    const gen = new OllamaGeneration();
+    const gen = new OllamaGeneration({ model: 'llama3.1:8b' });
     await gen.generate('test', { jsonMode: true });
 
     const body = JSON.parse(calls[0].init.body as string);
@@ -75,7 +76,7 @@ describe('OllamaGeneration', () => {
   it('throws on non-ok response', async () => {
     mockFetch({ error: 'bad' }, false, 500);
 
-    const gen = new OllamaGeneration();
+    const gen = new OllamaGeneration({ model: 'llama3.1:8b' });
     await expect(gen.generate('test')).rejects.toThrow(
       'Ollama generation failed (500)',
     );
@@ -166,7 +167,10 @@ describe('OpenAICompatibleGeneration', () => {
 
 describe('AnthropicGeneration', () => {
   it('has correct name', () => {
-    const gen = new AnthropicGeneration('sk-ant-test');
+    const gen = new AnthropicGeneration(
+      'sk-ant-test',
+      'claude-haiku-4-5-20251001',
+    );
     expect(gen.name).toBe('anthropic/claude-haiku-4-5-20251001');
   });
 
@@ -203,9 +207,56 @@ describe('AnthropicGeneration', () => {
   it('throws on non-ok response', async () => {
     mockFetch({ error: 'bad' }, false, 429);
 
-    const gen = new AnthropicGeneration('sk-ant-test');
+    const gen = new AnthropicGeneration(
+      'sk-ant-test',
+      'claude-haiku-4-5-20251001',
+    );
     await expect(gen.generate('test')).rejects.toThrow(
       'Anthropic generation failed (429)',
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Required-model contract — no silent default anywhere in the library
+// ---------------------------------------------------------------------------
+
+describe('required-model contract', () => {
+  it('OllamaGeneration throws when model is omitted', () => {
+    // @ts-expect-error — model is required; this is the runtime guard.
+    expect(() => new OllamaGeneration({})).toThrow(/requires an explicit/i);
+  });
+
+  it('OllamaGeneration throws when model is empty/whitespace', () => {
+    expect(() => new OllamaGeneration({ model: '  ' })).toThrow(
+      /requires an explicit/i,
+    );
+  });
+
+  it('AnthropicGeneration throws when model is empty', () => {
+    expect(() => new AnthropicGeneration('sk-ant-test', '')).toThrow(
+      /requires an explicit/i,
+    );
+  });
+
+  it('no generation class falls back to a hardcoded default model name', () => {
+    // Guards against reintroducing a `?? 'llama3.1:8b'`-style default: an
+    // unset model must fail, never silently pick a name.
+    expect(() => new OllamaGeneration({ model: '' })).toThrow();
+    // @ts-expect-error — exercising the missing-arg runtime guard.
+    expect(() => new AnthropicGeneration('sk-ant-test')).toThrow();
+  });
+});
+
+describe('UnconfiguredGeneration', () => {
+  it('reports an "unconfigured" name', () => {
+    expect(new UnconfiguredGeneration().name).toBe('unconfigured');
+  });
+
+  it('throws loudly on generate() — never runs on a default', async () => {
+    const gen = new UnconfiguredGeneration();
+    await expect(gen.generate()).rejects.toThrow(
+      /No generation model is configured/i,
     );
   });
 });
