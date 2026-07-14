@@ -144,6 +144,15 @@ npx mcporter call engram.engram_requeue_failed errorLike="fetch failed"
 
 Failed is a terminal state — after 3 attempts an item never retries on its own. Once the underlying cause is fixed (LLM host back online, missing model pulled), call this to reset failed items to pending with a fresh attempt counter. Optional `errorLike` substring targets one failure class from the `failed_reasons` breakdown. Returns `{"requeued": <count>}`. Items whose chunk was forgotten are skipped.
 
+### Introspect held state — `engram_introspect`
+
+```bash
+npx mcporter call engram.engram_introspect subject="kubernetes"
+npx mcporter call engram.engram_introspect                       # top held state overall
+```
+
+Read what the agent currently *believes* about a subject, not what chunks mention it. Returns `{"subject": ..., "opinions": [...], "observations": [...]}`. Each opinion carries `belief`, `confidence`, `domain`, `supportCount`/`challengeCount`, the `supportingChunks`/`contradictingChunks` provenance ids, `evidenceCount`, and lifecycle timestamps (`formedAt`, `lastReinforced`, `lastChallenged`). Unlike `engram_recall`, this is a **direct lookup with no confidence floor** — a weakly-held or freshly-challenged belief (which recall hides at `confidence < 0.5`) stays visible, which is exactly what you want when reasoning about your own beliefs. Optional `minConfidence` (default 0), `limit` (default 20), `includeOpinions`/`includeObservations`. It **reports** held state; it does not judge whether a candidate statement agrees with or contradicts a belief (that consistency check is a separate, deferred primitive). Read-only, no LLM call.
+
 ### Embed text — `engram_embed`
 
 ```bash

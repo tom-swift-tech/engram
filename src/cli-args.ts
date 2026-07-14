@@ -78,6 +78,7 @@ export const CLI_COMMANDS = [
   'session',
   'queue-stats',
   'requeue-failed',
+  'introspect',
   'embed',
   'context-commit',
   'context-query',

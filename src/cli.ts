@@ -46,6 +46,7 @@ import type {
   TaskScope,
   TokenBudget,
   ContextSlice,
+  IntrospectResult,
 } from './engram.js';
 import type { QueueStats } from './retain.js';
 import {
@@ -255,6 +256,22 @@ function formatQueueStats(s: QueueStats): string {
   return out;
 }
 
+function formatIntrospect(r: IntrospectResult): string {
+  const subj = r.subject ? ` about "${r.subject}"` : ' (top held state)';
+  let out = `held state${subj}: ${r.opinions.length} opinion(s), ${r.observations.length} observation(s)\n`;
+  for (const o of r.opinions) {
+    const dom = o.domain ? ` [${o.domain}]` : '';
+    out +=
+      `  opinion ${o.id}${dom} conf=${o.confidence.toFixed(2)} ` +
+      `support=${o.supportCount} challenge=${o.challengeCount}: ${o.belief}\n`;
+  }
+  for (const o of r.observations) {
+    const dom = o.domain ? ` [${o.domain}]` : '';
+    out += `  observation ${o.id}${dom} refreshes=${o.refreshCount}: ${o.summary}\n`;
+  }
+  return out;
+}
+
 // ─── Misc helpers ─────────────────────────────────────────────────────────────
 
 /**
@@ -298,6 +315,10 @@ Commands:
   queue-stats                      Extraction queue health
   requeue-failed                   Re-queue failed extractions for retry
                                    (--error-like <substring> to filter)
+  introspect [subject]             Held state: opinions + observations about a
+                                   subject (subject from stdin if omitted; omit
+                                   entirely for top held state). No confidence
+                                   floor — weakly-held beliefs stay visible.
   embed <text>                     Embed text in the bank's vector space
                                    (text from stdin if omitted)
   context-commit <json>            Commit a task-scoped DecisionArtifact
@@ -344,6 +365,11 @@ session options:
 
 process-extractions options:
   --batch-size <n>
+
+introspect options:
+  --min-confidence <0..1>          Opinion confidence floor (default 0 — none)
+  --limit <n>                      Max opinions and observations, each (default 20)
+  --no-opinions  --no-observations
 
 embed options:
   --mode <query|document>          query applies the search prefix for
@@ -619,6 +645,23 @@ async function dispatch(
       });
       if (json) emitJson(io, result);
       else io.stdout(`requeued ${result.requeued} failed item(s)\n`);
+      return EXIT_OK;
+    }
+
+    case 'introspect': {
+      // Subject is optional — an empty subject means "top held state overall".
+      const subject = (await resolveText(args.positionals[0], io)) || undefined;
+      const limit = asNumber(args.values.get('--limit'));
+      const result = engram.introspect(subject, {
+        minConfidence: asNumber(args.values.get('--min-confidence')),
+        limit: limit !== undefined ? Math.max(1, Math.floor(limit)) : undefined,
+        includeOpinions: args.bools.has('--no-opinions') ? false : undefined,
+        includeObservations: args.bools.has('--no-observations')
+          ? false
+          : undefined,
+      });
+      if (json) emitJson(io, result);
+      else io.stdout(formatIntrospect(result));
       return EXIT_OK;
     }
 

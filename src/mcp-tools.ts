@@ -309,6 +309,40 @@ export const ENGRAM_TOOLS = [
   },
 
   {
+    name: 'engram_introspect' as const,
+    description:
+      'Introspect held state: return current opinions (beliefs with confidence + support/challenge evidence + lifecycle timestamps) and synthesized observations about a subject. This is a direct structured lookup, NOT query-ranked recall — there is no confidence floor, so weakly-held or freshly-challenged beliefs stay visible (exactly the ones recall hides). Projection only: it REPORTS held state and does not judge whether a statement agrees with or contradicts a belief (that consistency check is a separate, deferred primitive). Omit subject to return top held state overall.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        subject: {
+          type: 'string',
+          description:
+            'Subject to introspect — lexical match across belief/domain (opinions) and summary/topic (observations). Omit for top held state overall.',
+        },
+        minConfidence: {
+          type: 'number',
+          description:
+            'Optional confidence floor for opinions (0.0–1.0). Default 0 — no floor, so low-confidence beliefs remain visible.',
+        },
+        limit: {
+          type: 'number',
+          description:
+            'Max opinions and observations to return, each (default 20).',
+        },
+        includeOpinions: {
+          type: 'boolean',
+          description: 'Include opinions (default true).',
+        },
+        includeObservations: {
+          type: 'boolean',
+          description: 'Include observations (default true).',
+        },
+      },
+    },
+  },
+
+  {
     name: 'engram_embed' as const,
     description:
       'Embed text into the bank\'s native vector space. mode="query" applies the query prefix for asymmetric models like nomic-embed-text (better recall quality for search probes); mode="document" matches how retain() stores text. Used by engram-aql for AQL LIKE/PATTERN vector search so Rust can obtain a model-compatible query vector without reproducing the embedding pipeline.',
@@ -737,6 +771,32 @@ export function createEngramToolHandler(engram: Engram) {
           });
           return {
             content: [{ type: 'text', text: JSON.stringify(result) }],
+          };
+        }
+
+        case 'engram_introspect': {
+          const subject =
+            typeof input.subject === 'string' ? input.subject : undefined;
+          const result = engram.introspect(subject, {
+            minConfidence:
+              typeof input.minConfidence === 'number'
+                ? input.minConfidence
+                : undefined,
+            limit:
+              typeof input.limit === 'number'
+                ? Math.max(1, Math.floor(input.limit))
+                : undefined,
+            includeOpinions:
+              typeof input.includeOpinions === 'boolean'
+                ? input.includeOpinions
+                : undefined,
+            includeObservations:
+              typeof input.includeObservations === 'boolean'
+                ? input.includeObservations
+                : undefined,
+          });
+          return {
+            content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
           };
         }
 
