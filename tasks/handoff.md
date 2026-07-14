@@ -61,13 +61,10 @@ base = `main@5cf29bf` — resolve the SHA at spawn time):
 | **D2+D4** | `src/reflect.ts`, `tests/reflect.test.ts` | D2: `findMatchingObservation` mirroring `findMatchingOpinion`, route new obs into the `observation_refreshes` seam, lexical (no schema change). D4: durability rubric in the reflect prompt; attribution guard in `resolveEntityIds`. **NOTE: `reflect.ts`/`reflect.test.ts` changed in PR #28 (empty-response guard ~line 640, 3 new tests) — re-read before editing; plan line numbers may have drifted.** |
 | **D3-gate** | `integrations/pi/src/adapter.ts`, `integrations/pi/tests/auto-retain.test.ts` | cron/job detector in `planAutoRetain`/`ROLE_MAP`: refuse or downgrade job prompts so they never store as `user_stated`/0.7. |
 
-**Purge script (deliverable only; live stores OUT OF SCOPE):** store-agnostic
-maintenance script — any `.engram` path, mandatory `engram.backup()` first,
-`--dry-run` default. Hard-delete (not `forget()`) FK-safe child-first
-`relations → chunk_entities → entities`, then `VACUUM`. Cron-chunk filter:
-`memory_type='experience' AND source='pi:conversation' AND source_type='user_stated'
-AND trust_score=0.7`, narrowed by FTS/`text` on cron phrases. Validate on a
-throwaway in-test `.engram`, never a live store.
+**Live agent-store cleanup is out of scope** — operator-owned data. The library
+ships no purge/maintenance tooling for consumer stores; fixing the code defect
+(so the bad data stops being produced) is the library's job, cleaning existing
+data is the operator's.
 
 **D5 (reflection catch-up)** + **Step 6 (consolidate vs expand)** come after the
 code lanes.

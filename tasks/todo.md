@@ -23,16 +23,17 @@ Verification (integration branch): root **551** green (was 538), Pi **115** gree
 build + typecheck + lint + format:check clean, surface-parity pinned at **14**
 tools. CLAUDE.md ↔ AGENTS.md re-synced (D6 within-tier note).
 
-**Still open after this PR:** purge SCRIPT (D1/D3 deliverable — store-agnostic,
-never run on a live store), **D5** (reflection catch-up), **Step 6**
-(consolidate-vs-expand decision).
+**Still open after this PR:** **D5** (reflection catch-up) and **Step 6**
+(consolidate-vs-expand decision). Live agent-store cleanup is operator-owned
+and out of scope — the library ships no purge/maintenance tooling for consumer
+data.
 
 ## Decisions locked (2026-07-13)
 
 1. **Scope:** full six-defect sprint, D1→D6 in dependency order.
 2. **D3 recurrence-prevention:** content heuristic in `planAutoRetain` (in-repo,
-   ships now) + purge the 56. Not the upstream #21 fix; note the residual
-   brittleness in the code comment and leave #21 open for the durable signal.
+   ships now). Not the upstream #21 fix; note the residual brittleness in the
+   code comment and leave #21 open for the durable signal.
 3. **Branch base:** merge `fix/model-resolver-preflight` → main FIRST, then
    branch remediation off clean main. (Precondition — see below.)
 
@@ -58,26 +59,19 @@ Parallel builders each own a disjoint file set (see §Parallelization).
 ## Dependency graph (why this order)
 
 ```
-        D1-fix (stop the bleed) ──► D1-purge ──┐
-                                                ├─► [live-store cleanup: backup → hard-delete → VACUUM]
-        D3-purge (remove tier-0 cron noise) ───┘        │
-                                                         ▼
-        D3-gate (prevent recurrence) [Decision 2]   D6-recall (cosine-primary within tier)
-                                                         ▲
-                                          D3-purge MUST precede D6 for full effect:
-                                          a clean tier-0 is what lets the floor stay
-                                          intact while recall becomes relevance-first.
+        D1-fix (stop the bleed) ─────────────┐
+        D3-gate (prevent recurrence) ────────┤
+                                             ▼
+                                        D6-recall (cosine-primary within tier)
 
         D2 (observation dedup) ──► D5 (reflection catch-up)
         D4 (durability prompt) ──►    (cheaper once D2/D4 cut wasted writes)
 ```
 
-Key sequencing insight: **D6's code change is independent, but its *symptom*
-fix depends on D3-purge.** Cosine-primary within-tier ranking works regardless,
-yet mislabeled tier-0 cron prompts still sit above every relevant tier-1 chunk
-*because the security floor protects them*. Purge them (D3) → tier-0 is
-genuinely small + high-value → cosine-primary ranking does the rest with the
-floor fully intact and the security invariant untouched.
+Key sequencing insight: **D6's code change is fully independent and lands now.**
+Cosine-primary within-tier ranking works regardless of store state. Any residual
+mislabeled tier-0 noise in a live store is an operator-side data concern, not a
+library one — and the security floor protects tier-0 either way.
 
 ## Decision points (need a human call before those steps run)
 
@@ -91,15 +85,14 @@ floor fully intact and the security invariant untouched.
    - **(b)** Fix issue #21 properly: a reliable scheduler signal from the
      consumer (valor-engine passes an explicit provenance/mode). Correct, but
      spans repos and needs coordination.
-   - **(c)** Purge-only now; defer the gate. Removes the 56 rows and buys D6 a
-     clean tier-0, but recurrence stays open until #21.
-3. **Purge = deliver a script, do NOT run it on a live store. RESOLVED.**
-   `mira.engram` and any live agent store are out of scope (operator-owned data).
-   We ship a store-agnostic maintenance script (any `.engram` path, mandatory
-   `engram.backup()` + `--dry-run` default); the operator runs it. The script
-   encodes hard-delete (not `forget()`, which soft-deletes and reclaims nothing)
-   in FK-safe child-first order `relations → chunk_entities → entities`, then
-   `VACUUM`. We never ask for a live path or observe the live size delta.
+   - **(c)** Defer the gate entirely and rely on an operator-side cleanup of the
+     live store. Rejected — recurrence stays open until #21, and cleaning a
+     consumer's store is not a library deliverable.
+3. **Live-store cleanup is out of scope. RESOLVED.** `mira.engram` and any live
+   agent store are operator-owned data — the library ships no purge or
+   maintenance tooling for them, and we never ask for a live path or run a
+   destructive op against one. Cleaning a specific consumer's store is that
+   consumer's concern, not a remediation deliverable.
 
 ## Work items
 
@@ -112,30 +105,13 @@ floor fully intact and the security invariant untouched.
       ("and"/"for") and a sub-word fragment ("est" inside "test") are NOT linked;
       keep the existing whole-word tests (`:28-48`, `:178-198`, `:274-299`) green.
 
-### D1/D3 — purge SCRIPT (deliverable only; operator runs it) · ~1 day
-Live agent stores (`mira.engram` et al.) are OUT OF SCOPE — we ship the tool, we
-do not run it on real data. See Decision 3.
-- [ ] Store-agnostic maintenance script (NOT library code — `tools/` or a guarded
-      subcommand). Takes any `.engram` path; `--dry-run` DEFAULT; mandatory
-      `engram.backup(dest)` before any mutation. Hard-delete fragment/stopword
-      entities in order `relations (source|target_entity_id) → chunk_entities
-      (entity_id) → entities (id)`, then `VACUUM`. No `ON DELETE CASCADE` exists —
-      child-first is mandatory.
-- [ ] Cron-chunk purge mode: filter `memory_type='experience' AND
-      source='pi:conversation' AND source_type='user_stated' AND trust_score=0.7`,
-      narrowed by FTS/`text` match on the known cron phrases (no session-id
-      column exists, so content match is required).
-- [ ] Validate the script against a throwaway in-test `.engram` (build → corrupt
-      with fragments → purge → assert child-first deletion + size drop). Never a
-      live store. Operator reproduces the ~329 MB → ~100–120 MB delta.
-
 ### D3 — gate (recurrence) · scope depends on Decision 2
 - [ ] `integrations/pi/src/adapter.ts` `planAutoRetain` (`:667-703`) /
       `ROLE_MAP` (`:600-605`) per chosen option.
 - [ ] Update `integrations/pi/tests/auto-retain.test.ts` (asserts user→0.7 at
       `:143-161`) + add cron-rejection cases.
 
-### D6 — recall semantic-primary · ~2–4 days · CRITICAL, independent code, symptom depends on D3-purge
+### D6 — recall semantic-primary · ~2–4 days · CRITICAL, independent
 - [ ] Thread raw cosine out of `semanticSearch` (`recall.ts:446-512`, currently
       discarded after `ORDER BY distance`) into `ScoredChunk`/`FusedEntry`.
 - [ ] Make within-tier `score` cosine-primary × gentle trust tiebreak; add a
@@ -184,8 +160,8 @@ builders in isolated worktrees off a lead-resolved SHA:
 - **D2+D4** → `src/reflect.ts`, `tests/reflect.test.ts`
 - **D3-gate** → `integrations/pi/src/adapter.ts`, `integrations/pi/tests/auto-retain.test.ts`
 
-The **purge** is a script deliverable (D1/D3), not a run — see the purge work
-item. No live-store step exists in our scope.
+Live agent-store cleanup is operator-owned and out of scope — no live-store step
+and no purge/maintenance tooling exists in this sprint.
 
 ## Verification
 
@@ -195,5 +171,4 @@ format. Baseline **692 green** (root 517 / pi 108 / openclaw 67). Surface-parity
 surface. Cargo-gated AQL suite out of scope. For D6, validate with a synthetic
 in-test `.engram` fixture (a strong tier-1 cosine match must beat a weak tier-1
 chunk); the assessment's empirical live-store numbers are the operator's to
-reproduce. The purge script is validated against a throwaway in-test `.engram`,
-never a live store.
+reproduce.
