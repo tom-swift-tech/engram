@@ -1,90 +1,92 @@
-# Handoff — Engram (updated 2026-07-14)
+# Handoff — Engram (updated 2026-07-14, wrap 2)
 
-## Base commit
+## Base commit / branch state
 
-`main@5cf29bf` (verified HEAD). Resolve this SHA at spawn time for any lane.
-Recent lineage: `5cf29bf` lessons ← `66b5e7e` PR #29 merge (grounding) ←
-`62795f5` PR #28 (introspect + reflect) ← `aa149af` PR #27 (model-resolver).
+- **Working tree is on branch `remediation/sprint-d1-d6`** (NOT `main`). The main
+  worktree `D:/projects/sit/engram` was left on the integration branch — that's
+  intentional so this handoff is the one a fresh `go` reads.
+- Integration branch base: `main@2bb22be` (verified HEAD at spawn; only differs
+  from `5cf29bf` by a handoff-doc commit — irrelevant to every lane).
+- Branch HEAD: `37d0a9e` (docs: purge-script scope removal) ← `a972d62` (D6 doc
+  note) ← `732dadb` (octopus merge of 4 lanes) ← the 4 lane commits ← `2bb22be`.
 
-## Where we are
+## Where we are — remediation sprint DONE, PR #30 GREEN, not yet merged
 
-**Subagent Grounding Layer (Product A): DONE & MERGED.** PR #29 →
-`main@66b5e7e` (merge commit; branch `feat/grounding-layer` deleted local +
-remote). Spec: `docs/GROUNDING-LAYER-SPEC.md`. Plan: `tasks/grounding-layer-plan.md`.
-Three pieces, all **library-only (zero new MCP tools — surface stays 14)**:
+**PR #30** (`fix: remediation sprint — D1/D6/D2/D4/D3-gate`) is open against `main`
+and **both CI matrices pass** (Node 20 ✅ 2m42s, Node 24 ✅ 1m13s):
+https://github.com/tom-swift-tech/engram/pull/30
 
-1. **`ReadonlyEngram`** (`src/readonly-engram.ts`) + **`Engram.readonlyView()`**
-   — capability-restricted view exposing only `recall`/`queryContext`/
-   `introspect`, over a **second `{readonly:true}` connection**. Both spec-§5
-   layers: no write method on the surface **and** a driver-level `SQLITE_READONLY`
-   backstop. Safe because the read path never writes (verified). Precondition:
-   parent `Engram` opened (and migrated) the file first — a readonly conn can't
-   migrate.
-2. **`groundSubagent()` / `taskContext()`** (`src/grounding.ts`) — belief-free
-   read path. `recall()` `memoryTypes` **intersected** with
-   `['world','experience','observation']` (`opinion` dropped even if asked;
-   empty intersection → all three, never zero), `includeOpinions:false`, durable
-   scope only. `taskContext()` is an explicit pass-through to `queryContext()` —
-   task context is orchestrator-selected, never auto-inherited (§8).
-3. **`SubagentReport` + `metabolizeReport()`** — orchestrator-side single-writer
-   metabolism: `artifact`→`commitContext`, `candidateExperiences`→`retain` as
-   `agent_generated` (tier 1), challengeable by the next reflect cycle.
+Four disjoint lanes, built in parallel isolated worktrees off `2bb22be`,
+octopus-merged clean (0 conflicts), each written failing-test-first:
 
-Deferred (spec §6): belief injection for the orchestrator's own reasoning
-(blocked on the disconfirmation retrieval-gap fix, §2), MCP exposure of
-`groundSubagent`, subagent working state.
+| Lane | File | Fix |
+|------|------|-----|
+| **D1** | `src/extract-cpu.ts` | `\b..\b` word-boundary confirm on the escaped whole phrase + length ≥4 + reuse `STOP_WORDS`/`COMMON_WORDS`; keeps `INSTR` as a cheap pre-filter only. |
+| **D6** | `src/recall.ts` | Threads cosine into fused score; semantic hits score cosine-primary with a gentle `0.94–0.99` trust tiebreak; `minScore` = cosine gate. Non-semantic recall unchanged. `(tier,score)` floor byte-identical (proven by a tier-2-cosine-1.0-vs-tier-0-cosine-0.0 test). |
+| **D2+D4** | `src/reflect.ts` | `findMatchingObservation` (lexical, domain+topic, 0.85 thresh) → `observation_refreshes` seam (no schema change); durability rubric in reflect prompt; substring attribution guard in `resolveEntityIds`. |
+| **D3-gate** | `integrations/pi/src/adapter.ts` | `isScheduledJobPrompt` forces cron/job prompts to `tool_result`/0.4 regardless of `mode`. Content heuristic only; issue #21 = durable fix. |
 
-**Prior merged work (context):** PR #28 (`fix(reflect)` empty-response →
-`failed`; `feat(introspect)` 14th tool). PR #27 (model-resolver + preflight).
+**Verification (integration branch, all green):** root vitest **551** (was 538:
++3 D1, +3 D6, +7 D2/D4), Pi vitest **115** (+6 D3-gate; built-dist smoke passes),
+build + typecheck + lint + **format:check** clean, `surface-parity` pinned at
+**14** MCP tools, CLAUDE.md ↔ AGENTS.md re-synced (D6 within-tier note; mirror
+diff = only the "you are here" marker). openclaw (67) untouched.
 
-## New baselines (were 529 root / 14 tools before grounding)
+## NEXT STEPS (in order)
 
-- **Root vitest: 538 green** (+9 from grounding: `tests/grounding.test.ts` +
-  `tests/readonly-engram.test.ts`). Surface-parity + mcp-server still pinned at
-  **14 tools** (grounding added none).
-- Pi 108 / openclaw 67 unchanged (untouched).
-- CLAUDE.md ↔ AGENTS.md mirror re-synced (grounding decision + 2 files + 538).
-  README carries the "Grounding a Subagent" section. Spec's stale "13 tools" →
-  14. `skills/*` unchanged (no new tool/CLI command).
-- **`recall.ts` internals UNTOUCHED by grounding** — it only imports
-  `formatForPrompt`. So the D6 lane's line numbers below are still valid.
+1. **Merge PR #30** — user's call (I don't merge without the ask). It's green
+   and ready.
+2. **After merge: clean up.** Four worktrees + junctions + local branches are
+   still live and MUST be torn down:
+   - `git worktree remove D:/projects/sit/engram-wt-d1` (and `-d6`, `-d2d4`,
+     `-d3gate`). Each has junctioned `node_modules` (all four) + `dist` (d3gate
+     only) and `integrations/pi/node_modules` (d3gate) — `git worktree remove`
+     handles the tree; the junctions live inside it so they go with it.
+   - `git branch -d fix/d1-extract-graph-boundary fix/d6-recall-cosine-primary
+     fix/d2d4-reflect-dedup-durability fix/d3-gate-autoretain-cron` (local only,
+     never pushed; the commits are preserved in the merge).
+   - Switch main worktree back to `main` and pull the merge.
+3. **D5 (reflection catch-up)** — larger off-peak reflection batches so beliefs
+   track the graph. Cheaper now D2/D4 stop wasting belief-writes. `tasks/todo.md`.
+4. **Step 6 (consolidate vs expand)** — decision, not code: the 329 MB
+   single-file-git premise; audit ContextStore / engram-aql for earned keep.
 
-## Remediation sprint — STILL OPEN (plan in `tasks/todo.md`, off clean `main`)
+**Explicitly OUT OF SCOPE (user correction, this session):** any purge /
+maintenance / data-cleanup script for a live consumer store. Live agent stores
+are operator-owned data. The library's job is the *code defect* (stop producing
+bad data — D1/D3-gate did that); cleaning already-written data is the operator's,
+and the library ships **no** purge tooling. See `tasks/lessons.md` 2026-07-14.
 
-None of the six D-defects are done. Lanes (disjoint files, one worktree each,
-base = `main@5cf29bf` — resolve the SHA at spawn time):
+## Parallel-worktree recipe that worked (reuse for the next fan-out)
 
-| Lane | Owns | Defect |
-|------|------|--------|
-| **D1** | `src/extract-cpu.ts`, `tests/extract-cpu.test.ts` | word-boundary + stopword + min-len ≥4 in `strategyGraphMatching` (`:221-265`); replace `INSTR` substring matching. |
-| **D6** | `src/recall.ts`, `tests/recall.test.ts`, `tests/trust-tier.test.ts` | thread cosine out of `semanticSearch` (`:446-512`), within-tier cosine-primary score + `minScore` gate; **leave `(tier,score)` comparator untouched** (security floor). Params: `cosine × 0.94–0.99 trust-bias · minScore 0.42`. NOTE: `minScore`/`explainScores` options already exist in `RecallOptions`; the within-tier cosine-primary scoring is the remaining work. |
-| **D2+D4** | `src/reflect.ts`, `tests/reflect.test.ts` | D2: `findMatchingObservation` mirroring `findMatchingOpinion`, route new obs into the `observation_refreshes` seam, lexical (no schema change). D4: durability rubric in the reflect prompt; attribution guard in `resolveEntityIds`. **NOTE: `reflect.ts`/`reflect.test.ts` changed in PR #28 (empty-response guard ~line 640, 3 new tests) — re-read before editing; plan line numbers may have drifted.** |
-| **D3-gate** | `integrations/pi/src/adapter.ts`, `integrations/pi/tests/auto-retain.test.ts` | cron/job detector in `planAutoRetain`/`ROLE_MAP`: refuse or downgrade job prompts so they never store as `user_stated`/0.7. |
-
-**Live agent-store cleanup is out of scope** — operator-owned data. The library
-ships no purge/maintenance tooling for consumer stores; fixing the code defect
-(so the bad data stops being produced) is the library's job, cleaning existing
-data is the operator's.
-
-**D5 (reflection catch-up)** + **Step 6 (consolidate vs expand)** come after the
-code lanes.
+- Lead resolves verified HEAD → SHA, `git worktree add -b <branch> <path> <sha>`
+  per lane BEFORE spawning; disjoint positive-scope file list per builder.
+- Worktrees lack `node_modules` (git only checks out tracked files) — junction
+  each to the main tree's: `New-Item -ItemType Junction -Path <wt>/node_modules
+  -Target <main>/node_modules` (PowerShell). Also junction `integrations/pi/
+  node_modules` and (for any built-dist test) `dist` for pi lanes.
+- Builders MUST NOT run `npm install` or `npm run build` (mutate/ race shared
+  junctioned state). Vitest only reads node_modules — parallel test runs safe.
+- Integrate via `git merge --no-ff <b1> <b2> ...` — a clean octopus merge is
+  itself proof the file ownership was disjoint.
 
 ## Gotchas carried forward (still live)
 
-- **Pre-push pipeline MUST include `npm run format:check`** — it's a SEPARATE CI
-  gate from `lint` (eslint ≠ prettier). Omitting it cost a CI round-trip on
-  PR #29 (unformatted new test files). Run `npm run format` before committing.
-  Scope is `src/**/*.ts` + `tests/**/*.ts` only.
-- **Markdown is NOT held to Prettier** (untouched `.md` fails `--check`, and
-  format:check doesn't scan `.md`); don't reformat markdown — match hand style.
-- **Never compare scores across two recall() calls in tests without
-  `decayHalfLifeDays: 0`** — decay makes scores time-dependent (relevant to D6).
-- **CLAUDE.md ↔ AGENTS.md**: edit both together; verify with the CI mirror filter
-  (`diff CLAUDE.md AGENTS.md` should show only the "you are here" marker).
-- **Bash tool is Git Bash, not PowerShell** — no `@'...'@` here-strings; use a
-  `-F <file>` commit-message file for multi-line commits.
-- **dist is ESM with top-level await** — a Node smoke script must be `.mjs` and
-  use dynamic `import(pathToFileURL(distPath).href)`, not `require()`. (Watch
-  `process.argv`: `argv[2]` is the first script arg, `argv[1]` is the script.)
-- Rebuild `integrations/pi/dist` before trusting a Pi smoke-test failure.
-- cargo blocked by Windows Application Control in SOME worktree paths (AQL only).
+- **Pre-push MUST include `npm run format:check`** — SEPARATE CI gate from `lint`
+  (eslint ≠ prettier). Run `npm run format` before committing. Scope is
+  `src/**/*.ts` + `tests/**/*.ts` only. (Clean on #30 because we ran it.)
+- **Markdown is NOT held to Prettier** — don't reformat `.md`; match hand style.
+- **Never compare scores across two `recall()` calls in tests without
+  `decayHalfLifeDays: 0`** — decay makes scores wall-clock-dependent (D6 tests
+  follow this).
+- **CLAUDE.md ↔ AGENTS.md**: edit both together; `diff CLAUDE.md AGENTS.md`
+  should show only the "you are here" marker.
+- **Bash tool is Git Bash** — no PowerShell `@'...'@` here-strings; use `-F
+  <file>` for multi-line commit messages (or `-m` with `\n`).
+- **dist is ESM w/ top-level await** — Node smoke script must be `.mjs`, dynamic
+  `import(pathToFileURL(distPath).href)`, not `require()`.
+- **Rebuild `integrations/pi/dist`** before trusting a Pi built-dist smoke fail
+  (the smoke test imports `integrations/pi/dist/index.js`; fresh worktrees lack
+  it — this is why built-dist tests are validated at integration, not in-lane).
+- cargo blocked by Windows Application Control in SOME worktree paths (AQL only;
+  no lane this sprint touched AQL).
