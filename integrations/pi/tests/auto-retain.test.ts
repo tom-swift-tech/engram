@@ -60,7 +60,9 @@ describe('auto-retain (binding)', () => {
     engram = null;
     _setEngineFactoryForTesting(async () => {
       factoryCalls += 1;
-      engram = await Engram.create(':memory:', { embedder: new TestEmbedder() });
+      engram = await Engram.create(':memory:', {
+        embedder: new TestEmbedder(),
+      });
       return engram;
     });
   });
@@ -96,7 +98,10 @@ describe('auto-retain (binding)', () => {
     const fp = makeFakePi();
     engramPiExtension(fp.pi);
 
-    await fireMessage(fp, { role: 'user', content: 'run the test suite for me' });
+    await fireMessage(fp, {
+      role: 'user',
+      content: 'run the test suite for me',
+    });
     await fireMessage(fp, {
       role: 'toolResult',
       content: 'npm test => 59 passing, 0 failing',
@@ -126,7 +131,10 @@ describe('auto-retain (binding)', () => {
 
     await fireMessage(fp, { role: 'user', content: '/memory' }); // slash command
     await fireMessage(fp, { role: 'user', content: 'ok' }); // too short
-    await fireMessage(fp, { role: 'compactionSummary', content: 'internal summary text' }); // skipped role
+    await fireMessage(fp, {
+      role: 'compactionSummary',
+      content: 'internal summary text',
+    }); // skipped role
 
     expect(factoryCalls).toBe(0);
   });
@@ -134,7 +142,10 @@ describe('auto-retain (binding)', () => {
   describe('ctx.mode-aware provenance (issue #21)', () => {
     const CONTENT = 'deploy the staging cluster tonight at 9pm please';
 
-    async function retainedSourceType(): Promise<{ sourceType: string; trustScore: number }> {
+    async function retainedSourceType(): Promise<{
+      sourceType: string;
+      trustScore: number;
+    }> {
       const response = await recall(engram!, { query: CONTENT, topK: 1 });
       expect(response.results).toHaveLength(1);
       return response.results[0];
@@ -143,7 +154,11 @@ describe('auto-retain (binding)', () => {
     it('stores a tui-mode user message as user_stated (unchanged)', async () => {
       const fp = makeFakePi();
       engramPiExtension(fp.pi);
-      await fireMessage(fp, { role: 'user', content: CONTENT }, { mode: 'tui' });
+      await fireMessage(
+        fp,
+        { role: 'user', content: CONTENT },
+        { mode: 'tui' },
+      );
       await expect(retainedSourceType()).resolves.toMatchObject({
         sourceType: 'user_stated',
         trustScore: 0.7,
@@ -174,10 +189,16 @@ describe('auto-retain (binding)', () => {
     );
 
     it('honors ENGRAM_PI_AUTO_RETAIN_NONINTERACTIVE_SOURCE_TYPE override', async () => {
-      _setAutoRetainConfigForTesting({ nonInteractiveSourceType: 'user_stated' });
+      _setAutoRetainConfigForTesting({
+        nonInteractiveSourceType: 'user_stated',
+      });
       const fp = makeFakePi();
       engramPiExtension(fp.pi);
-      await fireMessage(fp, { role: 'user', content: CONTENT }, { mode: 'print' });
+      await fireMessage(
+        fp,
+        { role: 'user', content: CONTENT },
+        { mode: 'print' },
+      );
       await expect(retainedSourceType()).resolves.toMatchObject({
         sourceType: 'user_stated',
         trustScore: 0.7,
@@ -192,8 +213,92 @@ describe('auto-retain (binding)', () => {
         { role: 'toolResult', content: 'npm test => 59 passing, 0 failing' },
         { mode: 'print' },
       );
-      const response = await recall(engram!, { query: 'npm test passing', topK: 1 });
-      expect(response.results[0]).toMatchObject({ sourceType: 'tool_result', trustScore: 0.4 });
+      const response = await recall(engram!, {
+        query: 'npm test passing',
+        topK: 1,
+      });
+      expect(response.results[0]).toMatchObject({
+        sourceType: 'tool_result',
+        trustScore: 0.4,
+      });
+    });
+  });
+
+  describe('job/cron prompt detection (D3-gate, tasks/todo.md Decision 2a)', () => {
+    const JOB_CONTENT =
+      'Process the retain queue. Execute: bash scripts/run-retain-batch.sh';
+
+    async function retainedSourceType(
+      query: string,
+    ): Promise<{ sourceType: string; trustScore: number }> {
+      const response = await recall(engram!, { query, topK: 1 });
+      expect(response.results).toHaveLength(1);
+      return response.results[0];
+    }
+
+    it('downgrades a job/cron-shaped user prompt to tool_result/0.4 in tui mode', async () => {
+      const fp = makeFakePi();
+      engramPiExtension(fp.pi);
+      await fireMessage(
+        fp,
+        { role: 'user', content: JOB_CONTENT },
+        { mode: 'tui' },
+      );
+      await expect(retainedSourceType(JOB_CONTENT)).resolves.toMatchObject({
+        sourceType: 'tool_result',
+        trustScore: 0.4,
+      });
+    });
+
+    it('downgrades a job/cron-shaped user prompt even with no ctx.mode (back-compat default)', async () => {
+      const fp = makeFakePi();
+      engramPiExtension(fp.pi);
+      await fireMessage(fp, { role: 'user', content: JOB_CONTENT }, {});
+      await expect(retainedSourceType(JOB_CONTENT)).resolves.toMatchObject({
+        sourceType: 'tool_result',
+        trustScore: 0.4,
+      });
+    });
+
+    it('downgrades a job/cron-shaped user prompt to tool_result even in print mode (not inferred)', async () => {
+      const fp = makeFakePi();
+      engramPiExtension(fp.pi);
+      await fireMessage(
+        fp,
+        { role: 'user', content: JOB_CONTENT },
+        { mode: 'print' },
+      );
+      // Without the job-prompt check this would land on the non-interactive
+      // 'inferred'/0.3 path instead — assert the job check takes priority.
+      await expect(retainedSourceType(JOB_CONTENT)).resolves.toMatchObject({
+        sourceType: 'tool_result',
+        trustScore: 0.4,
+      });
+    });
+
+    it.each([
+      'Process the notifications queue. Execute: curl -X POST https://internal/hook',
+      'Running scheduled job: nightly backup rotation',
+      'cron task: rotate logs and prune old snapshots',
+    ])('downgrades known job/cron shape: %s', async (content) => {
+      const fp = makeFakePi();
+      engramPiExtension(fp.pi);
+      await fireMessage(fp, { role: 'user', content }, { mode: 'tui' });
+      await expect(retainedSourceType(content)).resolves.toMatchObject({
+        sourceType: 'tool_result',
+        trustScore: 0.4,
+      });
+    });
+
+    it('does not downgrade a genuine user message that merely mentions "queue"', async () => {
+      const fp = makeFakePi();
+      engramPiExtension(fp.pi);
+      const content = 'can you check why the deploy queue is backed up today?';
+      await fireMessage(fp, { role: 'user', content }, { mode: 'tui' });
+      await expect(retainedSourceType(content)).resolves.toMatchObject({
+        sourceType: 'user_stated',
+        trustScore: 0.7,
+      });
     });
   });
 });

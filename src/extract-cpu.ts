@@ -182,6 +182,17 @@ function findEntity(
   return row?.id;
 }
 
+/**
+ * True if `needle` appears in `haystack` on a whole-word boundary — not as a
+ * substring of a larger word (e.g. "est" inside "test", "and" inside
+ * "sandwich"). Regex metacharacters in `needle` are escaped since canonical
+ * names/aliases can contain dots, hyphens, etc.
+ */
+function hasWordBoundaryMatch(haystack: string, needle: string): boolean {
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`\\b${escaped}\\b`).test(haystack);
+}
+
 function createRelation(
   db: Database.Database,
   rel: {
@@ -227,34 +238,49 @@ function strategyGraphMatching(
   let count = 0;
   const textLower = text.toLowerCase();
 
-  // Canonical name matching — push substring search into SQLite
+  // Canonical name matching — push a cheap substring pre-filter into SQLite
+  // to avoid pulling every entity into JS. INSTR alone is too loose (it also
+  // matches sub-fragments like "est" inside "test" and stopwords like "and"
+  // inside "sandwich"), so each candidate is confirmed below with a
+  // word-boundary check before it's linked.
   const byName = db
     .prepare(
       `
-    SELECT id FROM entities
+    SELECT id, canonical_name FROM entities
     WHERE is_active = TRUE
-      AND LENGTH(canonical_name) > 2
+      AND LENGTH(canonical_name) >= 4
       AND INSTR(?, canonical_name) > 0
   `,
     )
-    .all(textLower) as { id: string }[];
+    .all(textLower) as { id: string; canonical_name: string }[];
 
   // Alias matching — json_each unpacks the aliases array in SQL
   const byAlias = db
     .prepare(
       `
-    SELECT DISTINCT e.id
+    SELECT DISTINCT e.id, LOWER(a.value) AS name
     FROM entities e, json_each(e.aliases) AS a
     WHERE e.is_active = TRUE
-      AND LENGTH(a.value) > 2
+      AND LENGTH(a.value) >= 4
       AND INSTR(?, LOWER(a.value)) > 0
   `,
     )
-    .all(textLower) as { id: string }[];
+    .all(textLower) as { id: string; name: string }[];
 
-  const matched = new Set([...byName, ...byAlias].map((r) => r.id));
-  for (const id of matched) {
+  // Dedup by entity id (an entity can surface via both its canonical name
+  // and an alias); keep whichever matched name we saw first for the
+  // stopword/boundary checks below.
+  const candidates = new Map<string, string>();
+  for (const row of byName) candidates.set(row.id, row.canonical_name);
+  for (const row of byAlias) {
+    if (!candidates.has(row.id)) candidates.set(row.id, row.name);
+  }
+
+  for (const [id, name] of candidates) {
     if (linked.has(id)) continue;
+    if (STOP_WORDS.has(name) || COMMON_WORDS.has(name)) continue;
+    if (!hasWordBoundaryMatch(textLower, name)) continue;
+
     linkChunkEntity(db, chunkId, id);
     bumpEntityMention(db, id);
     linked.add(id);

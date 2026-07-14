@@ -623,6 +623,146 @@ describe('reflect()', () => {
     expect(ops).toHaveLength(2); // pre-existing unrelated opinion + the new one
   });
 
+  // ---------------------------------------------------------------------------
+  // D2 — observation dedup-on-synthesis
+  // ---------------------------------------------------------------------------
+
+  it('dedups a repeated "new" observation into a refresh — no duplicate observation row, sources merge (D2)', async () => {
+    dbPath = tmpDbPath();
+    await setupDb(dbPath, 5);
+
+    const cycle1Response = JSON.stringify({
+      observations: [
+        {
+          summary:
+            'Alice consistently chooses Rust for systems programming tasks',
+          domain: 'preferences',
+          topic: 'programming languages',
+          source_chunk_ids: ['chk-a'],
+          entity_names: [],
+        },
+      ],
+      opinion_updates: [],
+      observation_refreshes: [],
+    });
+
+    vi.stubGlobal('fetch', mockOllamaFetch(cycle1Response));
+
+    // Cycle 1: no matching observation yet — genuinely new, inserts.
+    const result1 = await reflect({ dbPath, reflectModel: 'llama-test' });
+    expect(result1.observationsCreated).toBe(1);
+    expect(result1.observationsUpdated).toBe(0);
+
+    const afterCycle1 = new Database(dbPath);
+    const obsAfter1 = afterCycle1
+      .prepare('SELECT * FROM observations')
+      .all() as any[];
+    afterCycle1.close();
+    expect(obsAfter1).toHaveLength(1);
+
+    // Cycle 2: fresh unreflected facts (distinct text — setupDb's literal
+    // text would otherwise dedup against the already-reflected chunks from
+    // cycle 1 and never register as new unreflected facts), the same
+    // insight re-derived as "new" with a different source chunk.
+    const db2 = new Database(dbPath);
+    for (let i = 0; i < 5; i++) {
+      await retain(db2, `Alice prefers Rust — round 2 fact ${i}`, embedder, {
+        memoryType: 'world',
+        sourceType: 'user_stated',
+        trustScore: 0.8,
+      });
+    }
+    db2.close();
+    vi.unstubAllGlobals();
+    const cycle2Response = JSON.stringify({
+      observations: [
+        {
+          summary:
+            'Alice consistently chooses Rust for systems programming tasks',
+          domain: 'preferences',
+          topic: 'programming languages',
+          source_chunk_ids: ['chk-b'],
+          entity_names: [],
+        },
+      ],
+      opinion_updates: [],
+      observation_refreshes: [],
+    });
+    vi.stubGlobal('fetch', mockOllamaFetch(cycle2Response));
+
+    const result2 = await reflect({ dbPath, reflectModel: 'llama-test' });
+    expect(result2.observationsCreated).toBe(0);
+    expect(result2.observationsUpdated).toBe(1);
+
+    const afterCycle2 = new Database(dbPath);
+    const obsAfter2 = afterCycle2
+      .prepare('SELECT * FROM observations')
+      .all() as any[];
+    afterCycle2.close();
+
+    // Still exactly one observation row — refreshed, not inserted again.
+    expect(obsAfter2).toHaveLength(1);
+    expect(obsAfter2[0].id).toBe(obsAfter1[0].id);
+    expect(obsAfter2[0].refresh_count).toBe(1);
+    const sources = JSON.parse(obsAfter2[0].source_chunks);
+    expect(sources).toContain('chk-a');
+    expect(sources).toContain('chk-b');
+  });
+
+  it('a "new" observation with no matching existing observation still inserts (not swallowed by dedup)', async () => {
+    dbPath = tmpDbPath();
+    await setupDb(dbPath, 5);
+
+    const db = new Database(dbPath);
+    db.prepare(
+      `
+      INSERT INTO observations (id, summary, source_chunks, source_entities, domain, topic, synthesized_at)
+      VALUES ('obs-unrelated', 'Tom deploys with Terraform', '[]', '[]', 'infrastructure', 'iac', datetime('now'))
+    `,
+    ).run();
+    db.close();
+
+    // REFLECT_RESPONSE's summary/domain/topic don't match the pre-existing observation.
+    vi.stubGlobal('fetch', mockOllamaFetch(REFLECT_RESPONSE));
+
+    const result = await reflect({ dbPath, reflectModel: 'llama-test' });
+    expect(result.observationsCreated).toBe(1);
+    expect(result.observationsUpdated).toBe(0);
+
+    const verify = new Database(dbPath);
+    const obs = verify.prepare('SELECT * FROM observations').all() as any[];
+    verify.close();
+    expect(obs).toHaveLength(2); // pre-existing unrelated observation + the new one
+  });
+
+  it('does not dedup observations that match on summary but differ in topic (D2 scoping)', async () => {
+    dbPath = tmpDbPath();
+    await setupDb(dbPath, 5);
+
+    const db = new Database(dbPath);
+    // Same domain, same summary text, but a different topic — findMatchingObservation
+    // scopes by domain+topic (tighter than opinions' domain-only scope), so this
+    // must NOT match.
+    db.prepare(
+      `
+      INSERT INTO observations (id, summary, source_chunks, source_entities, domain, topic, synthesized_at)
+      VALUES ('obs-other-topic', 'Alice consistently chooses Rust for systems programming tasks', '[]', '[]', 'preferences', 'tooling', datetime('now'))
+    `,
+    ).run();
+    db.close();
+
+    vi.stubGlobal('fetch', mockOllamaFetch(REFLECT_RESPONSE));
+
+    const result = await reflect({ dbPath, reflectModel: 'llama-test' });
+    expect(result.observationsCreated).toBe(1);
+    expect(result.observationsUpdated).toBe(0);
+
+    const verify = new Database(dbPath);
+    const obs = verify.prepare('SELECT * FROM observations').all() as any[];
+    verify.close();
+    expect(obs).toHaveLength(2);
+  });
+
   it('refreshes an existing observation with new source chunks', async () => {
     dbPath = tmpDbPath();
     await setupDb(dbPath, 5);
@@ -1131,6 +1271,133 @@ describe('reflect()', () => {
       db.close();
 
       expect(unreflected.n).toBe(5);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // D4 — durability prompt + attribution guard
+  // ---------------------------------------------------------------------------
+
+  describe('durability rubric in prompt (D4)', () => {
+    it('includes a durability rubric instructing rejection of transient operational state', async () => {
+      dbPath = tmpDbPath();
+      await setupDb(dbPath, 5);
+
+      let capturedPrompt = '';
+      vi.stubGlobal('fetch', async (_url: unknown, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body ?? '{}'));
+        capturedPrompt = body.prompt ?? '';
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ response: REFLECT_RESPONSE }),
+          text: async () => REFLECT_RESPONSE,
+        } as unknown as Response;
+      });
+
+      await reflect({ dbPath, reflectModel: 'llama-test' });
+
+      expect(capturedPrompt).toContain('Durability Rule');
+      expect(capturedPrompt.toLowerCase()).toContain('expiring');
+      expect(capturedPrompt.toLowerCase()).toContain('transient');
+    });
+  });
+
+  describe('entity attribution sanity check (D4)', () => {
+    it('drops an opinion entity attribution that does not appear in the belief text', async () => {
+      dbPath = tmpDbPath();
+      await setupDb(dbPath, 5);
+
+      vi.stubGlobal(
+        'fetch',
+        mockOllamaFetch(
+          JSON.stringify({
+            observations: [],
+            opinion_updates: [
+              {
+                belief: 'Rust is well-suited to systems programming',
+                direction: 'new',
+                confidence_delta: 0.2,
+                domain: 'preferences',
+                evidence_chunk_ids: [],
+                // 'Zephyr' never appears in the belief text — an implausible
+                // attribution the guard should drop.
+                entity_names: ['Zephyr'],
+              },
+            ],
+            observation_refreshes: [],
+          }),
+        ),
+      );
+
+      const result = await reflect({ dbPath, reflectModel: 'llama-test' });
+      expect(result.opinionsFormed).toBe(1);
+
+      const verify = new Database(dbPath);
+      const op = verify
+        .prepare(
+          `SELECT related_entities FROM opinions WHERE belief LIKE '%Rust is well-suited%'`,
+        )
+        .get() as { related_entities: string };
+      verify.close();
+
+      expect(JSON.parse(op.related_entities)).toEqual([]);
+    });
+
+    it('keeps an entity attribution that plausibly appears in the belief text', async () => {
+      dbPath = tmpDbPath();
+      await setupDb(dbPath, 5);
+
+      vi.stubGlobal('fetch', mockOllamaFetch(REFLECT_RESPONSE));
+
+      const result = await reflect({ dbPath, reflectModel: 'llama-test' });
+      expect(result.opinionsFormed).toBe(1);
+
+      const verify = new Database(dbPath);
+      const op = verify
+        .prepare(`SELECT related_entities FROM opinions`)
+        .get() as { related_entities: string };
+      verify.close();
+
+      // 'Alice' appears in REFLECT_RESPONSE's belief text — attribution kept
+      // (falls back to the raw name since no entity has been extracted yet).
+      expect(JSON.parse(op.related_entities)).toEqual(['Alice']);
+    });
+
+    it('drops an observation entity attribution that does not appear in the summary text', async () => {
+      dbPath = tmpDbPath();
+      await setupDb(dbPath, 5);
+
+      vi.stubGlobal(
+        'fetch',
+        mockOllamaFetch(
+          JSON.stringify({
+            observations: [
+              {
+                summary: 'Rust is chosen for systems programming tasks',
+                domain: 'preferences',
+                topic: 'programming languages',
+                source_chunk_ids: [],
+                // 'Zephyr' never appears in the summary text.
+                entity_names: ['Zephyr'],
+              },
+            ],
+            opinion_updates: [],
+            observation_refreshes: [],
+          }),
+        ),
+      );
+
+      const result = await reflect({ dbPath, reflectModel: 'llama-test' });
+      expect(result.observationsCreated).toBe(1);
+
+      const verify = new Database(dbPath);
+      const obs = verify
+        .prepare(`SELECT source_entities FROM observations`)
+        .get() as { source_entities: string };
+      verify.close();
+
+      expect(JSON.parse(obs.source_entities)).toEqual([]);
     });
   });
 });

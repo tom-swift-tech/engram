@@ -196,7 +196,13 @@ export interface RecallOptions {
    * and topK truncation. Nominal range [0, 1] like other 0-1 options
    * (clamped at the MCP/CLI boundary the same way minTrust is); recall()
    * itself does not re-clamp. Default: undefined — no filtering, zero
-   * behavior change for existing callers.
+   * behavior change for existing callers. Since D6, `score` is cosine
+   * similarity (×0.94-0.99 trust tiebreak, then the usual decay/boost/
+   * memory-type multipliers) for chunks the semantic strategy touched, so
+   * this doubles as a semantic-relevance gate — a `minScore` around 0.4-0.45
+   * is a reasonable floor for dropping weak semantic noise while keeping
+   * genuine matches; RRF-fallback (non-semantic) chunks are on a different
+   * scale and unaffected by that guidance.
    */
   minScore?: number;
   /**
@@ -222,7 +228,11 @@ export interface StrategyScoreBreakdown {
 export interface ScoreExplanation {
   /** One entry per strategy that returned this chunk. */
   perStrategy: StrategyScoreBreakdown[];
-  /** Fused RRF score before trust/decay/boost/memory-type weighting. */
+  /**
+   * Base relevance score before trust/decay/boost/memory-type weighting.
+   * Cosine similarity when the chunk was a semantic hit (cosine-primary,
+   * see D6); the RRF-summed fusion score otherwise.
+   */
   rawFusedScore: number;
   /** Multiplicative weighting factors applied by applyWeighting(). */
   weighting: {
@@ -284,6 +294,12 @@ interface ScoredChunk {
   created_at: string;
   rank: number;
   strategy: string;
+  /**
+   * Raw cosine similarity (1 - vec_distance_cosine), set only by
+   * semanticSearch. Undefined for keyword/graph/temporal hits — those
+   * strategies have no relevance magnitude, only ordinal rank. See D6.
+   */
+  cosine?: number;
 }
 
 interface QueryFilters {
@@ -473,6 +489,7 @@ function semanticSearch(
              c.source_type, c.event_time, c.created_at,
              vec_distance_cosine(c.embedding, ?) AS distance
       FROM chunks c
+      -- distance is cosine distance in [0, 2]; converted to similarity below
       WHERE c.is_active = TRUE
         AND c.embedding IS NOT NULL
         AND c.trust_score >= ?
@@ -504,6 +521,10 @@ function semanticSearch(
       ...r,
       rank: i + 1,
       strategy: 'semantic',
+      // cosine similarity from cosine distance — see vec_distance_cosine's
+      // native counterpart in engram-aql/src/vector/cosine.rs for the same
+      // `1 - dot/(‖a‖·‖b‖)` formula this is the inverse of.
+      cosine: 1 - r.distance,
     }));
   } catch {
     // sqlite-vec may not be loaded — fallback gracefully
@@ -844,6 +865,13 @@ interface FusedEntry {
   perStrategy?: StrategyScoreBreakdown[];
   rawScore?: number;
   weighting?: ScoreExplanation['weighting'];
+  /**
+   * Raw cosine similarity, carried over from the semantic strategy's
+   * ScoredChunk when present. Drives cosine-primary within-tier scoring in
+   * applyWeighting — see D6. Undefined when the chunk was never a semantic
+   * hit, in which case the RRF-summed `score` above is the relevance signal.
+   */
+  cosine?: number;
 }
 
 function reciprocalRankFusion(
@@ -860,6 +888,7 @@ function reciprocalRankFusion(
 
       if (existing) {
         existing.score += rrfScore;
+        if (chunk.cosine !== undefined) existing.cosine = chunk.cosine;
         if (!existing.strategies.includes(chunk.strategy)) {
           existing.strategies.push(chunk.strategy);
         }
@@ -873,6 +902,7 @@ function reciprocalRankFusion(
           score: rrfScore,
           strategies: [chunk.strategy],
           chunk,
+          cosine: chunk.cosine,
           perStrategy: collectPerStrategy
             ? [{ strategy: chunk.strategy, rank: chunk.rank, rrfScore }]
             : undefined,
@@ -914,8 +944,23 @@ function applyWeighting(
   } = options;
 
   for (const [, entry] of fused) {
-    // Trust: 0.5 trust → 0.9x, 1.0 trust → 1.2x
-    const trustMultiplier = 0.6 + entry.chunk.trust_score * 0.6;
+    // D6: within-tier relevance is cosine-primary when a semantic hit
+    // contributed raw similarity magnitude — RRF's ordinal rank alone let a
+    // strongly-relevant chunk lose to weakly-relevant ones because only
+    // rank survived fusion, not the actual distance. Chunks never touched
+    // by the semantic strategy have no cosine signal and keep the
+    // RRF-summed score from fusion unchanged.
+    const cosinePrimary = entry.cosine !== undefined;
+    if (cosinePrimary) {
+      entry.score = entry.cosine!;
+    }
+    // Trust: gentle tiebreak (0.94x-0.99x) when cosine is already carrying
+    // the primary relevance signal — the old 0.6x-1.2x swing would swamp
+    // it. Non-cosine (RRF-fallback) entries keep the original, coarser
+    // trust weighting since RRF rank alone is a weaker relevance signal.
+    const trustMultiplier = cosinePrimary
+      ? 0.94 + entry.chunk.trust_score * 0.05
+      : 0.6 + entry.chunk.trust_score * 0.6;
     // Multi-strategy bonus
     const strategyBoost = 1 + (entry.strategies.length - 1) * 0.1;
     // Temporal decay
