@@ -1,75 +1,93 @@
-# Handoff — Engram remediation sprint (2026-07-13)
+# Handoff — Engram (updated 2026-07-14)
+
+## Base commit
+
+`main@5cf29bf` (verified HEAD). Resolve this SHA at spawn time for any lane.
+Recent lineage: `5cf29bf` lessons ← `66b5e7e` PR #29 merge (grounding) ←
+`62795f5` PR #28 (introspect + reflect) ← `aa149af` PR #27 (model-resolver).
 
 ## Where we are
 
-**Model-resolver fix: DONE & MERGED.** PR #27 → `main@aa149af`. Eliminated
-silent model-fallback (single resolver + preflight + fail-loud sentinel). 692
-tests green, CI green on Node 20 + 24. Branch deleted local + remote.
+**Subagent Grounding Layer (Product A): DONE & MERGED.** PR #29 →
+`main@66b5e7e` (merge commit; branch `feat/grounding-layer` deleted local +
+remote). Spec: `docs/GROUNDING-LAYER-SPEC.md`. Plan: `tasks/grounding-layer-plan.md`.
+Three pieces, all **library-only (zero new MCP tools — surface stays 14)**:
 
-**Remediation sprint: PLANNED, branch cut, ready to execute.**
-- Branch: `fix/engram-remediation` (HEAD `7b20e8e`, off `main@aa149af`).
-- Full plan: `tasks/todo.md` (committed). Six defects D1–D6, all mechanisms
-  verified against the tree (four parallel investigations, findings in the plan).
-- Note: D1 (Tier-1 `INSTR` scan) and D2/D6 (memory-quality) were already
-  foreshadowed in the prior Phase 3/4 backlog — this sprint absorbs them.
+1. **`ReadonlyEngram`** (`src/readonly-engram.ts`) + **`Engram.readonlyView()`**
+   — capability-restricted view exposing only `recall`/`queryContext`/
+   `introspect`, over a **second `{readonly:true}` connection**. Both spec-§5
+   layers: no write method on the surface **and** a driver-level `SQLITE_READONLY`
+   backstop. Safe because the read path never writes (verified). Precondition:
+   parent `Engram` opened (and migrated) the file first — a readonly conn can't
+   migrate.
+2. **`groundSubagent()` / `taskContext()`** (`src/grounding.ts`) — belief-free
+   read path. `recall()` `memoryTypes` **intersected** with
+   `['world','experience','observation']` (`opinion` dropped even if asked;
+   empty intersection → all three, never zero), `includeOpinions:false`, durable
+   scope only. `taskContext()` is an explicit pass-through to `queryContext()` —
+   task context is orchestrator-selected, never auto-inherited (§8).
+3. **`SubagentReport` + `metabolizeReport()`** — orchestrator-side single-writer
+   metabolism: `artifact`→`commitContext`, `candidateExperiences`→`retain` as
+   `agent_generated` (tier 1), challengeable by the next reflect cycle.
 
-## Decisions locked
+Deferred (spec §6): belief injection for the orchestrator's own reasoning
+(blocked on the disconfirmation retrieval-gap fix, §2), MCP exposure of
+`groundSubagent`, subagent working state.
 
-1. **Scope:** full six-defect sprint, dependency order.
-2. **D3 gate:** content heuristic in `planAutoRetain` (in-repo, ships now) +
-   purge the 56 cron chunks. Leave issue #21 (upstream scheduler signal) open;
-   note the residual brittleness in a code comment.
-3. **Base:** model-resolver merged first (done). Remediation off clean main.
+**Prior merged work (context):** PR #28 (`fix(reflect)` empty-response →
+`failed`; `feat(introspect)` 14th tool). PR #27 (model-resolver + preflight).
 
-## Next step — spawn 4 parallel builders (disjoint files, one worktree each)
+## New baselines (were 529 root / 14 tools before grounding)
 
-Base SHA for all worktrees: `7b20e8e`. Lead creates worktrees before spawning;
-each builder owns a disjoint file set; brief from
-`~/.claude/builder-brief-template.md`.
+- **Root vitest: 538 green** (+9 from grounding: `tests/grounding.test.ts` +
+  `tests/readonly-engram.test.ts`). Surface-parity + mcp-server still pinned at
+  **14 tools** (grounding added none).
+- Pi 108 / openclaw 67 unchanged (untouched).
+- CLAUDE.md ↔ AGENTS.md mirror re-synced (grounding decision + 2 files + 538).
+  README carries the "Grounding a Subagent" section. Spec's stale "13 tools" →
+  14. `skills/*` unchanged (no new tool/CLI command).
+- **`recall.ts` internals UNTOUCHED by grounding** — it only imports
+  `formatForPrompt`. So the D6 lane's line numbers below are still valid.
+
+## Remediation sprint — STILL OPEN (plan in `tasks/todo.md`, off clean `main`)
+
+None of the six D-defects are done. Lanes (disjoint files, one worktree each,
+base = `main@5cf29bf` — resolve the SHA at spawn time):
 
 | Lane | Owns | Defect |
 |------|------|--------|
 | **D1** | `src/extract-cpu.ts`, `tests/extract-cpu.test.ts` | word-boundary + stopword + min-len ≥4 in `strategyGraphMatching` (`:221-265`); replace `INSTR` substring matching. |
-| **D6** | `src/recall.ts`, `tests/recall.test.ts`, `tests/trust-tier.test.ts` | thread cosine out of `semanticSearch` (`:446-512`), within-tier cosine-primary score + `minScore` gate; **leave `(tier,score)` comparator `:1136-1143` untouched** (security floor). Port assessment params: `cosine × 0.94–0.99 trust-bias · minScore 0.42`. |
-| **D2+D4** | `src/reflect.ts`, `tests/reflect.test.ts` | D2: `findMatchingObservation` mirroring `findMatchingOpinion` (`:488-511`), route new obs into the `observation_refreshes` seam (`:675-703`), lexical (no schema change). D4: durability rubric at prompt `:256`/`:261`; attribution guard in `resolveEntityIds` (`:478-486`). |
-| **D3-gate** | `integrations/pi/src/adapter.ts`, `integrations/pi/tests/auto-retain.test.ts` | cron/job detector in `planAutoRetain` (`:667-703`)/`ROLE_MAP` (`:600-605`): refuse or downgrade job prompts so they never store as `user_stated`/0.7. |
+| **D6** | `src/recall.ts`, `tests/recall.test.ts`, `tests/trust-tier.test.ts` | thread cosine out of `semanticSearch` (`:446-512`), within-tier cosine-primary score + `minScore` gate; **leave `(tier,score)` comparator untouched** (security floor). Params: `cosine × 0.94–0.99 trust-bias · minScore 0.42`. NOTE: `minScore`/`explainScores` options already exist in `RecallOptions`; the within-tier cosine-primary scoring is the remaining work. |
+| **D2+D4** | `src/reflect.ts`, `tests/reflect.test.ts` | D2: `findMatchingObservation` mirroring `findMatchingOpinion`, route new obs into the `observation_refreshes` seam, lexical (no schema change). D4: durability rubric in the reflect prompt; attribution guard in `resolveEntityIds`. **NOTE: `reflect.ts`/`reflect.test.ts` changed in PR #28 (empty-response guard ~line 640, 3 new tests) — re-read before editing; plan line numbers may have drifted.** |
+| **D3-gate** | `integrations/pi/src/adapter.ts`, `integrations/pi/tests/auto-retain.test.ts` | cron/job detector in `planAutoRetain`/`ROLE_MAP`: refuse or downgrade job prompts so they never store as `user_stated`/0.7. |
 
-## Purge — DELIVER A SCRIPT ONLY; running against a live store is OUT OF SCOPE
-
-`mira.engram` (and any live agent store) is **out of scope** — operator-owned
-data, not our execution target. Do NOT ask for its path or run any destructive
-op against it. Deliverable is a **store-agnostic** maintenance script (takes any
-`.engram` path, mandatory `engram.backup()` first + a `--dry-run` default). The
-operator runs it. Requirements the script must encode: hard-delete (not
-`forget()`, which soft-deletes and reclaims nothing) in FK-safe child-first order
-`relations → chunk_entities → entities` (no `ON DELETE CASCADE`), then `VACUUM`.
-Fragment/stopword entities keyed by `entities.canonical_name`. Cron-chunk filter:
+**Purge script (deliverable only; live stores OUT OF SCOPE):** store-agnostic
+maintenance script — any `.engram` path, mandatory `engram.backup()` first,
+`--dry-run` default. Hard-delete (not `forget()`) FK-safe child-first
+`relations → chunk_entities → entities`, then `VACUUM`. Cron-chunk filter:
 `memory_type='experience' AND source='pi:conversation' AND source_type='user_stated'
-AND trust_score=0.7`, narrowed by FTS/`text` on the known cron phrases (no
-session-id column). Projected effect on a store like the assessment's:
-329 MB → ~100–120 MB. **We do not observe that number — the operator does.**
+AND trust_score=0.7`, narrowed by FTS/`text` on cron phrases. Validate on a
+throwaway in-test `.engram`, never a live store.
 
-**D5 (reflection catch-up)** and **Step 6 (consolidate vs expand)** come after
-the code lanes; D5 is cheaper once D2/D4 cut wasted writes.
-
-## Verification per lane
-
-Root vitest + affected integration suite, typecheck, lint, format. Baseline
-**692 green** (root 517 / pi 108 / openclaw 67). Surface-parity (13 tools) must
-stay green — none of these touch the tool surface. Cargo/AQL out of scope. D6 is
-validated by unit tests + a synthetic-fixture ranking test (build a small local
-`.engram` in-test); the assessment's live-store numbers (cron-noise 15 → 1) are
-the operator's to reproduce, not ours. Purge script validated on a throwaway
-in-test `.engram`, never a live store.
+**D5 (reflection catch-up)** + **Step 6 (consolidate vs expand)** come after the
+code lanes.
 
 ## Gotchas carried forward (still live)
 
+- **Pre-push pipeline MUST include `npm run format:check`** — it's a SEPARATE CI
+  gate from `lint` (eslint ≠ prettier). Omitting it cost a CI round-trip on
+  PR #29 (unformatted new test files). Run `npm run format` before committing.
+  Scope is `src/**/*.ts` + `tests/**/*.ts` only.
+- **Markdown is NOT held to Prettier** (untouched `.md` fails `--check`, and
+  format:check doesn't scan `.md`); don't reformat markdown — match hand style.
 - **Never compare scores across two recall() calls in tests without
-  `decayHalfLifeDays: 0`** — decay makes scores time-dependent. Directly
-  relevant to D6's new score assertions.
-- CLAUDE.md ↔ AGENTS.md mirror: edit both together, verify with the CI filter.
+  `decayHalfLifeDays: 0`** — decay makes scores time-dependent (relevant to D6).
+- **CLAUDE.md ↔ AGENTS.md**: edit both together; verify with the CI mirror filter
+  (`diff CLAUDE.md AGENTS.md` should show only the "you are here" marker).
+- **Bash tool is Git Bash, not PowerShell** — no `@'...'@` here-strings; use a
+  `-F <file>` commit-message file for multi-line commits.
+- **dist is ESM with top-level await** — a Node smoke script must be `.mjs` and
+  use dynamic `import(pathToFileURL(distPath).href)`, not `require()`. (Watch
+  `process.argv`: `argv[2]` is the first script arg, `argv[1]` is the script.)
 - Rebuild `integrations/pi/dist` before trusting a Pi smoke-test failure.
 - cargo blocked by Windows Application Control in SOME worktree paths (AQL only).
-- Put isolation constraints (worktree, base SHA, file scope) in each builder's
-  task description at creation time — an ownership notification races a
-  separately-sent brief.
