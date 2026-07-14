@@ -393,6 +393,47 @@ and the [CLI](#cli) section. One gotcha to know before using either: querying
 a ref returns the **children** committed under it (`parentRefId` pointing at
 that ref), not the artifact stored at the ref itself.
 
+## Grounding a Subagent
+
+"Grounding in, report out, nothing written by the subagent." When an
+orchestrator spawns a **stateless** subagent, it situates it with scoped,
+**belief-free** context and gets a plain report back — every durable write
+stays on the orchestrator's side.
+
+```typescript
+import { groundSubagent, taskContext, metabolizeReport } from 'engram';
+
+// Orchestrator holds a read/write Engram. Hand the subagent a READ-ONLY view:
+// it exposes recall/queryContext/introspect only, over a readonly connection —
+// a subagent physically cannot write to the store (no method, and the driver
+// rejects raw SQL).
+const ro = await orchestrator.readonlyView();
+
+// Situate the subagent from durable world/experience/observation facts.
+// Opinions are NEVER injected — a stateless subagent has no revision loop to
+// tell a sound belief from a stale one, so beliefs stay behind the orchestrator.
+const grounding = await groundSubagent(ro, { task: 'design the retry policy', maxChars: 2000 });
+// grounding.prompt -> ready-to-inject, headered, budgeted block (no "Beliefs" section)
+// grounding.facts / grounding.observations -> structured form for custom prompts
+
+// To also show specific parent-task decisions, the orchestrator selects them
+// EXPLICITLY (never auto-inherited) and concatenates them into the prompt:
+const slice = await taskContext(ro, parentRef, 'retry/backoff decisions');
+
+// The subagent returns a plain object; the ORCHESTRATOR metabolizes it (single
+// writer). Candidate experiences land as agent_generated (tier 1) — challengeable
+// by the next reflect cycle, never able to outrank a user-stated fact.
+await metabolizeReport(orchestrator, subagentReport, {
+  keepExperiences: (c) => c.context === 'perf-spike',
+});
+ro.close();
+```
+
+Grounding from long-lived `world` facts? Recall's recency decay
+(`decayHalfLifeDays`, default 180) applies here too — pass `decayHalfLifeDays: 0`
+via a custom `recall()` if year-old facts must stay recallable. This is a
+library-only capability (no MCP tool); see `docs/GROUNDING-LAYER-SPEC.md`.
+
 ## Utility Functions
 
 Exported directly from `engram` — no instance required.
