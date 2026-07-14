@@ -102,6 +102,58 @@ export interface ReflectResult {
   error?: string;
 }
 
+/**
+ * Options for a catch-up pass (D5). Extends {@link ReflectConfig} with the
+ * bounds that keep a multi-batch drain from running forever or hammering a
+ * metered model. `batchSize` is forwarded to each inner `reflect()` — leave it
+ * undefined to let the issue-#17 adaptive-shrink hint self-heal a context
+ * overrun mid-pass (recommended for catch-up).
+ */
+export interface CatchUpConfig extends ReflectConfig {
+  /** Max reflect batches to run in one pass (default: 20). */
+  maxBatches?: number;
+  /** Stop once this many facts have been reflected in the pass (default: unbounded). */
+  maxFacts?: number;
+  /** Wall-clock budget in ms, checked between batches (default: unbounded). */
+  maxDurationMs?: number;
+  /**
+   * Consecutive zero-progress batches tolerated before stopping (default: 2).
+   * A zero-insight batch leaves its facts unreflected and shrinks the next
+   * batch; tolerating a couple lets that self-heal one overrun, while a
+   * persistent failure (Ollama down, or shrink floor still failing) still stops.
+   */
+  maxStalls?: number;
+}
+
+/**
+ * Aggregate outcome of a catch-up pass. `status` distinguishes WHY the pass
+ * stopped so a scheduler can decide whether to back off or re-arm.
+ */
+export interface CatchUpResult {
+  /** Number of inner reflect() batches actually run. */
+  batches: number;
+  factsProcessed: number;
+  observationsCreated: number;
+  observationsUpdated: number;
+  opinionsFormed: number;
+  opinionsReinforced: number;
+  opinionsChallenged: number;
+  /** Unreflected durable world/experience chunks still outstanding after the pass. */
+  remainingBacklog: number;
+  /**
+   * - `drained`  — backlog fell below `minFactsThreshold` (fully caught up).
+   * - `capped`   — hit `maxBatches` / `maxFacts` / `maxDurationMs` with work left.
+   * - `stalled`  — `maxStalls` consecutive batches made no forward progress.
+   * - `failed`   — an inner batch failed (e.g. generator/connection error).
+   */
+  status: 'drained' | 'capped' | 'stalled' | 'failed';
+  durationMs: number;
+  /** Per-batch results, in order, for auditability. */
+  batchResults: ReflectResult[];
+  /** Error from the failing batch, if `status === 'failed'`. */
+  error?: string;
+}
+
 interface LLMReflectOutput {
   observations: Array<{
     summary: string;
@@ -1082,16 +1134,158 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
 }
 
 // =============================================================================
+// Catch-up Runner (D5) — drain a reflection backlog in one off-peak pass
+// =============================================================================
+
+/**
+ * Count unreflected durable world/experience chunks — the backlog `reflect()`
+ * draws from. Mirrors `getUnreflectedFacts`'s WHERE via the `v_unreflected` view
+ * so the two can never drift.
+ */
+function countUnreflected(db: Database.Database): number {
+  const row = db.prepare(`SELECT COUNT(*) AS n FROM v_unreflected`).get() as {
+    n: number;
+  };
+  return row.n;
+}
+
+/**
+ * Run reflection over MANY batches in one pass, draining a backlog that a single
+ * `reflect()` call (one batch of ≤`batchSize`) can't keep up with.
+ *
+ * Per-batch size is bounded by what the model can synthesize in one prompt, so
+ * throughput comes from LOOPING modest batches — not from inflating `batchSize`,
+ * which would only trip the issue-#17 zero-insight shrink guard. Meant to be
+ * triggered off-peak (e.g. `ReflectScheduler` with `catchUp: true`, or a cron),
+ * where a burst of metered-model calls is acceptable.
+ *
+ * `reflect()` itself is untouched: this is a bounded loop around it that
+ * aggregates the per-batch results and reports the remaining backlog.
+ */
+export async function reflectCatchUp(
+  config: CatchUpConfig,
+): Promise<CatchUpResult> {
+  // Peel off the catch-up-only bounds; `reflectConfig` (the rest) is exactly a
+  // ReflectConfig — dbPath, generator/reflectModel, batchSize, minFactsThreshold,
+  // etc. — forwarded to each inner reflect() untouched. Leaving batchSize
+  // undefined here lets the #17 shrink hint self-heal a mid-pass overrun.
+  const {
+    maxBatches = 20,
+    maxFacts,
+    maxDurationMs,
+    maxStalls = 2,
+    ...reflectConfig
+  } = config;
+  const minFactsThreshold = config.minFactsThreshold ?? 5;
+
+  const startTime = Date.now();
+  const result: CatchUpResult = {
+    batches: 0,
+    factsProcessed: 0,
+    observationsCreated: 0,
+    observationsUpdated: 0,
+    opinionsFormed: 0,
+    opinionsReinforced: 0,
+    opinionsChallenged: 0,
+    remainingBacklog: 0,
+    status: 'drained',
+    durationMs: 0,
+    batchResults: [],
+  };
+
+  // Short-lived read connection for backlog counting between batches — separate
+  // from the fresh connection each reflect() opens/closes internally. Safe under
+  // WAL alongside those writes.
+  const countDb = new Database(config.dbPath, { readonly: true });
+
+  try {
+    let consecutiveStalls = 0;
+
+    for (let i = 0; i < maxBatches; i++) {
+      // -- Pre-batch bound checks --
+      if (
+        maxDurationMs !== undefined &&
+        Date.now() - startTime >= maxDurationMs
+      ) {
+        result.status = 'capped';
+        break;
+      }
+      if (maxFacts !== undefined && result.factsProcessed >= maxFacts) {
+        result.status = 'capped';
+        break;
+      }
+      if (countUnreflected(countDb) < minFactsThreshold) {
+        result.status = 'drained';
+        break;
+      }
+
+      // -- Run one batch. Forward reflectConfig (incl. minFactsThreshold and any
+      //    explicit batchSize); the catch-up bounds are handled here, not there. --
+      const batch = await reflect(reflectConfig);
+      result.batchResults.push(batch);
+      result.batches++;
+      result.factsProcessed += batch.factsProcessed;
+      result.observationsCreated += batch.observationsCreated;
+      result.observationsUpdated += batch.observationsUpdated;
+      result.opinionsFormed += batch.opinionsFormed;
+      result.opinionsReinforced += batch.opinionsReinforced;
+      result.opinionsChallenged += batch.opinionsChallenged;
+
+      if (batch.status === 'failed') {
+        result.status = 'failed';
+        result.error = batch.error;
+        break;
+      }
+
+      if (batch.factsProcessed === 0) {
+        // No forward progress: a silent-failure batch left its facts unreflected
+        // (the #17 shrink hint will have shrunk the next batch). Tolerate a few
+        // so the shrink can self-heal one overrun, then give up.
+        consecutiveStalls++;
+        if (consecutiveStalls >= maxStalls) {
+          result.status = 'stalled';
+          break;
+        }
+      } else {
+        consecutiveStalls = 0;
+      }
+
+      // Loop ran to the batch cap without an earlier stop condition.
+      if (i === maxBatches - 1) {
+        result.status =
+          countUnreflected(countDb) < minFactsThreshold ? 'drained' : 'capped';
+      }
+    }
+
+    result.remainingBacklog = countUnreflected(countDb);
+  } finally {
+    countDb.close();
+  }
+
+  result.durationMs = Date.now() - startTime;
+  return result;
+}
+
+// =============================================================================
 // Scheduled Reflect Runner
 // =============================================================================
 
 export class ReflectScheduler {
-  private config: ReflectConfig;
+  private config: CatchUpConfig;
+  private catchUp: boolean;
   private intervalHandle: ReturnType<typeof setInterval> | null = null;
   private isRunning = false;
 
-  constructor(config: ReflectConfig) {
+  /**
+   * @param config - reflect config, plus catch-up bounds (`maxBatches`, etc.)
+   *   honored only when `catchUp` is set.
+   * @param options.catchUp - when true, each tick runs a full {@link reflectCatchUp}
+   *   pass (drain the backlog) instead of a single `reflect()` batch. Intended
+   *   for an off-peak schedule where a burst of metered-model calls is fine.
+   */
+  constructor(config: CatchUpConfig, options?: { catchUp?: boolean }) {
     this.config = config;
+    this.catchUp = options?.catchUp ?? false;
   }
 
   /**
@@ -1128,11 +1322,26 @@ export class ReflectScheduler {
     }
   }
 
-  async runOnce(): Promise<ReflectResult | null> {
+  async runOnce(): Promise<ReflectResult | CatchUpResult | null> {
     if (this.isRunning) return null;
 
     this.isRunning = true;
     try {
+      if (this.catchUp) {
+        console.log(
+          `[Reflect] Starting catch-up pass for ${this.config.dbPath}`,
+        );
+        const result = await reflectCatchUp(this.config);
+        console.log(
+          `[Reflect] Catch-up ${result.status}: ${result.batches} batches, ` +
+            `${result.factsProcessed} facts → ${result.observationsCreated} new obs, ` +
+            `${result.observationsUpdated} updated obs, ${result.opinionsFormed} new opinions, ` +
+            `${result.opinionsReinforced} reinforced, ${result.opinionsChallenged} challenged; ` +
+            `${result.remainingBacklog} still backlogged (${result.durationMs}ms)`,
+        );
+        return result;
+      }
+
       console.log(`[Reflect] Starting cycle for ${this.config.dbPath}`);
       const result = await reflect(this.config);
       console.log(

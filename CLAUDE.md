@@ -98,7 +98,7 @@ rather than raw `cp` — the backup method runs SQLite's online backup API
 and produces a single standalone file with no sidecars.
 
 ### Batch Reflect Over Real-Time
-Hindsight reflects on every query. Engram reflects on a schedule (default: manual trigger, configurable to hourly/daily). This keeps Ollama usage bounded while still building observations and opinions over time.
+Hindsight reflects on every query. Engram reflects on a schedule (default: manual trigger, configurable to hourly/daily). This keeps Ollama usage bounded while still building observations and opinions over time. A single `reflect()` call drains ONE batch of ≤`batchSize` (default 50) unreflected facts, so a large backlog never catches up on a one-batch-per-trigger cadence — and raising `batchSize` doesn't help: an oversized batch overruns the model, produces zero insights (its facts are deliberately left unreflected, `reflect.ts`), and the issue-#17 adaptive-shrink hint halves the next batch. Per-batch size is model-bounded; throughput comes from looping. `reflectCatchUp()` (D5, issue #19-adjacent) is that loop: a bounded multi-batch pass around the untouched `reflect()` for off-peak backlog drain. It stops on `drained` (backlog < `minFactsThreshold`), `capped` (`maxBatches`/`maxFacts`/`maxDurationMs`), `stalled` (`maxStalls` **consecutive** zero-progress batches — leaving `batchSize` undefined lets the shrink hint self-heal one overrun before giving up), or `failed` (an inner batch errored, e.g. Ollama down), returning aggregated insight counts + `remainingBacklog`. Exposed as `Engram.reflectCatchUp()` and `new ReflectScheduler(cfg, { catchUp: true })`; **library-only, adds ZERO MCP tools** (surface-parity stays 14).
 
 ### Four Memory Types
 Inspired by Hindsight's four networks, mapped to biological memory:
@@ -144,7 +144,7 @@ engram/
 │   ├── engram.ts                ← unified Engram class + public API exports
 │   ├── retain.ts                ← fast write + dedup + batch import + extraction queue
 │   ├── recall.ts                ← four-way retrieval + RRF + trust/decay weighting + formatForPrompt
-│   ├── reflect.ts               ← scheduled learning engine + prompt templates
+│   ├── reflect.ts               ← scheduled learning engine + prompt templates + reflectCatchUp() backlog-drain runner (D5)
 │   ├── extract-cpu.ts           ← zero-LLM inline entity extraction (Tier 1)
 │   ├── temporal-parser.ts       ← natural language date parsing for temporal recall
 │   ├── generation.ts            ← pluggable generation providers (Ollama, OpenAI-compat, Anthropic); model is REQUIRED (no default) + UnconfiguredGeneration fail-loud sentinel
@@ -365,7 +365,7 @@ git init && git branch -M main
 
 - [x] **Agent instructions live in two mirrored files**: `CLAUDE.md` is the source of truth; `AGENTS.md` is a verbatim mirror for tools that read the cross-vendor `AGENTS.md` standard. They differ only in the "you are here" marker. **Edit both together** — any change to architecture, file structure, or decisions must land in both files or they drift.
 
-- [x] **Reflect schedule**: Library default is manual (call `engram.reflect()` or the CLI). `ReflectScheduler` class ships for timer-based use. Recommendation for valor-engine: `ReflectScheduler` with a 6-hour default, configurable per operative.
+- [x] **Reflect schedule**: Library default is manual (call `engram.reflect()` or the CLI). `ReflectScheduler` class ships for timer-based use. Recommendation for valor-engine: `ReflectScheduler` with a 6-hour default, configurable per operative. For a store whose backlog outruns a one-batch-per-tick cadence, construct the scheduler with `{ catchUp: true }` (or call `engram.reflectCatchUp()`/`reflectCatchUp()` directly on an off-peak cron) so each tick drains many batches instead of one — see the catch-up runner under "Batch Reflect Over Real-Time".
 
 - [x] **Embedding model**: `nomic-ai/nomic-embed-text-v1.5` (768d) runs in-process via `@huggingface/transformers` (v3+, the maintained successor to the deprecated `@xenova/transformers`) as default — no Ollama required for retain/recall, and no Hugging Face token (the `nomic-ai` upstream repo is public). Override via `embedModel` option. `Xenova/all-MiniLM-L6-v2` (384d) is a valid alternative for lower disk/memory use. The legacy `Xenova/nomic-embed-text-v1.5` mirror is now gated (401 without a token) so it's no longer the default, but ships identical 768-dim weights — existing `.engram` files stay valid. Opt into Ollama embeddings via `useOllamaEmbeddings: true` (e.g., for GPU acceleration). Existing `.engram` files with Ollama-generated vectors are fully compatible — same model weights, same 768-dim space.
 
