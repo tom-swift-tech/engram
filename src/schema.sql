@@ -69,6 +69,11 @@ CREATE TABLE IF NOT EXISTS chunks (
     -- Dedup
     text_hash TEXT,                     -- SHA-256 prefix of normalized text (for indexed dedup)
 
+    -- Provenance: which Engram instance authored this trace. Stamped on write
+    -- (first author wins — dedup never rewrites it). NULL = pre-distribution /
+    -- unknown origin (rows written before origin tracking, or by a legacy path).
+    node_origin TEXT,
+
     -- Lifecycle
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -241,7 +246,12 @@ CREATE TABLE IF NOT EXISTS opinions (
     -- Categorization
     domain TEXT,                        -- 'architecture', 'preferences', 'workflow', etc.
     related_entities TEXT DEFAULT '[]', -- JSON array of entity IDs
-    
+
+    -- Provenance: which Engram instance formed this belief (reflect author).
+    -- Stamped when the opinion row is inserted; reinforce/challenge/decay leave
+    -- it untouched. NULL = pre-distribution / unknown origin.
+    node_origin TEXT,
+
     -- Lifecycle
     formed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_reinforced TIMESTAMP,
@@ -269,7 +279,12 @@ CREATE TABLE IF NOT EXISTS observations (
     -- Categorization
     domain TEXT,                        -- matches opinion domains
     topic TEXT,                         -- specific topic within domain
-    
+
+    -- Provenance: which Engram instance synthesized this observation (reflect
+    -- author). Stamped on insert; a refresh (updateObsSimple) leaves it untouched.
+    -- NULL = pre-distribution / unknown origin.
+    node_origin TEXT,
+
     -- Lifecycle
     synthesized_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_refreshed TIMESTAMP,           -- when reflect last updated this

@@ -674,6 +674,19 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
   const startTime = Date.now();
   const logId = randomUUID();
 
+  // Provenance: which instance is synthesizing these insights. reflect() opens
+  // its own connection (no Engram instance to read this.nodeOrigin from), so
+  // read it directly from bank_config once, up front. May be undefined on a
+  // pre-distribution .engram that predates origin tracking — stamp NULL then,
+  // which is truthful ("origin unknown"). Stamped on newly formed opinions /
+  // observations only; reinforce/challenge/decay and refreshes leave it be.
+  const nodeOrigin =
+    (
+      db
+        .prepare(`SELECT value FROM bank_config WHERE key = 'node_origin'`)
+        .get() as { value: string } | undefined
+    )?.value ?? null;
+
   // Adaptive batch sizing (issue #17): if a prior cycle produced zero
   // insights despite having unreflected chunks available, a shrunk-batch
   // hint is persisted in bank_config. Only apply it when the caller didn't
@@ -809,8 +822,8 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
         WHERE id = ?
       `);
       const insertObs = db.prepare(`
-        INSERT INTO observations (id, summary, source_chunks, source_entities, domain, topic, synthesized_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO observations (id, summary, source_chunks, source_entities, domain, topic, synthesized_at, node_origin)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `);
       for (const obs of output.observations) {
         // A "new" observation that actually matches an existing one (same
@@ -852,6 +865,7 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
           obs.domain,
           obs.topic,
           now,
+          nodeOrigin,
         );
         result.observationsCreated++;
       }
@@ -880,8 +894,8 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
 
       // -- Opinion Updates --
       const insertOpinion = db.prepare(`
-        INSERT INTO opinions (id, belief, confidence, supporting_chunks, domain, related_entities, formed_at, evidence_count)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO opinions (id, belief, confidence, supporting_chunks, domain, related_entities, formed_at, evidence_count, node_origin)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       const reinforceOpinion = db.prepare(`
         UPDATE opinions
@@ -984,6 +998,7 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
             JSON.stringify(opEntityIds),
             now,
             opUpdate.evidence_chunk_ids.length,
+            nodeOrigin,
           );
           result.opinionsFormed++;
         } else if (opUpdate.direction === 'reinforce') {
