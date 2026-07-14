@@ -18,7 +18,12 @@ import {
   type SubagentReport,
 } from '../src/grounding.js';
 import type { DecisionArtifact } from '../src/context-store.js';
-import { MockEmbedder, MockGenerator, tmpDbPath, cleanupDb } from './helpers.js';
+import {
+  MockEmbedder,
+  MockGenerator,
+  tmpDbPath,
+  cleanupDb,
+} from './helpers.js';
 
 describe('Subagent Grounding Layer', () => {
   let dbPath: string;
@@ -45,7 +50,12 @@ describe('Subagent Grounding Layer', () => {
       .prepare(
         `INSERT INTO opinions (id, belief, confidence, domain) VALUES (?, ?, ?, ?)`,
       )
-      .run(`op-${Math.round(confidence * 1000)}-${domain}`, belief, confidence, domain);
+      .run(
+        `op-${Math.round(confidence * 1000)}-${domain}`,
+        belief,
+        confidence,
+        domain,
+      );
     raw.close();
   }
 
@@ -127,7 +137,11 @@ describe('Subagent Grounding Layer', () => {
     });
 
     const view = await engram.readonlyView();
-    const slice = await taskContext(view, rootA, 'provisioning tooling decision');
+    const slice = await taskContext(
+      view,
+      rootA,
+      'provisioning tooling decision',
+    );
 
     const decisions = slice.artifacts.map((a) => a.artifact.decision);
     expect(decisions).toContain('adopt Terraform for provisioning');

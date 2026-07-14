@@ -11,7 +11,12 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { Engram } from '../src/engram.js';
 import { ReadonlyEngram } from '../src/readonly-engram.js';
-import { MockEmbedder, MockGenerator, tmpDbPath, cleanupDb } from './helpers.js';
+import {
+  MockEmbedder,
+  MockGenerator,
+  tmpDbPath,
+  cleanupDb,
+} from './helpers.js';
 
 describe('ReadonlyEngram', () => {
   let dbPath: string;
