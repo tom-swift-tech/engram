@@ -7,6 +7,26 @@ against the source tree (four parallel investigations, 2026-07-13); the
 verified mechanism and exact loci are recorded per item. This is fix-work in
 dependency order, not a rebuild.
 
+## Status — 2026-07-14 (integration branch `remediation/sprint-d1-d6`)
+
+**Four code lanes DONE & verified green; single PR pending.** Built in parallel
+isolated worktrees off `main@2bb22be`, octopus-merged clean (disjoint files):
+- **D1** (`src/extract-cpu.ts`) — word-boundary + stopword graph matching. ✔
+- **D6** (`src/recall.ts`) — cosine-primary within-tier scoring; `(tier, score)`
+  floor byte-identical (proven by test). ✔
+- **D2+D4** (`src/reflect.ts`) — `findMatchingObservation` dedup + durability
+  rubric + substring attribution guard. ✔
+- **D3-gate** (`integrations/pi/src/adapter.ts`) — `isScheduledJobPrompt`
+  downgrades cron/job prompts to `tool_result`/0.4. ✔
+
+Verification (integration branch): root **551** green (was 538), Pi **115** green,
+build + typecheck + lint + format:check clean, surface-parity pinned at **14**
+tools. CLAUDE.md ↔ AGENTS.md re-synced (D6 within-tier note).
+
+**Still open after this PR:** purge SCRIPT (D1/D3 deliverable — store-agnostic,
+never run on a live store), **D5** (reflection catch-up), **Step 6**
+(consolidate-vs-expand decision).
+
 ## Decisions locked (2026-07-13)
 
 1. **Scope:** full six-defect sprint, D1→D6 in dependency order.
