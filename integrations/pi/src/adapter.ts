@@ -198,8 +198,7 @@ export function memoryStats(engram: Engram): MemoryStats {
     prepare: (sql: string) => { get: () => { c: number } | undefined };
   };
 
-  const count = (sql: string): number =>
-    Number(db.prepare(sql).get()?.c ?? 0);
+  const count = (sql: string): number => Number(db.prepare(sql).get()?.c ?? 0);
 
   return {
     chunks: count(
@@ -469,9 +468,7 @@ export function isConnectionError(err: unknown): boolean {
     haystacks.push(err);
   }
   const joined = haystacks.join(' ');
-  return (
-    /fetch failed/i.test(joined) || codes.some((c) => joined.includes(c))
-  );
+  return /fetch failed/i.test(joined) || codes.some((c) => joined.includes(c));
 }
 
 /**
@@ -581,7 +578,11 @@ export const DEFAULT_AUTO_RETAIN_CONFIG: AutoRetainConfig = {
   nonInteractiveSourceType: 'inferred',
 };
 
-type SourceType = 'user_stated' | 'agent_generated' | 'tool_result' | 'inferred';
+type SourceType =
+  | 'user_stated'
+  | 'agent_generated'
+  | 'tool_result'
+  | 'inferred';
 
 /**
  * Pi's run mode ("tui" | "rpc" | "json" | "print" — mirrors
@@ -616,6 +617,27 @@ const NON_INTERACTIVE_SOURCE_TRUST: Record<SourceType, number> = {
 };
 
 const TRUNCATION_MARKER = '… [truncated]';
+
+/**
+ * Detects a scheduled-job / cron prompt shape, as distinct from a genuine
+ * interactive user request. This is a **content heuristic** (D3-gate,
+ * `tasks/todo.md` Decision 2a) — brittle by nature: it matches the job-runner
+ * prompt shape actually observed polluting a live store ("Process the X
+ * queue. Execute: bash ...") plus a few close variants, and nothing else. It
+ * will false-negative on any job template we haven't seen, and could in
+ * principle false-positive on a human who happens to phrase a request the
+ * same way. Both are accepted trade-offs of shipping an in-repo fix now
+ * rather than waiting on a cross-repo scheduler-provenance signal — see
+ * issue #21 for the durable fix (the consumer, e.g. valor-engine, passing an
+ * explicit non-user provenance flag instead of us pattern-matching text).
+ */
+const JOB_PROMPT_PATTERN =
+  /\bprocess\b[\s\S]{0,80}\bqueue\b[\s\S]{0,40}\bexecute\s*:/i;
+const JOB_PROMPT_FALLBACK = /\b(scheduled job|cron job|cron task)\b/i;
+
+export function isScheduledJobPrompt(text: string): boolean {
+  return JOB_PROMPT_PATTERN.test(text) || JOB_PROMPT_FALLBACK.test(text);
+}
 
 /**
  * Pull plain text out of a message's `content`, which is either a string or an
@@ -663,6 +685,14 @@ export interface AutoRetainPlan {
  * interactive session from a one-shot invocation — but that's the axis that
  * matters: scheduled jobs are definitionally one-shot and non-interactive.
  * Non-'user' roles are unaffected by mode.
+ *
+ * A detected job/cron prompt (`isScheduledJobPrompt`) takes priority over
+ * the mode check and is downgraded to the same `tool_result`/0.4 tier as
+ * captured tool/bash output, regardless of `mode` — a job runner that
+ * happens to report `mode: 'tui'` (or omits `ctx.mode` entirely, which
+ * falls back to tui — see the back-compat test) must not slip through the
+ * mode gate and land at `user_stated`/0.7. See `isScheduledJobPrompt` for
+ * the known-brittle-by-design rationale.
  */
 export function planAutoRetain(
   message: RetainableMessage,
@@ -684,13 +714,21 @@ export function planAutoRetain(
         TRUNCATION_MARKER
       : raw;
 
+  const isJobPrompt = message.role === 'user' && isScheduledJobPrompt(raw);
   const isNonInteractiveUser = message.role === 'user' && mode !== 'tui';
-  const sourceType = isNonInteractiveUser
-    ? config.nonInteractiveSourceType
-    : mapping.sourceType;
-  const trustScore = isNonInteractiveUser
-    ? NON_INTERACTIVE_SOURCE_TRUST[config.nonInteractiveSourceType]
-    : mapping.trustScore;
+
+  let sourceType: SourceType;
+  let trustScore: number;
+  if (isJobPrompt) {
+    sourceType = ROLE_MAP.toolResult.sourceType;
+    trustScore = ROLE_MAP.toolResult.trustScore;
+  } else if (isNonInteractiveUser) {
+    sourceType = config.nonInteractiveSourceType;
+    trustScore = NON_INTERACTIVE_SOURCE_TRUST[config.nonInteractiveSourceType];
+  } else {
+    sourceType = mapping.sourceType;
+    trustScore = mapping.trustScore;
+  }
 
   return {
     text,
