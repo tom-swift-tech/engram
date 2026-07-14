@@ -91,11 +91,12 @@ describe('MCP Server', () => {
     cleanupDb(dbPath);
   });
 
-  it('ListTools returns all 13 tool schemas', async () => {
+  it('ListTools returns all 14 tool schemas', async () => {
     const result = await client.listTools();
-    expect(result.tools.length).toBe(13);
+    expect(result.tools.length).toBe(14);
     const names = result.tools.map((t) => t.name);
     expect(names).toContain('engram_retain');
+    expect(names).toContain('engram_introspect');
     expect(names).toContain('engram_recall');
     expect(names).toContain('engram_reflect');
     expect(names).toContain('engram_process_extractions');
@@ -143,6 +144,21 @@ describe('MCP Server', () => {
     expect(parsed.results.some((r: any) => r.text.includes('Terraform'))).toBe(
       true,
     );
+  });
+
+  it('engram_introspect returns the held-state projection shape', async () => {
+    const result = await client.callTool({
+      name: 'engram_introspect',
+      arguments: { subject: 'Terraform' },
+    });
+
+    const content = result.content as Array<{ type: string; text: string }>;
+    const parsed = JSON.parse(content[0].text);
+    // No reflect cycle ran, so beliefs are empty — but the projection contract
+    // (subject echo + opinions/observations arrays) must hold.
+    expect(parsed.subject).toBe('Terraform');
+    expect(Array.isArray(parsed.opinions)).toBe(true);
+    expect(Array.isArray(parsed.observations)).toBe(true);
   });
 
   it('engram_session creates a new working memory session', async () => {

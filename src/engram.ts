@@ -65,6 +65,14 @@ import { parseTemporalQuery, type TemporalRange } from './temporal-parser.js';
 import { entityId as buildEntityId } from './extract-cpu.js';
 
 import {
+  introspect,
+  type IntrospectOptions,
+  type IntrospectResult,
+  type OpinionView,
+  type ObservationView,
+} from './introspect.js';
+
+import {
   reflect,
   ReflectScheduler,
   type ReflectConfig,
@@ -131,6 +139,10 @@ export type {
   TokenBudget,
   ContextSlice,
   CommittedArtifact,
+  IntrospectOptions,
+  IntrospectResult,
+  OpinionView,
+  ObservationView,
 };
 export {
   OllamaEmbeddings,
@@ -662,6 +674,23 @@ export class Engram {
   /** Get extraction queue health stats (pending, completed, failed counts). */
   getQueueStats(): QueueStats {
     return getQueueStats(this.db);
+  }
+
+  /**
+   * Introspect held state: current opinions (beliefs with confidence + full
+   * support/challenge evidence + lifecycle) and synthesized observations about
+   * a subject. A direct structured lookup — NOT query-ranked recall: there is
+   * no confidence floor, so weakly-held or freshly-challenged beliefs stay
+   * visible. Pure read, no LLM/embedding.
+   *
+   * Projection only: reports held state, does not judge whether a candidate
+   * statement is consistent with it (the consistency check is a deferred,
+   * separate primitive).
+   *
+   * @param subject — lexical subject to introspect; omit for top held state overall.
+   */
+  introspect(subject?: string, options?: IntrospectOptions): IntrospectResult {
+    return introspect(this.db, subject, options);
   }
 
   /** Close the database connection. Call when the agent shuts down. */

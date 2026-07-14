@@ -503,6 +503,7 @@ npx engram-mcp ./agent.engram --anthropic-api-key sk-ant-... --anthropic-model c
 | `engram_session` | Infer/resume, update, or snapshot a working memory session (`action: resume\|update\|snapshot`, default `resume`) |
 | `engram_queue_stats` | Extraction queue depth, processing metrics, and failure-reason breakdown |
 | `engram_requeue_failed` | Re-queue failed extractions after an outage (optional error filter) |
+| `engram_introspect` | Read held state — opinions (belief + confidence + support/challenge evidence + lifecycle) and observations for a subject; direct lookup, no confidence floor |
 | `engram_embed` | Embed text in the bank's stored vector space (query or document mode) |
 | `engram_context_commit` | Commit a task-scoped decision artifact (ContextStore) |
 | `engram_context_query` | Query the children committed under a ContextStore ref |
@@ -571,6 +572,10 @@ engram queue-stats --json
 # Re-drive failed extractions after an outage (all, or one failure class)
 engram requeue-failed --json
 engram requeue-failed --error-like "fetch failed" --json
+
+# Introspect held state about a subject (opinions + observations, no confidence floor)
+engram introspect "kubernetes" --json
+engram introspect --json                 # top held state overall
 
 # Embed text in the bank's vector space (query mode by default)
 engram embed "deploy pipeline" --json
@@ -666,7 +671,7 @@ See **[docs/PI-INTEGRATION.md](docs/PI-INTEGRATION.md)** for full setup, lifecyc
 
 Portable skill files for agents using Engram via mcporter:
 
-- **[skills/engram.md](skills/engram.md)** — Complete tool reference with all 13 MCP tools, usage patterns, and common mistakes
+- **[skills/engram.md](skills/engram.md)** — Complete tool reference with all 14 MCP tools, usage patterns, and common mistakes
 - **[skills/engram-session.md](skills/engram-session.md)** — Working memory session lifecycle and tuning guide
 - **[skills/cli-memory/SKILL.md](skills/cli-memory/SKILL.md)** — `engram` CLI contract for coding agents (e.g. Pi): per-command `--json` schemas, exit codes, and when to recall vs. retain vs. supersede vs. session
 

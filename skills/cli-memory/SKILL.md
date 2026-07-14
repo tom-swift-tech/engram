@@ -15,6 +15,11 @@ whether and how to call it** — not a man page.
   references a person, project, preference, past decision, or "what we did", you
   do not know the answer from the prompt alone. Recall first, then answer. A
   recall that returns nothing is cheap; answering from a stale guess is not.
+- **To check what you already believe about something → `introspect`.** When the
+  question is "what's my current opinion on X and how strongly do I hold it",
+  introspect returns beliefs with confidence + supporting/challenging evidence —
+  including weakly-held ones `recall` hides. It reads held state; it does not
+  fetch raw chunks (that's `recall`) or judge a statement's consistency.
 - **After a fact, decision, or preference is established → `retain`.** The user
   states a preference ("I use Pulumi now"), you make a design decision, a
   constraint is confirmed. Store it so the next session knows. Do **not** retain
@@ -193,6 +198,28 @@ Failed is terminal (3 attempts exhausted) — items never retry on their own. Th
 resets them to pending with a fresh attempt counter. `--error-like <substring>`
 targets one failure class from the `failed_reasons` breakdown.
 `--json` shape: `{ "requeued": 11 }`.
+
+### `introspect [subject]` — read held state (opinions + observations)
+
+```bash
+engram introspect "kubernetes" --json
+engram introspect --json                       # top held state overall
+engram introspect "rust" --min-confidence 0.5 --limit 10 --json
+```
+
+What the agent currently *believes* about a subject, not what chunks mention it.
+A direct lookup with **no confidence floor** — weakly-held or freshly-challenged
+beliefs (which `recall` hides at `confidence < 0.5`) stay visible. Subject read
+from stdin if omitted as a positional; omit entirely for top held state. Options:
+`--min-confidence <0..1>` (default 0), `--limit <n>` (default 20),
+`--no-opinions`, `--no-observations`. Read-only, no LLM call. Reports held state;
+it does not judge whether a statement is consistent with a belief (deferred).
+`--json` shape: `{ "subject": "kubernetes", "opinions": [{ "id", "belief",
+"confidence", "domain", "supportCount", "challengeCount", "evidenceCount",
+"supportingChunks", "contradictingChunks", "relatedEntities", "formedAt",
+"lastReinforced", "lastChallenged", "updatedAt" }], "observations": [{ "id",
+"summary", "domain", "topic", "sourceChunks", "sourceEntities", "synthesizedAt",
+"lastRefreshed", "refreshCount" }] }`.
 
 ### `reflect` — synthesize observations/opinions (needs an LLM)
 
