@@ -72,6 +72,22 @@ import {
   type ObservationView,
 } from './introspect.js';
 
+import { ReadonlyEngram } from './readonly-engram.js';
+
+import {
+  groundSubagent,
+  taskContext,
+  metabolizeReport,
+  GROUNDING_TYPES,
+  type GroundingType,
+  type GroundingScope,
+  type Grounding,
+  type SubagentReport,
+  type OrchestratorWriter,
+  type MetabolizeOptions,
+  type MetabolizeResult,
+} from './grounding.js';
+
 import {
   reflect,
   ReflectScheduler,
@@ -159,6 +175,20 @@ export {
   DEFAULT_OLLAMA_URL,
   DEFAULT_SOURCE_TIERS,
   DEFAULT_MEMORY_TYPE_RANK,
+  ReadonlyEngram,
+  groundSubagent,
+  taskContext,
+  metabolizeReport,
+  GROUNDING_TYPES,
+};
+export type {
+  GroundingType,
+  GroundingScope,
+  Grounding,
+  SubagentReport,
+  OrchestratorWriter,
+  MetabolizeOptions,
+  MetabolizeResult,
 };
 export type { TemporalRange, ChunkOptions };
 
@@ -716,6 +746,23 @@ export class Engram {
   async backup(destPath: string): Promise<number> {
     const metadata = await this.db.backup(destPath);
     return metadata.totalPages;
+  }
+
+  /**
+   * Open a capability-restricted, read-only view over this engram — the
+   * read-only guarantee for the Subagent Grounding Layer. The returned
+   * ReadonlyEngram exposes ONLY recall / queryContext / introspect (and, via
+   * the grounding module, groundSubagent / taskContext), over a second
+   * `{ readonly: true }` connection: a stateless subagent handed this view is
+   * structurally incapable of mutating the store — no write method exists on
+   * the surface, and a raw-SQL escape fails at the driver.
+   *
+   * Safe to call while retain/recall run on this instance (WAL: concurrent
+   * readers never block the writer). The view holds its own connection; call
+   * `view.close()` when the subagent is done — it does not affect this handle.
+   */
+  async readonlyView(): Promise<ReadonlyEngram> {
+    return ReadonlyEngram.open(this.dbPath, this.embedder);
   }
 
   // ---------------------------------------------------------------------------
