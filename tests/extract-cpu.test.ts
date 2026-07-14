@@ -268,6 +268,104 @@ describe('extractEntitiesCpu', () => {
   });
 
   // -------------------------------------------------------------------------
+  // 12. Graph matching — stopwords are never linked (D1)
+  // -------------------------------------------------------------------------
+
+  it('does not link a stopword entity that merely appears as a substring', () => {
+    db.prepare(
+      `INSERT INTO entities (id, name, canonical_name, entity_type, aliases)
+       VALUES ('ent-and', 'and', 'and', 'concept', '[]')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO entities (id, name, canonical_name, entity_type, aliases)
+       VALUES ('ent-for', 'for', 'for', 'concept', '[]')`,
+    ).run();
+
+    const chunkId = 'chk-stopword-1';
+    const text = 'the sandwich forum was crowded';
+    insertChunk(chunkId, text);
+
+    extractEntitiesCpu(db, chunkId, text);
+
+    const andLink = db
+      .prepare(
+        `SELECT * FROM chunk_entities WHERE chunk_id = ? AND entity_id = 'ent-and'`,
+      )
+      .get(chunkId);
+    const forLink = db
+      .prepare(
+        `SELECT * FROM chunk_entities WHERE chunk_id = ? AND entity_id = 'ent-for'`,
+      )
+      .get(chunkId);
+
+    expect(andLink).toBeUndefined();
+    expect(forLink).toBeUndefined();
+  });
+
+  // -------------------------------------------------------------------------
+  // 13. Graph matching — sub-word fragments are never linked (D1)
+  // -------------------------------------------------------------------------
+
+  it('does not link an entity that is only a sub-word fragment of a larger word', () => {
+    db.prepare(
+      `INSERT INTO entities (id, name, canonical_name, entity_type, aliases)
+       VALUES ('ent-est', 'est', 'est', 'concept', '[]')`,
+    ).run();
+    // "info" is long enough to pass the length guard on its own, so this
+    // exercises the word-boundary check specifically, not just the length
+    // filter — "info" is a real substring of "information" but never a
+    // whole word there.
+    db.prepare(
+      `INSERT INTO entities (id, name, canonical_name, entity_type, aliases)
+       VALUES ('ent-info', 'info', 'info', 'concept', '[]')`,
+    ).run();
+
+    const chunkId = 'chk-fragment-1';
+    const text = 'this is a test of the information system';
+    insertChunk(chunkId, text);
+
+    extractEntitiesCpu(db, chunkId, text);
+
+    const estLink = db
+      .prepare(
+        `SELECT * FROM chunk_entities WHERE chunk_id = ? AND entity_id = 'ent-est'`,
+      )
+      .get(chunkId);
+    const infoLink = db
+      .prepare(
+        `SELECT * FROM chunk_entities WHERE chunk_id = ? AND entity_id = 'ent-info'`,
+      )
+      .get(chunkId);
+
+    expect(estLink).toBeUndefined();
+    expect(infoLink).toBeUndefined();
+  });
+
+  // -------------------------------------------------------------------------
+  // 14. Graph matching — whole-word entities still link (D1 regression guard)
+  // -------------------------------------------------------------------------
+
+  it('still links a whole-word entity that happens to be a short technical name', () => {
+    db.prepare(
+      `INSERT INTO entities (id, name, canonical_name, entity_type, aliases)
+       VALUES ('ent-info', 'info', 'info', 'concept', '[]')`,
+    ).run();
+
+    const chunkId = 'chk-wholeword-1';
+    const text = 'please check the info before deploying';
+    insertChunk(chunkId, text);
+
+    extractEntitiesCpu(db, chunkId, text);
+
+    const link = db
+      .prepare(
+        `SELECT * FROM chunk_entities WHERE chunk_id = ? AND entity_id = 'ent-info'`,
+      )
+      .get(chunkId);
+    expect(link).toBeTruthy();
+  });
+
+  // -------------------------------------------------------------------------
   // 11. Performance — 50 pre-existing entities, 100-char text completes fast
   // -------------------------------------------------------------------------
 
