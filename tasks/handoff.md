@@ -34,17 +34,20 @@ each builder owns a disjoint file set; brief from
 | **D2+D4** | `src/reflect.ts`, `tests/reflect.test.ts` | D2: `findMatchingObservation` mirroring `findMatchingOpinion` (`:488-511`), route new obs into the `observation_refreshes` seam (`:675-703`), lexical (no schema change). D4: durability rubric at prompt `:256`/`:261`; attribution guard in `resolveEntityIds` (`:478-486`). |
 | **D3-gate** | `integrations/pi/src/adapter.ts`, `integrations/pi/tests/auto-retain.test.ts` | cron/job detector in `planAutoRetain` (`:667-703`)/`ROLE_MAP` (`:600-605`): refuse or downgrade job prompts so they never store as `user_stated`/0.7. |
 
-## Sequential, NOT parallelized — gated on explicit go + backup
+## Purge — DELIVER A SCRIPT ONLY; running against a live store is OUT OF SCOPE
 
-**Purge (D1/D3 live-store cleanup).** Irreversible hard-delete on the real
-`mira.engram` (location TBD — ask; not in repo). MUST: `engram.backup()` first,
-then hard-delete in FK-safe child-first order `relations → chunk_entities →
-entities` (no `ON DELETE CASCADE`), then `VACUUM`. `forget()` is a soft delete
-and reclaims nothing — the purge needs a dedicated maintenance script. Cron-chunk
-purge filter: `memory_type='experience' AND source='pi:conversation' AND
-source_type='user_stated' AND trust_score=0.7`, narrowed by FTS/`text` on the
-known cron phrases (no session-id column). Build the script in-sprint; run it
-supervised. Projected 329 MB → ~100–120 MB.
+`mira.engram` (and any live agent store) is **out of scope** — operator-owned
+data, not our execution target. Do NOT ask for its path or run any destructive
+op against it. Deliverable is a **store-agnostic** maintenance script (takes any
+`.engram` path, mandatory `engram.backup()` first + a `--dry-run` default). The
+operator runs it. Requirements the script must encode: hard-delete (not
+`forget()`, which soft-deletes and reclaims nothing) in FK-safe child-first order
+`relations → chunk_entities → entities` (no `ON DELETE CASCADE`), then `VACUUM`.
+Fragment/stopword entities keyed by `entities.canonical_name`. Cron-chunk filter:
+`memory_type='experience' AND source='pi:conversation' AND source_type='user_stated'
+AND trust_score=0.7`, narrowed by FTS/`text` on the known cron phrases (no
+session-id column). Projected effect on a store like the assessment's:
+329 MB → ~100–120 MB. **We do not observe that number — the operator does.**
 
 **D5 (reflection catch-up)** and **Step 6 (consolidate vs expand)** come after
 the code lanes; D5 is cheaper once D2/D4 cut wasted writes.
@@ -53,9 +56,11 @@ the code lanes; D5 is cheaper once D2/D4 cut wasted writes.
 
 Root vitest + affected integration suite, typecheck, lint, format. Baseline
 **692 green** (root 517 / pi 108 / openclaw 67). Surface-parity (13 tools) must
-stay green — none of these touch the tool surface. Cargo/AQL out of scope. D6
-additionally needs a live-store before/after recall measurement (target:
-cron-noise-in-top-6 15 → 1). Purge needs before/after DB size + a recall smoke.
+stay green — none of these touch the tool surface. Cargo/AQL out of scope. D6 is
+validated by unit tests + a synthetic-fixture ranking test (build a small local
+`.engram` in-test); the assessment's live-store numbers (cron-noise 15 → 1) are
+the operator's to reproduce, not ours. Purge script validated on a throwaway
+in-test `.engram`, never a live store.
 
 ## Gotchas carried forward (still live)
 

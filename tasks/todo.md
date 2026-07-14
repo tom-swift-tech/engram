@@ -73,11 +73,13 @@ floor fully intact and the security invariant untouched.
      spans repos and needs coordination.
    - **(c)** Purge-only now; defer the gate. Removes the 56 rows and buys D6 a
      clean tier-0, but recurrence stays open until #21.
-3. **Live-store purge (irreversible — hard-delete on real data).** Per global
-   policy this is a STOP-AND-CONFIRM gate. Requires `engram.backup()` first,
-   then hard-delete (not `forget()`, which soft-deletes and reclaims nothing) in
-   FK-safe child-first order `relations → chunk_entities → entities`, then
-   `VACUUM`. Who runs it, and against which store(s)?
+3. **Purge = deliver a script, do NOT run it on a live store. RESOLVED.**
+   `mira.engram` and any live agent store are out of scope (operator-owned data).
+   We ship a store-agnostic maintenance script (any `.engram` path, mandatory
+   `engram.backup()` + `--dry-run` default); the operator runs it. The script
+   encodes hard-delete (not `forget()`, which soft-deletes and reclaims nothing)
+   in FK-safe child-first order `relations → chunk_entities → entities`, then
+   `VACUUM`. We never ask for a live path or observe the live size delta.
 
 ## Work items
 
@@ -90,17 +92,22 @@ floor fully intact and the security invariant untouched.
       ("and"/"for") and a sub-word fragment ("est" inside "test") are NOT linked;
       keep the existing whole-word tests (`:28-48`, `:178-198`, `:274-299`) green.
 
-### D1/D3 — purge & reclaim (live-store maintenance) · ~1 day · needs Decision 3
-- [ ] One-shot maintenance script (NOT library code — `tools/` or a guarded
-      subcommand). Hard-delete fragment/stopword entities: order
-      `relations (source|target_entity_id) → chunk_entities (entity_id) → entities (id)`,
-      then `VACUUM`. No `ON DELETE CASCADE` exists — child-first is mandatory.
-- [ ] Purge the 56 cron chunks: filter `memory_type='experience' AND
+### D1/D3 — purge SCRIPT (deliverable only; operator runs it) · ~1 day
+Live agent stores (`mira.engram` et al.) are OUT OF SCOPE — we ship the tool, we
+do not run it on real data. See Decision 3.
+- [ ] Store-agnostic maintenance script (NOT library code — `tools/` or a guarded
+      subcommand). Takes any `.engram` path; `--dry-run` DEFAULT; mandatory
+      `engram.backup(dest)` before any mutation. Hard-delete fragment/stopword
+      entities in order `relations (source|target_entity_id) → chunk_entities
+      (entity_id) → entities (id)`, then `VACUUM`. No `ON DELETE CASCADE` exists —
+      child-first is mandatory.
+- [ ] Cron-chunk purge mode: filter `memory_type='experience' AND
       source='pi:conversation' AND source_type='user_stated' AND trust_score=0.7`,
       narrowed by FTS/`text` match on the known cron phrases (no session-id
       column exists, so content match is required).
-- [ ] Backup first (`engram.backup(dest)`), record before/after sizes.
-      Projected 329 MB → ~100–120 MB.
+- [ ] Validate the script against a throwaway in-test `.engram` (build → corrupt
+      with fragments → purge → assert child-first deletion + size drop). Never a
+      live store. Operator reproduces the ~329 MB → ~100–120 MB delta.
 
 ### D3 — gate (recurrence) · scope depends on Decision 2
 - [ ] `integrations/pi/src/adapter.ts` `planAutoRetain` (`:667-703`) /
@@ -113,8 +120,9 @@ floor fully intact and the security invariant untouched.
       discarded after `ORDER BY distance`) into `ScoredChunk`/`FusedEntry`.
 - [ ] Make within-tier `score` cosine-primary × gentle trust tiebreak; add a
       `minScore` cosine gate. Port the assessment's validated params
-      (`cosine × 0.94–0.99 trust-bias · minScore 0.42`) and re-measure on the
-      live store (target: cron-noise-in-top-6 15 → 1).
+      (`cosine × 0.94–0.99 trust-bias · minScore 0.42`). Validate with a
+      synthetic-fixture ranking test (small in-test `.engram`) — the live-store
+      cron-noise 15 → 1 number is the operator's to reproduce, not ours.
 - [ ] **Leave the `(tier, score)` comparator (`:1136-1143`) and the tier-2
       floor untouched** — that is what preserves the security invariant.
 - [ ] Update `tests/trust-tier.test.ts:105-161` (within-tier trust/mem-type
@@ -156,15 +164,16 @@ builders in isolated worktrees off a lead-resolved SHA:
 - **D2+D4** → `src/reflect.ts`, `tests/reflect.test.ts`
 - **D3-gate** → `integrations/pi/src/adapter.ts`, `integrations/pi/tests/auto-retain.test.ts`
 
-The **purge** (D1/D3) is a single-agent, sequential, live-data step — not
-parallelized, gated on Decision 3 + backup.
+The **purge** is a script deliverable (D1/D3), not a run — see the purge work
+item. No live-store step exists in our scope.
 
 ## Verification
 
 Per changed lane: root vitest + affected integration suite, typecheck, lint,
 format. Baseline **692 green** (root 517 / pi 108 / openclaw 67). Surface-parity
 (13 MCP tools, CLI↔MCP 1:1) must stay green — none of these touch the tool
-surface. Cargo-gated AQL suite out of scope. For D6, add a live-store
-before/after recall measurement (not just unit tests) since the fix was
-validated empirically. For the purge, record DB size before/after + a recall
-smoke check that relevant memories return.
+surface. Cargo-gated AQL suite out of scope. For D6, validate with a synthetic
+in-test `.engram` fixture (a strong tier-1 cosine match must beat a weak tier-1
+chunk); the assessment's empirical live-store numbers are the operator's to
+reproduce. The purge script is validated against a throwaway in-test `.engram`,
+never a live store.
