@@ -27,6 +27,7 @@
 
 import Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
+import { hostname } from 'os';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -266,17 +267,25 @@ export class Engram {
   private readonly dbPath: string;
   private readonly embedder: EmbeddingProvider;
   private readonly generator: GenerationProvider;
+  /**
+   * This instance's stable node-origin — the identity stamped onto every chunk
+   * this instance authors (Provenance groundwork). Read once from bank_config
+   * in init() and held here so the write path never re-queries per retain.
+   */
+  private readonly nodeOrigin: string;
 
   private constructor(
     db: Database.Database,
     dbPath: string,
     embedder: EmbeddingProvider,
     generator: GenerationProvider,
+    nodeOrigin: string,
   ) {
     this.db = db;
     this.dbPath = dbPath;
     this.embedder = embedder;
     this.generator = generator;
+    this.nodeOrigin = nodeOrigin;
   }
 
   // ---------------------------------------------------------------------------
@@ -418,6 +427,62 @@ export class Engram {
     db.exec(
       'CREATE INDEX IF NOT EXISTS idx_chunks_expires_at ON chunks(expires_at) WHERE expires_at IS NOT NULL',
     );
+
+    // Migration: add node_origin provenance columns to existing .engram files.
+    // Additive only — records which Engram instance authored a chunk/opinion/
+    // observation, so a future sync/merge has provenance without backfill.
+    // Same guarded-ALTER-then-unconditional-index pattern as the scope columns
+    // above: pre-existing rows stay NULL ("origin unknown / pre-distribution"),
+    // never falsely claimed as authored by this instance. Backfilling would
+    // lie about who first recorded memories that predate origin tracking.
+    const chunkOriginCols = db.pragma('table_info(chunks)') as Array<{
+      name: string;
+    }>;
+    if (!chunkOriginCols.some((c) => c.name === 'node_origin')) {
+      db.exec('ALTER TABLE chunks ADD COLUMN node_origin TEXT');
+    }
+    const opinionOriginCols = db.pragma('table_info(opinions)') as Array<{
+      name: string;
+    }>;
+    if (!opinionOriginCols.some((c) => c.name === 'node_origin')) {
+      db.exec('ALTER TABLE opinions ADD COLUMN node_origin TEXT');
+    }
+    const obsOriginCols = db.pragma('table_info(observations)') as Array<{
+      name: string;
+    }>;
+    if (!obsOriginCols.some((c) => c.name === 'node_origin')) {
+      db.exec('ALTER TABLE observations ADD COLUMN node_origin TEXT');
+    }
+    db.exec(
+      'CREATE INDEX IF NOT EXISTS idx_chunks_node_origin ON chunks(node_origin) WHERE node_origin IS NOT NULL',
+    );
+    db.exec(
+      'CREATE INDEX IF NOT EXISTS idx_opinions_node_origin ON opinions(node_origin) WHERE node_origin IS NOT NULL',
+    );
+    db.exec(
+      'CREATE INDEX IF NOT EXISTS idx_observations_node_origin ON observations(node_origin) WHERE node_origin IS NOT NULL',
+    );
+
+    // Establish this bank's stable node-origin identity. Generated exactly once,
+    // on first open of a bank that lacks it (ON CONFLICT DO NOTHING never
+    // regenerates — the value must survive restarts). Lives in bank_config,
+    // exactly like embed_dimensions / entity_id_v2_migrated: one .engram = one
+    // origin, written at birth.
+    const hostSlug =
+      hostname()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '') || 'host';
+    const generatedOrigin = `node-${hostSlug}-${randomUUID().slice(0, 8)}`;
+    db.prepare(
+      `INSERT INTO bank_config (key, value) VALUES ('node_origin', ?)
+       ON CONFLICT(key) DO NOTHING`,
+    ).run(generatedOrigin);
+    const nodeOrigin = (
+      db
+        .prepare(`SELECT value FROM bank_config WHERE key = 'node_origin'`)
+        .get() as { value: string }
+    ).value;
 
     // Migration: re-key entity IDs to collision-resistant format (slug + hash).
     // Disables FK checks during the transaction because child rows (chunk_entities,
@@ -566,7 +631,7 @@ export class Engram {
        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
     ).run(String(currentDim));
 
-    return new Engram(db, path, embedder, generator);
+    return new Engram(db, path, embedder, generator, nodeOrigin);
   }
 
   private upsertBankConfig(options: EngramOptions): void {
@@ -629,7 +694,7 @@ export class Engram {
   /** Store a memory trace. Fast path — no LLM call. The SQLite write is ~5ms;
    *  total latency is dominated by the local embedding (tens of ms on CPU). */
   async retain(text: string, options?: RetainOptions): Promise<RetainResult> {
-    return retain(this.db, text, this.embedder, options);
+    return retain(this.db, text, this.embedder, options, this.nodeOrigin);
   }
 
   /**
@@ -640,7 +705,14 @@ export class Engram {
     items: Array<{ text: string; options?: RetainOptions }>,
     onProgress?: (current: number, total: number) => void,
   ): Promise<RetainResult[]> {
-    return retainBatch(this.db, items, this.embedder, onProgress);
+    return retainBatch(
+      this.db,
+      items,
+      this.embedder,
+      onProgress,
+      undefined,
+      this.nodeOrigin,
+    );
   }
 
   /**

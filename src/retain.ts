@@ -229,6 +229,14 @@ export async function retain(
   text: string,
   embedder: EmbeddingProvider,
   options: RetainOptions = {},
+  /**
+   * Provenance stamp — the authoring Engram instance's node-origin, threaded in
+   * from the Engram wrapper (which holds it). Written onto the fresh chunk only;
+   * a dedup hit keeps the existing chunk's origin (first author wins). Defaults
+   * to null for direct callers (tests, bulk paths that don't set it) — a NULL
+   * origin means "provenance unknown / pre-distribution", which is truthful.
+   */
+  nodeOrigin: string | null = null,
 ): Promise<RetainResult> {
   const {
     memoryType = 'world',
@@ -335,7 +343,8 @@ export async function retain(
     !skipExtraction && (memoryType === 'world' || memoryType === 'experience');
 
   const insertTransaction = db.transaction(() => {
-    // Insert chunk
+    // Insert chunk. node_origin stamps the authoring instance (first author
+    // wins — the dedup UPDATE path above deliberately never rewrites it).
     db.prepare(
       `
       INSERT INTO chunks (
@@ -343,8 +352,8 @@ export async function retain(
         source, source_uri, context,
         source_type, trust_score,
         event_time, event_time_end, temporal_label,
-        text_hash
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        text_hash, node_origin
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
     ).run(
       chunkId,
@@ -360,6 +369,7 @@ export async function retain(
       eventTimeEnd,
       temporalLabel,
       computeTextHash(text),
+      nodeOrigin,
     );
 
     // Tier 1: CPU extraction (instant, inline, no LLM)
@@ -404,6 +414,8 @@ export async function retainBatch(
   embedder: EmbeddingProvider,
   onProgress?: (current: number, total: number) => void,
   concurrency: number = 8,
+  /** Authoring instance's node-origin, stamped onto each fresh chunk (see retain). */
+  nodeOrigin: string | null = null,
 ): Promise<RetainResult[]> {
   const results: RetainResult[] = [];
   const batchSize = Math.max(1, concurrency);
@@ -436,10 +448,16 @@ export async function retainBatch(
             deduplicated: true,
           } as RetainResult);
         }
-        return retain(db, text, embedder, {
-          ...options,
-          skipExtraction: options?.skipExtraction ?? true,
-        });
+        return retain(
+          db,
+          text,
+          embedder,
+          {
+            ...options,
+            skipExtraction: options?.skipExtraction ?? true,
+          },
+          nodeOrigin,
+        );
       }),
     );
     results.push(...batchResults);
