@@ -1,8 +1,25 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
-import { retain } from '../src/retain.js';
+import { retain, embeddingToBuffer } from '../src/retain.js';
 import { recall } from '../src/recall.js';
 import { createTestDb, MockEmbedder } from './helpers.js';
+
+/**
+ * Construct a unit vector orthogonal to `v` via Gram-Schmidt against a fixed
+ * alternating-sign seed. Deterministic (no randomness) and lands at exactly
+ * cosine 0 to `v` regardless of `v`'s direction — used to force a "weak"
+ * semantic match with a known, reproducible cosine similarity.
+ */
+function orthogonalTo(v: Float32Array): Float32Array {
+  const seed = new Float32Array(v.length);
+  for (let i = 0; i < seed.length; i++) seed[i] = i % 2 === 0 ? 1 : -1;
+  const dot = seed.reduce((s, x, i) => s + x * v[i], 0);
+  const normSq = v.reduce((s, x) => s + x * x, 0);
+  const proj = dot / normSq;
+  const orth = Float32Array.from(seed, (x, i) => x - proj * v[i]);
+  const mag = Math.sqrt(orth.reduce((s, x) => s + x * x, 0));
+  return Float32Array.from(orth, (x) => x / mag);
+}
 
 // ---------------------------------------------------------------------------
 // Keyword search
@@ -331,6 +348,125 @@ describe('recall() — multi-strategy fusion', () => {
 
     // The high-trust chunk should rank first
     expect(result.results[0].trustScore).toBe(0.9);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D6 — within-tier scoring is cosine-primary, not RRF-ordinal
+//
+// Before D6, the fused `score` was a pure sum of 1/(k+rank) terms — ordinal
+// rank, not relevance magnitude. A chunk found by several strategies at
+// middling rank could out-score a chunk with a much stronger single-strategy
+// semantic match, because the RRF sum only ever "knew" about rank, never how
+// close the match actually was. These tests pin the fix: within a tier, the
+// semantic strategy's raw cosine similarity is now the primary score
+// (× a gentle 0.94-0.99 trust tiebreak), so relevance magnitude survives
+// fusion instead of being discarded after `ORDER BY distance`.
+// ---------------------------------------------------------------------------
+
+describe('recall() — D6 cosine-primary within-tier scoring', () => {
+  let db: Database.Database;
+  const embedder = new MockEmbedder();
+
+  beforeEach(() => {
+    db = createTestDb();
+  });
+  afterEach(() => db.close());
+
+  it('a strong single-strategy semantic match beats a weak multi-strategy chunk (regression)', async () => {
+    const query = 'gizmo rollout status';
+    const queryVec = await embedder.embed(query);
+
+    // Strong: embedding parallel to the query (cosine 1.0), found ONLY by
+    // semantic search — no keyword overlap with the query terms.
+    const strong = await retain(
+      db,
+      'the deployment finished ahead of schedule with no incidents',
+      embedder,
+      {
+        memoryType: 'experience',
+        sourceType: 'agent_generated',
+        trustScore: 0.5,
+      },
+    );
+    db.prepare(`UPDATE chunks SET embedding = ? WHERE id = ?`).run(
+      embeddingToBuffer(queryVec),
+      strong.chunkId,
+    );
+
+    // Weak: embedding orthogonal to the query (cosine 0.0), but the text
+    // repeats every query term so it also wins the keyword strategy — this
+    // multi-strategy consensus is exactly what let a weak match out-score a
+    // strong one under pure RRF-rank summation.
+    const weak = await retain(
+      db,
+      'gizmo rollout gizmo rollout gizmo rollout status status status',
+      embedder,
+      {
+        memoryType: 'experience',
+        sourceType: 'agent_generated',
+        trustScore: 0.5,
+        dedupMode: 'none',
+      },
+    );
+    db.prepare(`UPDATE chunks SET embedding = ? WHERE id = ?`).run(
+      embeddingToBuffer(orthogonalTo(queryVec)),
+      weak.chunkId,
+    );
+
+    const result = await recall(db, query, embedder, {
+      strategies: ['semantic', 'keyword'],
+      topK: 5,
+      decayHalfLifeDays: 0,
+    });
+
+    const strongIdx = result.results.findIndex((r) => r.id === strong.chunkId);
+    const weakIdx = result.results.findIndex((r) => r.id === weak.chunkId);
+    expect(strongIdx).toBeGreaterThanOrEqual(0);
+    expect(weakIdx).toBeGreaterThanOrEqual(0);
+    expect(strongIdx).toBeLessThan(weakIdx);
+  });
+
+  it('minScore gates out a weak cosine match while keeping a strong one', async () => {
+    const query = 'widget telemetry summary';
+    const queryVec = await embedder.embed(query);
+
+    const strong = await retain(
+      db,
+      'strong semantic match candidate',
+      embedder,
+      {
+        memoryType: 'experience',
+        sourceType: 'agent_generated',
+        trustScore: 0.5,
+      },
+    );
+    db.prepare(`UPDATE chunks SET embedding = ? WHERE id = ?`).run(
+      embeddingToBuffer(queryVec),
+      strong.chunkId,
+    );
+
+    const weak = await retain(db, 'weak semantic match candidate', embedder, {
+      memoryType: 'experience',
+      sourceType: 'agent_generated',
+      trustScore: 0.5,
+      dedupMode: 'none',
+    });
+    db.prepare(`UPDATE chunks SET embedding = ? WHERE id = ?`).run(
+      embeddingToBuffer(orthogonalTo(queryVec)),
+      weak.chunkId,
+    );
+
+    const result = await recall(db, query, embedder, {
+      strategies: ['semantic'],
+      topK: 5,
+      decayHalfLifeDays: 0,
+      minScore: 0.42,
+    });
+
+    const ids = result.results.map((r) => r.id);
+    expect(ids).toContain(strong.chunkId);
+    expect(ids).not.toContain(weak.chunkId);
   });
 });
 

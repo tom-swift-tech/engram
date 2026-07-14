@@ -10,7 +10,11 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Database from 'better-sqlite3';
-import { retain, processExtractionQueue } from '../src/retain.js';
+import {
+  retain,
+  processExtractionQueue,
+  embeddingToBuffer,
+} from '../src/retain.js';
 import { recall, DEFAULT_SOURCE_TIERS } from '../src/recall.js';
 import { reflect } from '../src/reflect.js';
 import type { GenerationProvider } from '../src/generation.js';
@@ -24,6 +28,23 @@ import {
 } from './helpers.js';
 
 const embedder = new MockEmbedder();
+
+/**
+ * Construct a unit vector orthogonal to `v` via Gram-Schmidt against a fixed
+ * alternating-sign seed — deterministic, cosine 0 to `v` regardless of `v`'s
+ * direction. Mirrors the helper in tests/recall.test.ts; used here to force
+ * a known-weak cosine similarity for the D6 tier-floor regression below.
+ */
+function orthogonalTo(v: Float32Array): Float32Array {
+  const seed = new Float32Array(v.length);
+  for (let i = 0; i < seed.length; i++) seed[i] = i % 2 === 0 ? 1 : -1;
+  const dot = seed.reduce((s, x, i) => s + x * v[i], 0);
+  const normSq = v.reduce((s, x) => s + x * x, 0);
+  const proj = dot / normSq;
+  const orth = Float32Array.from(seed, (x, i) => x - proj * v[i]);
+  const mag = Math.sqrt(orth.reduce((s, x) => s + x * x, 0));
+  return Float32Array.from(orth, (x) => x / mag);
+}
 
 // ---------------------------------------------------------------------------
 // Source-tier ranking floor
@@ -158,6 +179,52 @@ describe('recall() — source-tier ranking floor', () => {
     expect(result.results[0].id).toBe(observation.chunkId);
     expect(result.results[0].memoryType).toBe('observation');
     expect(result.results[1].id).toBe(opinion.chunkId);
+  });
+
+  it('D6: a high-cosine tier-2 chunk still ranks below a low-cosine tier-0 chunk', async () => {
+    // Cosine-primary within-tier scoring (D6) must never let its larger
+    // score range escape the tier floor — the (tier, score) comparator is
+    // absolute, so a tier-2 chunk with a near-perfect semantic match still
+    // has to lose to a tier-0 chunk with a weak one.
+    const query = 'incident postmortem summary';
+    const queryVec = await embedder.embed(query);
+
+    const tierZero = await retain(db, 'do not deploy on Fridays', embedder, {
+      memoryType: 'experience',
+      sourceType: 'user_stated',
+      trustScore: 0.3,
+    });
+    db.prepare(`UPDATE chunks SET embedding = ? WHERE id = ?`).run(
+      embeddingToBuffer(orthogonalTo(queryVec)),
+      tierZero.chunkId,
+    );
+
+    const tierTwo = await retain(
+      db,
+      'external postmortem feed entry',
+      embedder,
+      {
+        memoryType: 'experience',
+        sourceType: 'external_doc',
+        trustScore: 1.0,
+        dedupMode: 'none',
+      },
+    );
+    db.prepare(`UPDATE chunks SET embedding = ? WHERE id = ?`).run(
+      embeddingToBuffer(queryVec),
+      tierTwo.chunkId,
+    );
+
+    const result = await recall(db, query, embedder, {
+      strategies: ['semantic'],
+      topK: 5,
+      decayHalfLifeDays: 0,
+    });
+
+    expect(result.results.length).toBe(2);
+    expect(result.results[0].id).toBe(tierZero.chunkId);
+    expect(result.results[0].sourceType).toBe('user_stated');
+    expect(result.results[1].id).toBe(tierTwo.chunkId);
   });
 
   it('honors sourceTiers overrides', async () => {
