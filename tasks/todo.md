@@ -7,10 +7,12 @@ against the source tree (four parallel investigations, 2026-07-13); the
 verified mechanism and exact loci are recorded per item. This is fix-work in
 dependency order, not a rebuild.
 
-## Status — 2026-07-14 (integration branch `remediation/sprint-d1-d6`)
+## Status — 2026-07-14 (MERGED to `main@7ae29dd`)
 
-**Four code lanes DONE & verified green; single PR pending.** Built in parallel
-isolated worktrees off `main@2bb22be`, octopus-merged clean (disjoint files):
+**Four code lanes DONE, verified green, and SQUASH-MERGED into `main` (PR #30).**
+Built in parallel isolated worktrees off `main@2bb22be`, octopus-merged clean
+(disjoint files), then squash-merged to main. **Worktrees + lane branches torn
+down; main tree verified (typecheck + build clean) post-merge.**
 - **D1** (`src/extract-cpu.ts`) — word-boundary + stopword graph matching. ✔
 - **D6** (`src/recall.ts`) — cosine-primary within-tier scoring; `(tier, score)`
   floor byte-identical (proven by test). ✔
@@ -19,14 +21,14 @@ isolated worktrees off `main@2bb22be`, octopus-merged clean (disjoint files):
 - **D3-gate** (`integrations/pi/src/adapter.ts`) — `isScheduledJobPrompt`
   downgrades cron/job prompts to `tool_result`/0.4. ✔
 
-Verification (integration branch): root **551** green (was 538), Pi **115** green,
-build + typecheck + lint + format:check clean, surface-parity pinned at **14**
-tools. CLAUDE.md ↔ AGENTS.md re-synced (D6 within-tier note).
+Verification (pre-merge, CI-green on both Node 20 & 24): root **551** green (was
+538), Pi **115** green, build + typecheck + lint + format:check clean,
+surface-parity pinned at **14** tools. CLAUDE.md ↔ AGENTS.md re-synced (D6
+within-tier note). Post-merge local: typecheck + build clean on `7ae29dd`.
 
-**Still open after this PR:** **D5** (reflection catch-up) and **Step 6**
-(consolidate-vs-expand decision). Live agent-store cleanup is operator-owned
-and out of scope — the library ships no purge/maintenance tooling for consumer
-data.
+**Still open:** **D5** (reflection catch-up) and **Step 6** (consolidate-vs-expand
+decision). Live agent-store cleanup is operator-owned and out of scope — the
+library ships no purge/maintenance tooling for consumer data.
 
 ## Decisions locked (2026-07-13)
 
@@ -140,9 +142,51 @@ library one — and the security floor protects tier-0 either way.
       current uptime/reliability, in-progress status) as beliefs/observations.
 - [ ] Consider a light attribution sanity check in `resolveEntityIds` (`:478-486`).
 
-### D5 — reflection catch-up · ongoing · after D2/D4
-- [ ] Larger off-peak reflection batches so beliefs track the graph. Revisit
-      once D2/D4 reduce wasted writes.
+### D5 — reflection catch-up · IN PROGRESS 2026-07-14 · after D2/D4
+
+**Root cause (confirmed in source):** `reflect()` drains exactly ONE batch of
+≤`batchSize` (default 50) unreflected facts per call, then returns. `ReflectScheduler`
+and Pi both call it once per trigger. With a large backlog (live store: ~57% of
+12k chunks unreflected) it never catches up. Naively raising `batchSize` is a
+trap — a batch that overruns the model context produces 0 insights, so the facts
+are deliberately left unreflected (`reflect.ts:985`) and the issue-#17 adaptive
+shrink hint halves the next batch. Per-batch size is model-bounded; **throughput
+must come from looping modest batches**, not a bigger single batch.
+
+**Design — new bounded runner `reflectCatchUp()`, `reflect()` untouched. DONE 2026-07-14:**
+- [x] `src/reflect.ts` — added `CatchUpConfig` (extends `ReflectConfig` with
+      `maxBatches` default 20, `maxFacts?`, `maxDurationMs?`, `maxStalls` default 2)
+      and `CatchUpResult` (`batches`, aggregated insight counts, `remainingBacklog`,
+      `status: 'drained'|'capped'|'stalled'|'failed'`, `durationMs`, `batchResults[]`).
+- [x] `reflectCatchUp(config)` loops `reflect()`: between batches, counts backlog
+      via `SELECT COUNT(*) FROM v_unreflected` on a short-lived RO connection.
+      Stop conditions:
+      - backlog < `minFactsThreshold` → `drained` (natural completion; also the
+        already-caught-up no-op path → `batches: 0`);
+      - `maxBatches` / `maxFacts` / `maxDurationMs` hit → `capped`;
+      - `result.status === 'failed'` (connection error) → `failed`, break now
+        (same endpoint, no point retrying);
+      - `factsProcessed === 0` for `maxStalls` **consecutive** batches → `stalled`.
+        Tolerating up to `maxStalls` lets the #17 shrink hint self-heal one
+        context-overrun (leave `batchSize` undefined so the hint applies), but
+        breaks on persistent failure. **← the key policy decision.**
+- [x] `src/engram.ts` — `Engram.reflectCatchUp(options)` wrapper; exported
+      `reflectCatchUp`/`CatchUpConfig`/`CatchUpResult` from the public barrel.
+- [x] `ReflectScheduler` — `new ReflectScheduler(cfg, { catchUp: true })` runs a
+      catch-up pass per tick (the "off-peak" trigger). Reachable WITHOUT touching
+      the MCP/CLI tool surface (surface-parity stays pinned at 14; CLI/MCP
+      exposure is a deliberate later surface change).
+- [x] Tests in `tests/reflect.test.ts` (+6): drained no-op (batches 0);
+      multi-batch drain (3 batches, 12 facts, remainingBacklog 0); `capped` by
+      `maxBatches`; `capped` by `maxFacts`; `stalled` via unparseable-output
+      generator (shrink self-heal observed 12→6→3 before break); `failed` via a
+      throwing generator. Root suite 551→**557** green.
+- [x] Synced CLAUDE.md ↔ AGENTS.md (Batch-Reflect section + reflect.ts file line
+      + Reflect-schedule decision; mirror diff = only the "you are here" marker).
+
+**Verification (2026-07-14):** typecheck ✔, build ✔, lint ✔, format:check ✔ (ran
+`npm run format`), root vitest **557** green, Pi vitest **115** green,
+surface-parity pinned at **14**. NOT yet committed (on `main` — needs a branch).
 
 ### Step 6 — consolidate before expanding · decision, not action
 - [ ] Revisit the "single-file git-committable" premise (329 MB + 897 MB

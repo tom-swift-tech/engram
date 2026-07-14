@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import { retain } from '../src/retain.js';
-import { reflect } from '../src/reflect.js';
+import { reflect, reflectCatchUp } from '../src/reflect.js';
 import {
   MockEmbedder,
   loadSchema,
@@ -1399,5 +1399,132 @@ describe('reflect()', () => {
 
       expect(JSON.parse(obs.source_entities)).toEqual([]);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// reflectCatchUp() — D5: drain a reflection backlog over many batches
+// ---------------------------------------------------------------------------
+
+describe('reflectCatchUp()', () => {
+  let dbPath: string;
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    cleanupDb(dbPath);
+  });
+
+  it('drains a backlog across multiple batches until below threshold', async () => {
+    dbPath = tmpDbPath();
+    await setupDb(dbPath, 12);
+    vi.stubGlobal('fetch', mockOllamaFetch(REFLECT_RESPONSE));
+
+    const result = await reflectCatchUp({
+      dbPath,
+      reflectModel: 'llama-test',
+      batchSize: 5,
+      minFactsThreshold: 1,
+    });
+
+    // 12 facts / batch 5 → 5 + 5 + 2 = 3 batches, then backlog < threshold.
+    expect(result.batches).toBe(3);
+    expect(result.factsProcessed).toBe(12);
+    expect(result.remainingBacklog).toBe(0);
+    expect(result.status).toBe('drained');
+    expect(result.batchResults).toHaveLength(3);
+  });
+
+  it('is a no-op when the backlog is already below threshold', async () => {
+    dbPath = tmpDbPath();
+    await setupDb(dbPath, 3); // below the default threshold of 5
+    // fetch must never be called — no batch should run
+    vi.stubGlobal('fetch', async () => {
+      throw new Error('fetch should not be called when already caught up');
+    });
+
+    const result = await reflectCatchUp({ dbPath, reflectModel: 'llama-test' });
+
+    expect(result.batches).toBe(0);
+    expect(result.factsProcessed).toBe(0);
+    expect(result.remainingBacklog).toBe(3);
+    expect(result.status).toBe('drained');
+  });
+
+  it('stops at maxBatches with backlog remaining (capped)', async () => {
+    dbPath = tmpDbPath();
+    await setupDb(dbPath, 30);
+    vi.stubGlobal('fetch', mockOllamaFetch(REFLECT_RESPONSE));
+
+    const result = await reflectCatchUp({
+      dbPath,
+      reflectModel: 'llama-test',
+      batchSize: 5,
+      minFactsThreshold: 1,
+      maxBatches: 2,
+    });
+
+    expect(result.batches).toBe(2);
+    expect(result.factsProcessed).toBe(10);
+    expect(result.remainingBacklog).toBe(20);
+    expect(result.status).toBe('capped');
+  });
+
+  it('stops once maxFacts have been reflected (capped)', async () => {
+    dbPath = tmpDbPath();
+    await setupDb(dbPath, 20);
+    vi.stubGlobal('fetch', mockOllamaFetch(REFLECT_RESPONSE));
+
+    const result = await reflectCatchUp({
+      dbPath,
+      reflectModel: 'llama-test',
+      batchSize: 5,
+      minFactsThreshold: 1,
+      maxFacts: 8,
+    });
+
+    // Checked between batches: 5 (<8, continue), 10 (>=8, stop before batch 3).
+    expect(result.factsProcessed).toBe(10);
+    expect(result.status).toBe('capped');
+    expect(result.remainingBacklog).toBe(10);
+  });
+
+  it('stops after maxStalls consecutive zero-progress batches (stalled)', async () => {
+    dbPath = tmpDbPath();
+    await setupDb(dbPath, 12);
+    // Unparseable output → 0 insights → facts left unreflected → no progress.
+    vi.stubGlobal('fetch', mockOllamaFetch('this is not json at all'));
+
+    const result = await reflectCatchUp({
+      dbPath,
+      reflectModel: 'llama-test',
+      minFactsThreshold: 1,
+      maxStalls: 2,
+    });
+
+    expect(result.batches).toBe(2);
+    expect(result.factsProcessed).toBe(0);
+    expect(result.status).toBe('stalled');
+    // Nothing was reflected, so the whole backlog is still outstanding.
+    expect(result.remainingBacklog).toBe(12);
+  });
+
+  it('stops immediately when a batch fails (failed)', async () => {
+    dbPath = tmpDbPath();
+    await setupDb(dbPath, 12);
+    // A connection-class error surfaces as reflect status 'failed'.
+    vi.stubGlobal('fetch', async () => {
+      throw new Error('connection refused');
+    });
+
+    const result = await reflectCatchUp({
+      dbPath,
+      reflectModel: 'llama-test',
+      minFactsThreshold: 1,
+    });
+
+    expect(result.batches).toBe(1);
+    expect(result.status).toBe('failed');
+    expect(result.error).toBeTruthy();
+    expect(result.remainingBacklog).toBe(12);
   });
 });

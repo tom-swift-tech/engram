@@ -1,19 +1,18 @@
-# Handoff — Engram (updated 2026-07-14, wrap 2)
+# Handoff — Engram (updated 2026-07-14, wrap 3 — PR #30 MERGED)
 
 ## Base commit / branch state
 
-- **Working tree is on branch `remediation/sprint-d1-d6`** (NOT `main`). The main
-  worktree `D:/projects/sit/engram` was left on the integration branch — that's
-  intentional so this handoff is the one a fresh `go` reads.
-- Integration branch base: `main@2bb22be` (verified HEAD at spawn; only differs
-  from `5cf29bf` by a handoff-doc commit — irrelevant to every lane).
-- Branch HEAD: `37d0a9e` (docs: purge-script scope removal) ← `a972d62` (D6 doc
-  note) ← `732dadb` (octopus merge of 4 lanes) ← the 4 lane commits ← `2bb22be`.
+- **Working tree is on `main@7ae29dd`** — the squashed merge of PR #30. Clean.
+- PR #30 squash-merged 2026-07-14; remote `remediation/sprint-d1-d6` deleted by
+  the merge. All four lane worktrees (`engram-wt-{d1,d2d4,d3gate,d6}`) removed and
+  their junctions torn down (main-tree `node_modules`/`dist` verified intact); the
+  four local `fix/*` lane branches force-deleted (content preserved in `7ae29dd`).
+- Post-merge local verification on `7ae29dd`: typecheck ✔ + build ✔ clean.
 
-## Where we are — remediation sprint DONE, PR #30 GREEN, not yet merged
+## Where we are — remediation sprint DONE & MERGED
 
-**PR #30** (`fix: remediation sprint — D1/D6/D2/D4/D3-gate`) is open against `main`
-and **both CI matrices pass** (Node 20 ✅ 2m42s, Node 24 ✅ 1m13s):
+**PR #30** (`fix: remediation sprint — D1/D6/D2/D4/D3-gate`) is **merged to main**
+(squash, `7ae29dd`). Both CI matrices passed pre-merge (Node 20 ✅, Node 24 ✅):
 https://github.com/tom-swift-tech/engram/pull/30
 
 Four disjoint lanes, built in parallel isolated worktrees off `2bb22be`,
@@ -34,22 +33,17 @@ diff = only the "you are here" marker). openclaw (67) untouched.
 
 ## NEXT STEPS (in order)
 
-1. **Merge PR #30** — user's call (I don't merge without the ask). It's green
-   and ready.
-2. **After merge: clean up.** Four worktrees + junctions + local branches are
-   still live and MUST be torn down:
-   - `git worktree remove D:/projects/sit/engram-wt-d1` (and `-d6`, `-d2d4`,
-     `-d3gate`). Each has junctioned `node_modules` (all four) + `dist` (d3gate
-     only) and `integrations/pi/node_modules` (d3gate) — `git worktree remove`
-     handles the tree; the junctions live inside it so they go with it.
-   - `git branch -d fix/d1-extract-graph-boundary fix/d6-recall-cosine-primary
-     fix/d2d4-reflect-dedup-durability fix/d3-gate-autoretain-cron` (local only,
-     never pushed; the commits are preserved in the merge).
-   - Switch main worktree back to `main` and pull the merge.
+1. ~~**Merge PR #30**~~ — DONE (squash-merged to `main@7ae29dd`, 2026-07-14).
+2. ~~**After merge: clean up.**~~ DONE — worktrees removed (junction-safe via
+   `cmd /c rmdir` on the 6 reparse points, then dir delete; main-tree
+   `node_modules`/`dist` verified intact), 4 lane branches force-deleted, main
+   tree on `main@7ae29dd`, `git worktree prune` run. Only `main` remains listed.
 3. **D5 (reflection catch-up)** — larger off-peak reflection batches so beliefs
    track the graph. Cheaper now D2/D4 stop wasting belief-writes. `tasks/todo.md`.
+   Code lane: reflect scheduling / batch config. NEXT if continuing the sprint.
 4. **Step 6 (consolidate vs expand)** — decision, not code: the 329 MB
    single-file-git premise; audit ContextStore / engram-aql for earned keep.
+   Needs a human call — surface it before writing anything.
 
 **Explicitly OUT OF SCOPE (user correction, this session):** any purge /
 maintenance / data-cleanup script for a live consumer store. Live agent stores

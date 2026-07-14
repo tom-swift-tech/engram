@@ -90,9 +90,12 @@ import {
 
 import {
   reflect,
+  reflectCatchUp,
   ReflectScheduler,
   type ReflectConfig,
   type ReflectResult,
+  type CatchUpConfig,
+  type CatchUpResult,
 } from './reflect.js';
 
 import {
@@ -142,6 +145,8 @@ export type {
   RecallResult,
   ReflectConfig,
   ReflectResult,
+  CatchUpConfig,
+  CatchUpResult,
   FormatForPromptOptions,
   WorkingMemoryState,
   WorkingMemoryOptions,
@@ -163,6 +168,7 @@ export type {
 export {
   OllamaEmbeddings,
   LocalEmbedder,
+  reflectCatchUp,
   ReflectScheduler,
   shouldRetain,
   chunkText,
@@ -662,6 +668,33 @@ export class Engram {
     options?: Pick<ReflectConfig, 'batchSize' | 'minFactsThreshold'>,
   ): Promise<ReflectResult> {
     return reflect({
+      dbPath: this.dbPath,
+      generator: this.generator,
+      ...options,
+    });
+  }
+
+  /**
+   * Run a catch-up pass: many reflect() batches in one invocation to drain a
+   * reflection backlog a single cycle can't keep up with (D5). Meant for
+   * off-peak use, where a burst of metered-model calls is acceptable.
+   *
+   * Leave `batchSize` unset so the adaptive-shrink hint self-heals a mid-pass
+   * context overrun; bound the pass with `maxBatches` / `maxFacts` /
+   * `maxDurationMs`. See {@link reflectCatchUp}.
+   */
+  async reflectCatchUp(
+    options?: Pick<
+      CatchUpConfig,
+      | 'batchSize'
+      | 'minFactsThreshold'
+      | 'maxBatches'
+      | 'maxFacts'
+      | 'maxDurationMs'
+      | 'maxStalls'
+    >,
+  ): Promise<CatchUpResult> {
+    return reflectCatchUp({
       dbPath: this.dbPath,
       generator: this.generator,
       ...options,
