@@ -38,12 +38,18 @@ diff = only the "you are here" marker). openclaw (67) untouched.
    `cmd /c rmdir` on the 6 reparse points, then dir delete; main-tree
    `node_modules`/`dist` verified intact), 4 lane branches force-deleted, main
    tree on `main@7ae29dd`, `git worktree prune` run. Only `main` remains listed.
-3. **D5 (reflection catch-up)** — larger off-peak reflection batches so beliefs
-   track the graph. Cheaper now D2/D4 stop wasting belief-writes. `tasks/todo.md`.
-   Code lane: reflect scheduling / batch config. NEXT if continuing the sprint.
+3. ~~**D5 (reflection catch-up)**~~ — DONE, in **PR #31** (open, CI green on
+   Node 20 + 24): `feat(reflect): reflectCatchUp() backlog-drain runner`.
+   Branch `feat/d5-reflect-catchup` @ `63e6d5b` off `main@7ae29dd`. `reflectCatchUp()`
+   = bounded multi-batch loop around the untouched `reflect()`; stops on
+   drained/capped/stalled/failed; `Engram.reflectCatchUp()` +
+   `new ReflectScheduler(cfg,{catchUp:true})`; library-only (surface-parity 14).
+   Root 557 / Pi 115 green. **Merge #31 is the user's call** (not merged yet).
+   After merge: `git branch -d feat/d5-reflect-catchup`, switch main tree to main,
+   pull. (No worktrees this lane — built directly on a branch off main.)
 4. **Step 6 (consolidate vs expand)** — decision, not code: the 329 MB
    single-file-git premise; audit ContextStore / engram-aql for earned keep.
-   Needs a human call — surface it before writing anything.
+   Needs a human call — surface it before writing anything. LAST sprint item.
 
 **Explicitly OUT OF SCOPE (user correction, this session):** any purge /
 maintenance / data-cleanup script for a live consumer store. Live agent stores
