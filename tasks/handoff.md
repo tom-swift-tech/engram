@@ -1,15 +1,19 @@
-# Handoff — Engram (updated 2026-07-14, wrap 3 — PR #30 MERGED)
+# Handoff — Engram (updated 2026-07-14, wrap 4 — #30 MERGED, D5 in PR #31)
 
 ## Base commit / branch state
 
-- **Working tree is on `main@7ae29dd`** — the squashed merge of PR #30. Clean.
-- PR #30 squash-merged 2026-07-14; remote `remediation/sprint-d1-d6` deleted by
-  the merge. All four lane worktrees (`engram-wt-{d1,d2d4,d3gate,d6}`) removed and
-  their junctions torn down (main-tree `node_modules`/`dist` verified intact); the
-  four local `fix/*` lane branches force-deleted (content preserved in `7ae29dd`).
-- Post-merge local verification on `7ae29dd`: typecheck ✔ + build ✔ clean.
+- **Working tree is on branch `feat/d5-reflect-catchup` @ `6f520c4`** (D5 lane,
+  clean, pushed). Base `main@7ae29dd`. This is where a fresh `go` lands.
+- **PR #31 (D5) is OPEN & CI-GREEN** — merge is the user's call, NOT merged yet.
+  After merge: `git branch -d feat/d5-reflect-catchup`, switch main tree to `main`,
+  `git pull`. (No worktrees this lane — built directly on the branch off main.)
+- PR #30 squash-merged 2026-07-14 → `main@7ae29dd`; remote `remediation/sprint-d1-d6`
+  deleted by the merge. All four lane worktrees (`engram-wt-{d1,d2d4,d3gate,d6}`)
+  removed and their junctions torn down (main-tree `node_modules`/`dist` verified
+  intact); the four local `fix/*` lane branches force-deleted (content preserved
+  in `7ae29dd`). Post-merge local verification on `7ae29dd`: typecheck ✔ + build ✔.
 
-## Where we are — remediation sprint DONE & MERGED
+## Where we are — remediation sprint DONE & MERGED (D5 in review)
 
 **PR #30** (`fix: remediation sprint — D1/D6/D2/D4/D3-gate`) is **merged to main**
 (squash, `7ae29dd`). Both CI matrices passed pre-merge (Node 20 ✅, Node 24 ✅):
