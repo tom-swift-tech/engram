@@ -642,6 +642,24 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
       maxTokens: 4096,
       jsonMode: true,
     });
+
+    // An empty completion (0-char body on an HTTP 200 — seen with flaky cloud
+    // model endpoints) is NOT a parse/context-size failure, so it must not be
+    // routed through the issue-#17 auto-shrink path below: that path assumes
+    // the prompt overran the model and shrinks the batch, throttling throughput
+    // for a problem that isn't size-related. Throw instead — the catch block
+    // records status 'failed' with an honest message, leaves every fact
+    // unreflected (the apply-transaction never runs), and never reaches the
+    // shrink logic. Recovery is the next scheduled cycle re-reading those
+    // still-unreflected facts, at zero extra cost. No in-call retry: reflect
+    // already retries via the schedule, extract via the queue.
+    if (!rawResponse || !rawResponse.trim()) {
+      throw new Error(
+        'Reflect generation returned an empty response (transient model/endpoint ' +
+          'failure) — facts left unreflected; the next scheduled cycle will retry.',
+      );
+    }
+
     const output = parseReflectOutput(rawResponse);
 
     // Tracked outside the transaction closure so the post-cycle status/

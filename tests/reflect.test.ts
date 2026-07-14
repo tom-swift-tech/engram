@@ -1063,4 +1063,74 @@ describe('reflect()', () => {
       expect(log.status).toBe('completed');
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Empty generation response (transient cloud/endpoint failure)
+  // ---------------------------------------------------------------------------
+  //
+  // An empty completion (0-char body on an HTTP 200, e.g. a flaky ':cloud'
+  // model) is a *transient generation failure*, NOT the oversized-prompt/parse
+  // failure the issue-#17 auto-shrink path is built for. It must be classified
+  // 'failed' (honest, greppable) and must NOT shrink the batch hint — otherwise
+  // a momentary blip throttles throughput for a problem that isn't size-related.
+  // Contrast with the 'partial'+shrink tests above, which use *non-empty*
+  // garbage: that path is intentionally left intact.
+  describe('empty generation response', () => {
+    it('records status "failed" (not "partial") on an empty response', async () => {
+      dbPath = tmpDbPath();
+      await setupDb(dbPath, 5); // full batch, >= minFactsThreshold
+      vi.stubGlobal('fetch', mockOllamaFetch('')); // 200 OK, empty body
+
+      const result = await reflect({ dbPath, reflectModel: 'llama-test' });
+
+      const db = new Database(dbPath);
+      const log = db
+        .prepare('SELECT status FROM reflect_log WHERE id = ?')
+        .get(result.logId) as { status: string };
+      db.close();
+
+      expect(result.status).toBe('failed');
+      expect(log.status).toBe('failed');
+      expect(result.error).toMatch(/empty response/i);
+    });
+
+    it('does NOT shrink the batch hint on an empty response', async () => {
+      dbPath = tmpDbPath();
+      await setupDb(dbPath, 10);
+      vi.stubGlobal('fetch', mockOllamaFetch(''));
+
+      await reflect({ dbPath, reflectModel: 'llama-test' });
+
+      const db = new Database(dbPath);
+      const hint = db
+        .prepare(
+          `SELECT value FROM bank_config WHERE key = 'reflect_batch_hint'`,
+        )
+        .get() as { value: string } | undefined;
+      db.close();
+
+      // The shrink block is never reached (the throw short-circuits before it),
+      // so no hint is written — unlike the non-empty-garbage case above.
+      expect(hint).toBeUndefined();
+    });
+
+    it('leaves facts unreflected for the next scheduled cycle', async () => {
+      dbPath = tmpDbPath();
+      await setupDb(dbPath, 5);
+      vi.stubGlobal('fetch', mockOllamaFetch(''));
+
+      const result = await reflect({ dbPath, reflectModel: 'llama-test' });
+      expect(result.factsProcessed).toBe(0);
+
+      const db = new Database(dbPath);
+      const unreflected = db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM chunks WHERE reflected_at IS NULL AND is_active = TRUE`,
+        )
+        .get() as { n: number };
+      db.close();
+
+      expect(unreflected.n).toBe(5);
+    });
+  });
 });
