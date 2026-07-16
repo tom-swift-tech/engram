@@ -1,218 +1,54 @@
-# Task: Engram remediation sprint
+# Task: Hermes sprint — recall observability & surface parity (v2, core-first)
 
-Fix six defects surfaced by the 2026-07-13 live-store assessment
-(`mira.engram`, 12,213 chunks, 329 MB). Verdict from assessment: **continue —
-remediate, don't re-architect.** Every defect below was independently verified
-against the source tree (four parallel investigations, 2026-07-13); the
-verified mechanism and exact loci are recorded per item. This is fix-work in
-dependency order, not a rebuild.
+Previous task (six-defect remediation sprint) is DONE and merged (#30–#32);
+record in git history of this file + `tasks/handoff.md`.
 
-## Status — 2026-07-14 (MERGED to `main@7ae29dd`)
+**Origin:** external field report — `tasks/feedback-hermes-report.md`.
+**Spec:** `tasks/sprint-hermes-observability.md` v2 (source of detail).
+**Framing rule (user correction, lessons 2026-07-16):** harness-agnostic —
+capability + rendering in core, exposed via MCP/CLI; adapters patched last.
 
-**Four code lanes DONE, verified green, and SQUASH-MERGED into `main` (PR #30).**
-Built in parallel isolated worktrees off `main@2bb22be`, octopus-merged clean
-(disjoint files), then squash-merged to main. **Worktrees + lane branches torn
-down; main tree verified (typecheck + build clean) post-merge.**
-- **D1** (`src/extract-cpu.ts`) — word-boundary + stopword graph matching. ✔
-- **D6** (`src/recall.ts`) — cosine-primary within-tier scoring; `(tier, score)`
-  floor byte-identical (proven by test). ✔
-- **D2+D4** (`src/reflect.ts`) — `findMatchingObservation` dedup + durability
-  rubric + substring attribution guard. ✔
-- **D3-gate** (`integrations/pi/src/adapter.ts`) — `isScheduledJobPrompt`
-  downgrades cron/job prompts to `tool_result`/0.4. ✔
+## Phase 1 — Core observability
 
-Verification (pre-merge, CI-green on both Node 20 & 24): root **551** green (was
-538), Pi **115** green, build + typecheck + lint + format:check clean,
-surface-parity pinned at **14** tools. CLAUDE.md ↔ AGENTS.md re-synced (D6
-within-tier note). Post-merge local: typecheck + build clean on `7ae29dd`.
+### Lane A: canonical formatter (`src/recall.ts`)
+- [ ] T1: `formatForPrompt` gains `showProvenance` (memoryType/sourceType/
+      trust/created-date per result) + `showWhy` (compact strategyScores
+      line). Both default false — existing output byte-identical. Tests.
 
-**Still open:** **D5** (reflection catch-up) and **Step 6** (consolidate-vs-expand
-decision). Live agent-store cleanup is operator-owned and out of scope — the
-library ships no purge/maintenance tooling for consumer data.
+### Lane B: harness-agnostic transports (`src/cli*`, `src/mcp-tools.ts`)
+- [ ] T2: `decayHalfLifeDays` param on MCP `engram_recall` +
+      `--decay-half-life-days` CLI flag (clamp ≥0); omitted → 180 unchanged.
+      Description strings advertise tier guarantee + decay semantics.
+      Thread T1's format flags through the MCP result rendering.
+      Surface-parity stays 14. CLAUDE.md + AGENTS.md + skills docs.
 
-## Decisions locked (2026-07-13)
+## Phase 2 — Eval harness
 
-1. **Scope:** full six-defect sprint, D1→D6 in dependency order.
-2. **D3 recurrence-prevention:** content heuristic in `planAutoRetain` (in-repo,
-   ships now). Not the upstream #21 fix; note the residual brittleness in the
-   code comment and leave #21 open for the durable signal.
-3. **Branch base:** merge `fix/model-resolver-preflight` → main FIRST, then
-   branch remediation off clean main. (Precondition — see below.)
+### Lane C: `evals/**` (greenfield)
+- [ ] T3: embedding-only eval scaffold — deterministic fixtures,
+      P@k / R@k / MRR runner, `npm run eval`, report-only.
+- [ ] T4: four scenario families — relevance, contradiction, contamination,
+      staleness — baselines committed to `evals/README.md`.
 
-## Precondition — land the model-resolver PR
+## Phase 3 — Adapter parity (LAST, after A+B merge)
 
-`fix/model-resolver-preflight` (HEAD `9192f47`, off `cfc5493`) is the "404 storm
-is fixed" work the assessment assumes. Merge it to main, then resolve the new
-main SHA as the remediation base. Per repo policy (global CLAUDE.md): the lead
-resolves a verified base SHA and creates per-builder worktrees before spawning.
-Parallel builders each own a disjoint file set (see §Parallelization).
+### Lane D: Pi binding (`integrations/pi/**`)
+- [ ] T5: pass through `explainScores` + `decayHalfLifeDays` (default stays 0,
+      pin issue #19); DELETE hand-rolled `formatRecallResults`, converge onto
+      core `formatForPrompt`; `strategyScores` in tool `details`. Tests.
+- [ ] Note follow-up: OpenClaw plugin gets T2 for free via MCP; no repo change.
 
-## Verified findings — mechanism confirmed + divergences from the assessment
+## Phase 4 — DEFERRED (revisit with eval baselines only)
+- Staleness detection (ask 1) · review/expiry dates (ask 5) ·
+  durable-vs-conversation auto-separation remainder (ask 4).
 
-| ID | Sev | Mechanism (CONFIRMED) | Primary locus | Divergence from assessment |
-|----|-----|----------------------|---------------|----------------------------|
-| **D1** | Crit (size) | `strategyGraphMatching` does `INSTR(text, canonical_name) > 0` substring matching; only guard is `LENGTH > 2`. No word-boundary, no stopword filter. Re-links every active entity as a substring on every retain → ~129 links/chunk, 71% of DB. | `src/extract-cpu.ts:221-265`; link insert `:150-160`; Tier-1 called inline in retain (`src/retain.ts:367`) | none — confirmed exactly |
-| **D6** | Crit (recall) | (a) RRF `1/(k+rank)` with uniform `k=60`, **no per-strategy weight** (`recall.ts:849-885`); only a *breadth* bonus (`:920`). (b) Final sort is `(tier, score)` with tier absolute (`recall.ts:1136-1143`). | `src/recall.ts` fusion `:849-885`, weighting `:898-963`, sort `:1136-1143` | **Security invariant is preserved by construction** — tier is the *primary* key, so a cosine-primary *within-tier* score never lets tier-2 outrank tier-0. We do **not** need to "soften the floor." |
-| **D3** | High | Cron/`user`-role prompts pass `planAutoRetain` and store as `experience`/`user_stated`/**0.7** via `ROLE_MAP.user`. `shouldRetain()` is **not wired** into auto-retain and wouldn't catch them anyway (they score high). | `integrations/pi/src/adapter.ts:600-605, 667-703` | **The "gateway that zeroes trust for scheduler sessions" DOES NOT EXIST in this repo.** Only guard is an unreliable `ctx.mode` downgrade (issue #21). Recurrence-prevention is genuinely harder than the assessment implied — see Decision 2. |
-| **D2** | High | Observations are insert-only (`reflect.ts:655-673`), no match-before-insert. Opinions dedup+reinforce via `findMatchingOpinion` (`:488-511`). Asymmetry real → 1 insight × ~40 rows. | `src/reflect.ts:655-673` | Assessment said "embedding similarity" dedup — but **observations have no embedding column**. Mirror the existing *lexical* `findMatchingOpinion` seam instead. No schema change. |
-| **D4** | Med | Reflect prompt (`reflect.ts:214-298`) has no durable-vs-transient distinction; `resolveEntityIds` (`:478-486`) trusts LLM attributions verbatim. | `src/reflect.ts:256, 261` (+ `:223-226`) | none — confirmed. Attribution-swap is unchecked entity resolution. |
-| **D5** | Med | 43.6% reflection coverage; extraction keeps up (free GPU) but reflection runs on metered model at low batch. | reflect scheduling / batch config | none — but cheaper to fix *after* D2/D4 stop wasting belief-writes. |
+## Sprint acceptance
+- [ ] Defaults byte-identical everywhere (no provenance/why unless asked;
+      decay 180 core / 0 Pi).
+- [ ] Pi duplicate formatter deleted; any harness gets identical rendering.
+- [ ] Full green: root vitest (562+new), Pi (115+new), openclaw 67,
+      surface-parity 14; format:check clean; mirror diff = marker only.
 
-## Dependency graph (why this order)
-
-```
-        D1-fix (stop the bleed) ─────────────┐
-        D3-gate (prevent recurrence) ────────┤
-                                             ▼
-                                        D6-recall (cosine-primary within tier)
-
-        D2 (observation dedup) ──► D5 (reflection catch-up)
-        D4 (durability prompt) ──►    (cheaper once D2/D4 cut wasted writes)
-```
-
-Key sequencing insight: **D6's code change is fully independent and lands now.**
-Cosine-primary within-tier ranking works regardless of store state. Any residual
-mislabeled tier-0 noise in a live store is an operator-side data concern, not a
-library one — and the security floor protects tier-0 either way.
-
-## Decision points (need a human call before those steps run)
-
-1. **Scope/pace.** Full six-defect sprint, or the two criticals (D1 + D6) first
-   to de-risk, then reassess? D1+D6 are the size and read-path fixes; they're
-   independent and parallelizable.
-2. **D3 recurrence-prevention** (the assessment's premise was wrong — no
-   upstream gateway exists here). Three options:
-   - **(a)** Content heuristic in `planAutoRetain`: detect job/cron prompts
-     ("Process … queue. Execute: bash…") and refuse/downgrade. Brittle, in-repo, ships now.
-   - **(b)** Fix issue #21 properly: a reliable scheduler signal from the
-     consumer (valor-engine passes an explicit provenance/mode). Correct, but
-     spans repos and needs coordination.
-   - **(c)** Defer the gate entirely and rely on an operator-side cleanup of the
-     live store. Rejected — recurrence stays open until #21, and cleaning a
-     consumer's store is not a library deliverable.
-3. **Live-store cleanup is out of scope. RESOLVED.** `mira.engram` and any live
-   agent store are operator-owned data — the library ships no purge or
-   maintenance tooling for them, and we never ask for a live path or run a
-   destructive op against one. Cleaning a specific consumer's store is that
-   consumer's concern, not a remediation deliverable.
-
-## Work items
-
-### D1 — stop the bleed (extract-cpu) · ~1 day · CRITICAL, independent
-- [ ] `src/extract-cpu.ts:221-265` — replace substring `INSTR` matching with
-      word-boundary matching; add min-length (≥4?) + stopword denylist
-      (reuse existing `STOP_WORDS` `:102-117` / `COMMON_WORDS` `:37-99`, which
-      graph-matching currently ignores).
-- [ ] New tests in `tests/extract-cpu.test.ts`: assert a 3-char stopword entity
-      ("and"/"for") and a sub-word fragment ("est" inside "test") are NOT linked;
-      keep the existing whole-word tests (`:28-48`, `:178-198`, `:274-299`) green.
-
-### D3 — gate (recurrence) · scope depends on Decision 2
-- [ ] `integrations/pi/src/adapter.ts` `planAutoRetain` (`:667-703`) /
-      `ROLE_MAP` (`:600-605`) per chosen option.
-- [ ] Update `integrations/pi/tests/auto-retain.test.ts` (asserts user→0.7 at
-      `:143-161`) + add cron-rejection cases.
-
-### D6 — recall semantic-primary · ~2–4 days · CRITICAL, independent
-- [ ] Thread raw cosine out of `semanticSearch` (`recall.ts:446-512`, currently
-      discarded after `ORDER BY distance`) into `ScoredChunk`/`FusedEntry`.
-- [ ] Make within-tier `score` cosine-primary × gentle trust tiebreak; add a
-      `minScore` cosine gate. Port the assessment's validated params
-      (`cosine × 0.94–0.99 trust-bias · minScore 0.42`). Validate with a
-      synthetic-fixture ranking test (small in-test `.engram`) — the live-store
-      cron-noise 15 → 1 number is the operator's to reproduce, not ours.
-- [ ] **Leave the `(tier, score)` comparator (`:1136-1143`) and the tier-2
-      floor untouched** — that is what preserves the security invariant.
-- [ ] Update `tests/trust-tier.test.ts:105-161` (within-tier trust/mem-type
-      ordering) and `tests/recall.test.ts:318-334, 350-511` (trust tiebreak,
-      minScore & explainScores numeric assertions). Add a live-store-style
-      regression: a strong tier-1 cosine match must beat a weak tier-1 chunk.
-
-### D2 — observation dedup-on-synthesis · ~1–2 days · independent
-- [ ] `src/reflect.ts` — add `findMatchingObservation` mirroring
-      `findMatchingOpinion` (`:488-511`): `normalizeBelief`/`beliefSimilarity`
-      scoped by `domain`+`topic`; route a would-be-new observation into a
-      refresh/reinforce (`observation_refreshes` seam already exists at `:675-703`).
-- [ ] Test modeled on the opinion-dedup test (`reflect.test.ts:530-598`);
-      update exact-count assertions (`:67-80`, `:114-132`, `:675-708`).
-
-### D4 — durability prompt + attribution · ~0.5–1 day · pairs with D2
-- [ ] `src/reflect.ts:256` (observations) + `:261` (opinion "new") — add a
-      durability rubric: reject transient operational state (expiring tokens,
-      current uptime/reliability, in-progress status) as beliefs/observations.
-- [ ] Consider a light attribution sanity check in `resolveEntityIds` (`:478-486`).
-
-### D5 — reflection catch-up · IN PROGRESS 2026-07-14 · after D2/D4
-
-**Root cause (confirmed in source):** `reflect()` drains exactly ONE batch of
-≤`batchSize` (default 50) unreflected facts per call, then returns. `ReflectScheduler`
-and Pi both call it once per trigger. With a large backlog (live store: ~57% of
-12k chunks unreflected) it never catches up. Naively raising `batchSize` is a
-trap — a batch that overruns the model context produces 0 insights, so the facts
-are deliberately left unreflected (`reflect.ts:985`) and the issue-#17 adaptive
-shrink hint halves the next batch. Per-batch size is model-bounded; **throughput
-must come from looping modest batches**, not a bigger single batch.
-
-**Design — new bounded runner `reflectCatchUp()`, `reflect()` untouched. DONE 2026-07-14:**
-- [x] `src/reflect.ts` — added `CatchUpConfig` (extends `ReflectConfig` with
-      `maxBatches` default 20, `maxFacts?`, `maxDurationMs?`, `maxStalls` default 2)
-      and `CatchUpResult` (`batches`, aggregated insight counts, `remainingBacklog`,
-      `status: 'drained'|'capped'|'stalled'|'failed'`, `durationMs`, `batchResults[]`).
-- [x] `reflectCatchUp(config)` loops `reflect()`: between batches, counts backlog
-      via `SELECT COUNT(*) FROM v_unreflected` on a short-lived RO connection.
-      Stop conditions:
-      - backlog < `minFactsThreshold` → `drained` (natural completion; also the
-        already-caught-up no-op path → `batches: 0`);
-      - `maxBatches` / `maxFacts` / `maxDurationMs` hit → `capped`;
-      - `result.status === 'failed'` (connection error) → `failed`, break now
-        (same endpoint, no point retrying);
-      - `factsProcessed === 0` for `maxStalls` **consecutive** batches → `stalled`.
-        Tolerating up to `maxStalls` lets the #17 shrink hint self-heal one
-        context-overrun (leave `batchSize` undefined so the hint applies), but
-        breaks on persistent failure. **← the key policy decision.**
-- [x] `src/engram.ts` — `Engram.reflectCatchUp(options)` wrapper; exported
-      `reflectCatchUp`/`CatchUpConfig`/`CatchUpResult` from the public barrel.
-- [x] `ReflectScheduler` — `new ReflectScheduler(cfg, { catchUp: true })` runs a
-      catch-up pass per tick (the "off-peak" trigger). Reachable WITHOUT touching
-      the MCP/CLI tool surface (surface-parity stays pinned at 14; CLI/MCP
-      exposure is a deliberate later surface change).
-- [x] Tests in `tests/reflect.test.ts` (+6): drained no-op (batches 0);
-      multi-batch drain (3 batches, 12 facts, remainingBacklog 0); `capped` by
-      `maxBatches`; `capped` by `maxFacts`; `stalled` via unparseable-output
-      generator (shrink self-heal observed 12→6→3 before break); `failed` via a
-      throwing generator. Root suite 551→**557** green.
-- [x] Synced CLAUDE.md ↔ AGENTS.md (Batch-Reflect section + reflect.ts file line
-      + Reflect-schedule decision; mirror diff = only the "you are here" marker).
-
-**Verification (2026-07-14):** typecheck ✔, build ✔, lint ✔, format:check ✔ (ran
-`npm run format`), root vitest **557** green, Pi vitest **115** green,
-surface-parity pinned at **14**. NOT yet committed (on `main` — needs a branch).
-
-### Step 6 — consolidate before expanding · decision, not action
-- [ ] Revisit the "single-file git-committable" premise (329 MB + 897 MB
-      snapshots — a mutating memory DB was never a good git citizen; backup
-      strategy vs version control).
-- [ ] Audit ContextStore / engram-aql for whether they've earned their keep
-      before adding more surface.
-
-## Parallelization (disjoint file ownership → worktrees)
-
-The three code fixes touch **different source files** and can run as parallel
-builders in isolated worktrees off a lead-resolved SHA:
-- **D1** → `src/extract-cpu.ts`, `tests/extract-cpu.test.ts`
-- **D6** → `src/recall.ts`, `tests/recall.test.ts`, `tests/trust-tier.test.ts`
-- **D2+D4** → `src/reflect.ts`, `tests/reflect.test.ts`
-- **D3-gate** → `integrations/pi/src/adapter.ts`, `integrations/pi/tests/auto-retain.test.ts`
-
-Live agent-store cleanup is operator-owned and out of scope — no live-store step
-and no purge/maintenance tooling exists in this sprint.
-
-## Verification
-
-Per changed lane: root vitest + affected integration suite, typecheck, lint,
-format. Baseline **692 green** (root 517 / pi 108 / openclaw 67). Surface-parity
-(13 MCP tools, CLI↔MCP 1:1) must stay green — none of these touch the tool
-surface. Cargo-gated AQL suite out of scope. For D6, validate with a synthetic
-in-test `.engram` fixture (a strong tier-1 cosine match must beat a weak tier-1
-chunk); the assessment's empirical live-store numbers are the operator's to
-reproduce.
+## Out of scope (hard)
+No new MCP tools · no engram-aql changes (frozen) · no live-store purge
+tooling · no LLM-side evals in v1 · no OpenClaw-repo changes.
