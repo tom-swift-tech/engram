@@ -1,84 +1,103 @@
-# Handoff — Engram (updated 2026-07-14, wrap 5 — #31 & #32 MERGED)
+# Handoff — Engram (updated 2026-07-16, wrap 6 — Step 6 CLOSED)
 
 ## Base commit / branch state
 
-- **Working tree is on `main` @ `059b884`, clean.** This is where a fresh `go`
-  lands. Post-merge verification on `059b884`: typecheck ✔ + build ✔.
-- **No open PRs, no feature branches in flight.** Both this-session PRs merged:
-  - **PR #31 (D5 reflectCatchUp)** squash-merged → `main@c0e90f7`.
-  - **PR #32 (node-origin provenance)** squash-merged → `main@059b884`.
-  Both branches auto-deleted (local + remote) by the squash-merge.
+- **Working tree is on `main`, clean after this wrap's docs commit.** A fresh
+  `go` lands here. Last verified state before this commit: `main @ 7b86114`
+  (wrap-5 docs commit). This wrap adds ONE docs-only commit on top.
+- **No open PRs, no feature branches in flight.** The whole D1–D6 remediation
+  sprint (#30), D5 catch-up (#31), and node-origin groundwork (#32) are all
+  merged. **The remediation sprint is now fully DONE — Step 6 is closed (see
+  below).**
 - Stale local branches still listed (pre-existing, unrelated, harmless):
   `chore/ci-pi-suite`, `docs/aql-writes-vector-design`, `docs/refresh-current-state`,
   `feat/pi-auto-retain`, `feat/pi-reflect-scheduling`. Delete anytime; not ours.
 
-## Where we are — sprint essentially DONE; only Step 6 (a decision) remains
+## Where we are — sprint DONE, Step 6 decided
 
-The D1–D6 remediation sprint (#30), D5 catch-up (#31), and node-origin
-groundwork (#32) are all merged to `main`. The ONLY remaining sprint item is
-**Step 6**, which is a human decision, not code (see NEXT STEPS).
+Step 6 ("consolidate before expanding") was the last open item — a decision, not
+code. It is now made and recorded. **There is no open work item.** Next session
+starts fresh on whatever you bring.
 
-### This session's work: Node-Origin Provenance (#32, merged)
+### This session's work: Step 6 audit + engram-aql freeze decision (docs only)
 
-Groundwork so a future sync/merge has provenance natively — nothing to backfill
-onto un-tagged memories. **Additive, no distribution** (no merge/union, no
-transport, no opinion-model change, ZERO new MCP tools — surface-parity stays 14).
+Read-only audit → a Director decision → source-of-truth updated. No code touched,
+nothing to build/test.
 
-| Piece | Where | Behavior |
-|-------|-------|----------|
-| Schema | `src/schema.sql` | Nullable `node_origin TEXT` on `chunks`, `opinions`, **and** `observations` (all 3 durable outputs); fresh installs only |
-| Migration | `src/engram.ts` `init()` | Guarded `ALTER TABLE ADD COLUMN` ×3 + partial `WHERE node_origin IS NOT NULL` indexes AFTER the guards (same pattern as text_hash/scope; `schema.sql` carries columns but NOT indexes) |
-| Identity | `src/engram.ts` `init()` | `node-<hostslug>-<8hex>` minted once in `bank_config` via `INSERT ... ON CONFLICT(key) DO NOTHING` (never regenerated, survives restart); read back, held on `private readonly nodeOrigin` |
-| Stamp | `src/retain.ts` (fresh chunk INSERT) + `src/reflect.ts` (`insertOpinion`/`insertObs`) | reflect reads origin from `bank_config` once up front (own connection). **First author wins** — dedup UPDATE + reinforce/challenge/decay/obs-refresh never rewrite it |
+| Artifact | What it is |
+|----------|-----------|
+| `tasks/step6-audit.md` | Read-only findings (I wrote it). Evidence for all three Step-6 sub-questions. |
+| `tasks/decision-freeze-engram-aql.md` | The Director's decision (freeze engram-aql at Phase 2). |
+| `CLAUDE.md` + `AGENTS.md` | engram-aql section reframed from "Remaining (deferred)" → **`Status — FROZEN at Phase 2`** with thaw trigger. Mirrored (diff = only the "you are here" marker). |
 
-- **NULL = pre-distribution / origin unknown.** No backfill — pre-migration rows
-  stay NULL (backfilling would falsely claim authorship of pre-tracking memories).
-- **Scope decision (user-confirmed this session):** the draft plan
-  (`tasks/node-origin-provenance-plan.md`) was internally inconsistent about
-  `observations` (Step 2 listed only chunks+opinions; Step 3's `insertObs`
-  implied observations). Resolved toward **including observations** so no durable
-  memory needs backfilling later.
-- **Out of scope (downstream, only justified by an actual merge):** opinion
-  mutability stays in-place (append+supersede is the sync sprint's job); no
-  merge/union/conflict logic; no transport. Documented in the CLAUDE.md/AGENTS.md
-  Decisions entry.
+**The three Step-6 outcomes:**
 
-**Verification (all green, on `main@059b884`):** root vitest **562** (+5 from
-`tests/node-origin.test.ts`), Pi vitest **115**, typecheck + build + lint +
-**format:check** clean, `surface-parity` pinned at **14**, CLAUDE.md ↔ AGENTS.md
-re-synced (diff = only the "you are here" marker). openclaw (67) untouched.
+1. **Git premise — already solved, no action.** `*.engram`/`*.db`/`*.sqlite` are
+   gitignored, **0** DB files tracked, `.git` is ~13 MB. The "329 MB + 897 MB
+   snapshots" figures were a *live consumer store* (operator data), never this
+   repo. The 3.8 GB working tree is entirely `engram-aql/target/` Rust debug
+   artifacts — gitignored (nested `engram-aql/.gitignore`), 0 tracked,
+   `cargo clean` reclaims anytime.
+2. **ContextStore — KEEP.** Low cost (1 file, 1 `scope` column, no deps) and
+   load-bearing for the grounding layer (`taskContext` → `queryContext`). Note:
+   **zero in-repo consumers** beyond its own tests + MCP/CLI passthrough (Pi and
+   OpenClaw call it 0 times) — kept on cost/grounding grounds, not usage.
+3. **engram-aql — FROZEN at Phase 2.** No Phase 3. Zero in-repo consumers, high
+   carrying cost (whole Rust crate re-deriving TS read semantics, cargo-gated
+   CI), justification was one inbound OSS question (weakest demand signal). Every
+   agent consumer is already served by MCP; AQL only earns keep for a Rust
+   process wanting in-process sub-MCP reads, which nobody is. **Freeze not cut**
+   (reversibility) **not keep-and-invest** (stop the bet compounding).
+   - **Thaw trigger (falsifiable):** a Rust consumer produces a concrete
+     artifact — a PR/issue against the crate from the external user, OR a named
+     internal fleet consumer (Substrate, Cradel/Mira-core, Herd) wanting
+     in-process Rust reads. **One more inbound question does NOT count.**
+   - **Build-tax escape hatch:** if keep-green starts costing real maintenance on
+     toolchain bumps, the decision converts toward **cut**.
+   - Frozen leftover (was "deferred"): canonical TS `LINK` surface; transactional
+     `PIPELINE` mixing reads+writes. Not resumed unless thawed.
 
 ## NEXT STEPS
 
-1. **Step 6 (consolidate vs expand)** — decision, not code. The 329 MB
-   single-file-git premise; audit ContextStore / engram-aql for earned keep.
-   **Needs a human call — surface it before writing anything.** This is the LAST
-   sprint item; everything else is merged.
+**None open.** The remediation sprint is complete. Possible future threads, only
+if you choose to pull one:
+
+- **Watch engram-aql's build tax** against the freeze — if a Rust toolchain bump
+  breaks CI on a zero-consumer crate, that's the signal to revisit toward cut.
+- Delete the 5 stale local branches (housekeeping, not ours).
+- Anything net-new you bring.
 
 **Explicitly OUT OF SCOPE (user correction, carried forward):** any purge /
 maintenance / data-cleanup script for a live consumer store. Live agent stores
-are operator-owned data. The library's job is the *code defect* (stop producing
-bad data); cleaning already-written data is the operator's, and the library
-ships **no** purge tooling. See `tasks/lessons.md` 2026-07-14.
+are operator-owned data. The library's job is the *code defect*; cleaning
+already-written data is the operator's, and the library ships **no** purge
+tooling. See `tasks/lessons.md` 2026-07-14.
+
+## Verification status (this wrap)
+
+- **Docs-only change** — no code touched, so no typecheck/build/test run was
+  needed or done. Not a regression risk.
+- Markdown is **not** held to Prettier (`format:check` scope is `src/**` +
+  `tests/**` only) — the `.md` edits match hand style, no format gate applies.
+- `diff CLAUDE.md AGENTS.md` verified = only the "you are here" marker (mirror
+  invariant holds).
+- Last full green baseline (unchanged since, on `main`): root vitest **562**,
+  Pi vitest **115**, openclaw **67**, surface-parity pinned at **14**.
 
 ## Gotchas carried forward (still live)
 
 - **Pre-push MUST include `npm run format:check`** — SEPARATE CI gate from `lint`
-  (eslint ≠ prettier). Run `npm run format` before committing. Scope is
-  `src/**/*.ts` + `tests/**/*.ts` only.
-- **Markdown is NOT held to Prettier** — don't reformat `.md`; match hand style.
+  (eslint ≠ prettier). Run `npm run format` before committing CODE. Scope is
+  `src/**/*.ts` + `tests/**/*.ts` only — **markdown is exempt**, don't reformat
+  `.md`.
 - **CLAUDE.md ↔ AGENTS.md**: edit both together; `diff CLAUDE.md AGENTS.md`
   should show only the "you are here" marker.
-- **Guarded `ALTER TABLE ADD COLUMN` pattern** (now proven for `text_hash`,
-  `next_retry_after`, ContextStore scope cols, AND `node_origin`): add the column
-  in `engram.ts` under a `pragma('table_info')` guard, create its index
-  UNCONDITIONALLY *after* the guards — never put a `CREATE INDEX` on a new column
-  in `schema.sql` (it runs wholesale on a pre-existing file where the column
-  doesn't exist yet and fails hard). Columns-for-fresh-installs go in `schema.sql`.
-- **`node_origin` read paths differ**: the `Engram` instance holds it
-  (`this.nodeOrigin`) and threads it into `retain()`; `reflect()` has its own
-  connection so it re-reads from `bank_config`. Both stamp NULL on a
-  pre-distribution bank — that's correct, not a bug.
+- **Guarded `ALTER TABLE ADD COLUMN` pattern** (proven for `text_hash`,
+  `next_retry_after`, ContextStore scope cols, `node_origin`): add the column in
+  `engram.ts` under a `pragma('table_info')` guard, create its index
+  UNCONDITIONALLY *after* the guards — never put `CREATE INDEX` on a new column
+  in `schema.sql` (runs wholesale on a pre-existing file where the column doesn't
+  exist yet and fails hard). Columns-for-fresh-installs go in `schema.sql`.
 - **Never compare scores across two `recall()` calls in tests without
   `decayHalfLifeDays: 0`** — decay makes scores wall-clock-dependent.
 - **Bash tool is Git Bash** — no PowerShell `@'...'@` here-strings; use `-F
@@ -86,17 +105,5 @@ ships **no** purge tooling. See `tasks/lessons.md` 2026-07-14.
 - **dist is ESM w/ top-level await** — Node smoke script must be `.mjs`, dynamic
   `import(pathToFileURL(distPath).href)`, not `require()`.
 - **Rebuild `integrations/pi/dist`** before trusting a Pi built-dist smoke fail.
-- cargo blocked by Windows Application Control in SOME paths (AQL tests only).
-
-## Parallel-worktree recipe (reuse for the next fan-out, if any)
-
-- Lead resolves verified HEAD → SHA, `git worktree add -b <branch> <path> <sha>`
-  per lane BEFORE spawning; disjoint positive-scope file list per builder.
-- Worktrees lack `node_modules` (git only checks out tracked files) — junction
-  each to the main tree's: `New-Item -ItemType Junction -Path <wt>/node_modules
-  -Target <main>/node_modules` (PowerShell). Also junction `integrations/pi/
-  node_modules` and (for any built-dist test) `dist` for pi lanes.
-- Builders MUST NOT run `npm install` / `npm run build` (race shared junctioned
-  state). Vitest only reads node_modules — parallel test runs safe.
-- Integrate via `git merge --no-ff` — a clean octopus merge proves disjoint
-  ownership. (Node-origin was a single sequential lane; no worktrees needed.)
+- cargo blocked by Windows Application Control in SOME paths (AQL tests only) —
+  now doubly moot while engram-aql is frozen.
