@@ -7,9 +7,10 @@
   main this session: `565595c` (sprint docs) → `d9e6470` (T1, ff) → `48fe547`
   (T2 merge) → `93a601b` (lead integration) → `792ff51` (T3/T4 merge) →
   `cab460f` (T5 merge) → this wrap's docs commit.
-- **NOT PUSHED** — local main is ahead of origin by the whole sprint. Push (or
-  PR per repo habit) is the next mechanical step if wanted; nothing else is
-  in flight.
+- **PUSHED** — `main @ 4126bb5` pushed to origin (059b884..4126bb5,
+  2026-07-16). Watch CI: the pushed range includes the whole sprint; local
+  gates were all green (574/121/67 + format:check), so a CI failure would be
+  environmental, not code.
 - Lane worktrees/branches torn down post-merge (verify with `git worktree
   list` / `git branch` — if any `engram-wt-*` or `feat/hermes-*` remain,
   teardown was interrupted; safe to remove, all merged).
