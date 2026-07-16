@@ -1,0 +1,34 @@
+[
+  { "id": "infra-1", "text": "The homelab runs on three Proxmox VE nodes connected via a 10Gb backbone switch.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.85 },
+  { "id": "infra-2", "text": "Terraform with the bpg/proxmox provider manages all VM provisioning for the homelab.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.9 },
+  { "id": "infra-3", "text": "Proxmox VE cluster quorum requires at least two nodes online to avoid split-brain.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.85 },
+  { "id": "infra-4", "text": "Terraform state for the homelab infrastructure is stored in a local backend, not remote.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.85 },
+  { "id": "infra-5", "text": "Proxmox backups run nightly to a dedicated NFS share on the NAS.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.85 },
+
+  { "id": "lang-1", "text": "Rust is preferred for systems programming tasks requiring memory safety without garbage collection.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.85 },
+  { "id": "lang-2", "text": "TypeScript is the default language for new tooling and library projects.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.85 },
+  { "id": "lang-3", "text": "Python is used for one-off data analysis scripts, not production services.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.8 },
+  { "id": "lang-4", "text": "Go is avoided for new projects in favor of Rust or TypeScript.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.8 },
+  { "id": "lang-5", "text": "Bash scripts are kept short and delegate complex logic to TypeScript CLIs.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.8 },
+
+  { "id": "db-1", "text": "SQLite is chosen over Postgres for single-file, zero-infrastructure deployments.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.9 },
+  { "id": "db-2", "text": "sqlite-vec provides vector similarity search directly inside SQLite.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.85 },
+  { "id": "db-3", "text": "Postgres is still used for the OpenClaw workspace's shared multi-agent state.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.8 },
+  { "id": "db-4", "text": "WAL mode lets multiple readers access a SQLite file while one process writes.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.85 },
+  { "id": "db-5", "text": "Database backups use SQLite's online backup API rather than raw file copies.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.85 },
+
+  { "id": "net-1", "text": "WireGuard VPN connects remote laptops into the homelab network.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.85 },
+  { "id": "net-2", "text": "Pi-hole handles DNS filtering and ad blocking for the whole homelab.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.85 },
+  { "id": "net-3", "text": "The firewall blocks all inbound traffic except VPN and a single reverse-proxy port.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.85 },
+  { "id": "net-4", "text": "Internal services resolve via a local DNS zone rather than public DNS records.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.8 },
+
+  { "id": "deploy-1", "text": "GitHub Actions runs the CI pipeline for lint, typecheck, and tests on every push.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.85 },
+  { "id": "deploy-2", "text": "Docker Compose orchestrates the herd LLM host and its supporting services.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.85 },
+  { "id": "deploy-3", "text": "Deployments to the homelab use a git-pull-and-restart flow, no image registry.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.8 },
+  { "id": "deploy-4", "text": "Feature branches require a green CI run before merging to main.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.85 },
+
+  { "id": "mon-1", "text": "Prometheus scrapes metrics from every homelab service on a 15-second interval.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.85 },
+  { "id": "mon-2", "text": "Grafana dashboards visualize Proxmox node CPU, memory, and disk usage.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.85 },
+  { "id": "mon-3", "text": "Log aggregation uses a lightweight Loki instance rather than the ELK stack.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.8 },
+  { "id": "mon-4", "text": "Alerts for disk usage above 85 percent page through a self-hosted ntfy server.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.85 }
+]

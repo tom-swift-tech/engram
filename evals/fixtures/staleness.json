@@ -1,0 +1,13 @@
+[
+  { "id": "stale-7d", "text": "The reporting service uses SQLite for local caching.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.85, "daysAgo": 7 },
+  { "id": "stale-90d", "text": "The reporting service uses SQLite for local caching.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.85, "daysAgo": 90 },
+  { "id": "stale-400d", "text": "The reporting service uses SQLite for local caching.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.85, "daysAgo": 400 },
+  { "id": "stale-900d", "text": "The reporting service uses SQLite for local caching.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.85, "daysAgo": 900 },
+
+  { "id": "filler-1", "text": "Grafana dashboards refresh every 30 seconds by default.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.8 },
+  { "id": "filler-2", "text": "The homelab NAS runs ZFS with weekly scrub jobs.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.8 },
+  { "id": "filler-3", "text": "CI runners are self-hosted on a dedicated Proxmox VM.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.8 },
+  { "id": "filler-4", "text": "The reverse proxy terminates TLS using Caddy.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.8 },
+  { "id": "filler-5", "text": "Nightly Restic backups target an offsite encrypted bucket.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.8 },
+  { "id": "filler-6", "text": "The internal wiki is a static site rebuilt on every merge.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.8 }
+]

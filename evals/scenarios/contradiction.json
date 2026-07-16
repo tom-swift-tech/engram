@@ -1,0 +1,30 @@
+{
+  "name": "contradiction",
+  "description": "Old-vs-new versions of the same fact. Two pairs stay active-active (both chunks live, newer/higher-trust should out-rank the stale one); two pairs go through Engram.supersede() (the old chunk is marked is_active = FALSE and must be structurally excluded, not merely out-ranked).",
+  "queries": [
+    {
+      "query": "What Node.js version does the staging server run?",
+      "relevantIds": ["node-new"],
+      "distractorId": "node-old",
+      "distractorExcluded": false
+    },
+    {
+      "query": "What is the primary deployment region?",
+      "relevantIds": ["region-new"],
+      "distractorId": "region-old",
+      "distractorExcluded": false
+    },
+    {
+      "query": "What is the API gateway rate limit?",
+      "relevantIds": ["ratelimit-new"],
+      "distractorId": "ratelimit-old",
+      "distractorExcluded": true
+    },
+    {
+      "query": "How long is the on-call rotation?",
+      "relevantIds": ["oncall-new"],
+      "distractorId": "oncall-old",
+      "distractorExcluded": true
+    }
+  ]
+}

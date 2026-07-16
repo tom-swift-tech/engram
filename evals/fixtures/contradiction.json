@@ -1,0 +1,22 @@
+[
+  { "id": "filler-1", "text": "The office thermostat is set to 68 degrees during work hours.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.75 },
+  { "id": "filler-2", "text": "The team stand-up happens every weekday at 9:30 AM.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.75 },
+  { "id": "filler-3", "text": "The design system uses Radix UI primitives with Tailwind styling.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.75 },
+  { "id": "filler-4", "text": "Release notes are written in present tense and grouped by feature area.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.75 },
+  { "id": "filler-5", "text": "The onboarding doc lives in the internal wiki under Engineering.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.75 },
+  { "id": "filler-6", "text": "Code review requires at least one approval before merging.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.75 },
+  { "id": "filler-7", "text": "The support inbox is triaged twice a day by the on-call engineer.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.75 },
+  { "id": "filler-8", "text": "New hires get a laptop provisioned within their first week.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.75 },
+
+  { "id": "node-old", "text": "The staging server runs Node.js 18 LTS.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.7, "daysAgo": 60 },
+  { "id": "node-new", "text": "The staging server was upgraded and now runs Node.js 22 LTS.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.9, "daysAgo": 5 },
+
+  { "id": "region-old", "text": "The primary deployment region is us-east-1.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.75, "daysAgo": 120 },
+  { "id": "region-new", "text": "The primary deployment region was moved to eu-central-1 for latency reasons.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.9, "daysAgo": 10 },
+
+  { "id": "ratelimit-old", "text": "The API gateway rate limit is 100 requests per minute.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.8, "daysAgo": 90 },
+  { "id": "ratelimit-new", "text": "The API gateway rate limit was raised to 500 requests per minute.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.9, "daysAgo": 2, "supersedes": "ratelimit-old" },
+
+  { "id": "oncall-old", "text": "The on-call rotation is one week long.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.8, "daysAgo": 200 },
+  { "id": "oncall-new", "text": "The on-call rotation was shortened to three days.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.9, "daysAgo": 1, "supersedes": "oncall-old" }
+]

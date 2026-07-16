@@ -35,7 +35,8 @@
     "format:check": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\"",
     "dev": "tsx watch src/engram.ts",
     "reflect": "tsx src/reflect.ts",
-    "example": "tsx examples/basic-usage.ts"
+    "example": "tsx examples/basic-usage.ts",
+    "eval": "tsx evals/run.ts"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.0.0",
