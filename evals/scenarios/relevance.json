@@ -1,0 +1,16 @@
+{
+  "name": "relevance",
+  "description": "Baseline retrieval quality: 27 chunks across 6 topics, 10 labeled queries with known relevant fixture ids.",
+  "queries": [
+    { "query": "What tool provisions VMs in the homelab?", "relevantIds": ["infra-2", "infra-4"] },
+    { "query": "How many Proxmox nodes are needed for quorum?", "relevantIds": ["infra-3"] },
+    { "query": "Why is SQLite chosen over Postgres?", "relevantIds": ["db-1", "db-4"] },
+    { "query": "What language is preferred for systems programming?", "relevantIds": ["lang-1"] },
+    { "query": "What language is used for new tooling projects?", "relevantIds": ["lang-2"] },
+    { "query": "How does WAL mode help concurrent database access?", "relevantIds": ["db-4"] },
+    { "query": "How is DNS handled in the homelab network?", "relevantIds": ["net-2", "net-4"] },
+    { "query": "What runs the CI pipeline?", "relevantIds": ["deploy-1", "deploy-4"] },
+    { "query": "How are homelab metrics visualized?", "relevantIds": ["mon-1", "mon-2"] },
+    { "query": "How are disk usage alerts delivered?", "relevantIds": ["mon-4"] }
+  ]
+}

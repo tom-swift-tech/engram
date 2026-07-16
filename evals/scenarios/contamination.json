@@ -1,0 +1,12 @@
+{
+  "name": "contamination",
+  "description": "Six user_stated core facts mixed with 15 tool_result noise chunks that share heavy vocabulary with them. Measures how often tier-0 (user_stated) beats tier-2 (tool_result) noise in practice, not just in a synthetic single-pair test.",
+  "queries": [
+    { "query": "When is the production database backed up?", "relevantIds": ["core-backup"], "distractorId": "noise-backup-1" },
+    { "query": "What is the support SLA for first response?", "relevantIds": ["core-sla"], "distractorId": "noise-sla-2" },
+    { "query": "How long do refunds take to process?", "relevantIds": ["core-refund"], "distractorId": "noise-refund-1" },
+    { "query": "What authentication is required for balance transfers?", "relevantIds": ["core-auth"], "distractorId": "noise-auth-1" },
+    { "query": "How often is the search index rebuilt?", "relevantIds": ["core-index"], "distractorId": "noise-index-1" },
+    { "query": "When does the billing cycle close?", "relevantIds": ["core-billing"], "distractorId": "noise-billing-1" }
+  ]
+}

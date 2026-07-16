@@ -1,0 +1,24 @@
+[
+  { "id": "core-backup", "text": "The production database is backed up every night at 2 AM UTC.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.9 },
+  { "id": "core-sla", "text": "The customer support SLA guarantees a first response within 4 business hours.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.9 },
+  { "id": "core-refund", "text": "The payments service processes refunds within 3 to 5 business days.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.9 },
+  { "id": "core-auth", "text": "The mobile app requires biometric authentication for balance transfers.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.9 },
+  { "id": "core-index", "text": "The search index is rebuilt weekly from the canonical product catalog.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.9 },
+  { "id": "core-billing", "text": "The billing cycle closes on the last calendar day of each month.", "memoryType": "world", "sourceType": "user_stated", "trustScore": 0.9 },
+
+  { "id": "noise-backup-1", "text": "tool output: nightly backup job for production database exited with status 0 at 02:03 UTC.", "memoryType": "experience", "sourceType": "tool_result", "trustScore": 0.3 },
+  { "id": "noise-backup-2", "text": "tool output: backup verification script confirmed production database snapshot integrity.", "memoryType": "experience", "sourceType": "tool_result", "trustScore": 0.3 },
+  { "id": "noise-sla-1", "text": "tool output: support ticket queue depth was 42 at time of check, SLA timer running.", "memoryType": "experience", "sourceType": "tool_result", "trustScore": 0.3 },
+  { "id": "noise-sla-2", "text": "tool output: average first response time logged as 3.8 hours across last 100 tickets.", "memoryType": "experience", "sourceType": "tool_result", "trustScore": 0.3 },
+  { "id": "noise-refund-1", "text": "tool output: refund batch job processed 128 refunds, average completion 4.2 days.", "memoryType": "experience", "sourceType": "tool_result", "trustScore": 0.3 },
+  { "id": "noise-refund-2", "text": "tool output: payments reconciliation script flagged 2 refunds pending manual review.", "memoryType": "experience", "sourceType": "tool_result", "trustScore": 0.3 },
+  { "id": "noise-auth-1", "text": "tool output: mobile app crash log shows biometric prompt dismissed by user before transfer.", "memoryType": "experience", "sourceType": "tool_result", "trustScore": 0.3 },
+  { "id": "noise-auth-2", "text": "tool output: authentication service reported 99.2 percent biometric success rate this week.", "memoryType": "experience", "sourceType": "tool_result", "trustScore": 0.3 },
+  { "id": "noise-index-1", "text": "tool output: search index rebuild job completed in 41 minutes, indexed 1.2M products.", "memoryType": "experience", "sourceType": "tool_result", "trustScore": 0.3 },
+  { "id": "noise-index-2", "text": "tool output: catalog sync script reported 340 stale product records before rebuild.", "memoryType": "experience", "sourceType": "tool_result", "trustScore": 0.3 },
+  { "id": "noise-billing-1", "text": "tool output: billing cycle close job ran successfully, generated 5,200 invoices.", "memoryType": "experience", "sourceType": "tool_result", "trustScore": 0.3 },
+  { "id": "noise-billing-2", "text": "tool output: billing reconciliation flagged 3 accounts with mismatched cycle dates.", "memoryType": "experience", "sourceType": "tool_result", "trustScore": 0.3 },
+  { "id": "noise-misc-1", "text": "tool output: health check endpoint returned 200 OK in 12ms.", "memoryType": "experience", "sourceType": "tool_result", "trustScore": 0.3 },
+  { "id": "noise-misc-2", "text": "tool output: deployment script exited with status 0 after 90 seconds.", "memoryType": "experience", "sourceType": "tool_result", "trustScore": 0.3 },
+  { "id": "noise-misc-3", "text": "tool output: log rotation job compressed 14 files older than 7 days.", "memoryType": "experience", "sourceType": "tool_result", "trustScore": 0.3 }
+]

@@ -1,0 +1,12 @@
+{
+  "name": "staleness",
+  "description": "The same fact retained (near-)identically at four backdated ages (7d/90d/400d/900d). Reports which age variant ranks first — and its P@5/R@5/MRR against the freshest variant as the labeled target — under decayHalfLifeDays 0/30/180 side by side, evidencing the library-default recency-decay tradeoff documented in CLAUDE.md.",
+  "decayHalfLifeDaysToTest": [0, 30, 180],
+  "probes": [
+    {
+      "query": "What does the reporting service use for local caching?",
+      "targetId": "stale-7d",
+      "ageVariantIds": ["stale-7d", "stale-90d", "stale-400d", "stale-900d"]
+    }
+  ]
+}
