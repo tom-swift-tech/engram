@@ -55,6 +55,7 @@ import {
 import {
   recall,
   formatForPrompt,
+  formatWhyLine,
   DEFAULT_SOURCE_TIERS,
   DEFAULT_MEMORY_TYPE_RANK,
   type RecallOptions,
@@ -174,6 +175,7 @@ export {
   shouldRetain,
   chunkText,
   formatForPrompt,
+  formatWhyLine,
   OllamaGeneration,
   OpenAICompatibleGeneration,
   AnthropicGeneration,

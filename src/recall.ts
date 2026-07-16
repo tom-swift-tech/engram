@@ -1374,7 +1374,7 @@ function formatProvenanceDate(createdAt: string): string {
  * — formatForPrompt has no access to a per-call `sourceTiers` override
  * passed to recall(), so this is illustrative, not authoritative.
  */
-function formatWhyLine(result: RecallResult): string | null {
+export function formatWhyLine(result: RecallResult): string | null {
   const scores = result.strategyScores;
   if (!scores) return null;
   const parts = scores.perStrategy.map((s) =>

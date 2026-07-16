@@ -32,7 +32,7 @@
 import Database from 'better-sqlite3';
 import { pathToFileURL } from 'url';
 
-import { Engram } from './engram.js';
+import { Engram, formatWhyLine } from './engram.js';
 import type {
   EngramOptions,
   RetainOptions,
@@ -197,9 +197,13 @@ function formatRecall(r: RecallResponse): string {
   );
   r.results.forEach((res, i) => {
     lines.push(
-      `\n[${i + 1}] score=${res.score.toFixed(3)} ${res.memoryType} trust=${res.trustScore.toFixed(2)} via=${res.strategies.join('+')}`,
+      `\n[${i + 1}] score=${res.score.toFixed(3)} ${res.memoryType}/${res.sourceType} trust=${res.trustScore.toFixed(2)} created=${res.createdAt.slice(0, 10)} via=${res.strategies.join('+')}`,
     );
     lines.push(`    ${res.text}`);
+    // Only present when the recall ran with --explain-scores; the shared
+    // formatWhyLine helper keeps this rendering identical to formatForPrompt's.
+    const why = formatWhyLine(res);
+    if (why) lines.push(`  ${why}`);
   });
   if (r.opinions.length > 0) {
     lines.push('\nOpinions:');

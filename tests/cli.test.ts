@@ -159,6 +159,54 @@ describe('engram CLI', () => {
     );
   });
 
+  it('recall human output shows provenance and a why line under --explain-scores', async () => {
+    await runCli(
+      args(
+        'retain',
+        'Tom prefers Terraform human provenance cli test',
+        '--source-type',
+        'user_stated',
+      ),
+      captureIo().io,
+      overrides,
+    );
+    const cap = captureIo();
+    const code = await runCli(
+      args(
+        'recall',
+        'Terraform human provenance cli',
+        '--strategies',
+        'keyword',
+        '--explain-scores',
+      ),
+      cap.io,
+      overrides,
+    );
+    expect(code).toBe(0);
+    const out = cap.stdout();
+    // Provenance on the result line: memoryType/sourceType + created date.
+    expect(out).toMatch(/world\/user_stated/);
+    expect(out).toMatch(/created=\d{4}-\d{2}-\d{2}/);
+    // Why line rendered from strategyScores (explain-scores was requested).
+    expect(out).toMatch(/why: .*keyword r\d+.*tier \d/);
+  });
+
+  it('recall human output has no why line without --explain-scores', async () => {
+    await runCli(
+      args('retain', 'Tom prefers Terraform no-why-line cli test'),
+      captureIo().io,
+      overrides,
+    );
+    const cap = captureIo();
+    const code = await runCli(
+      args('recall', 'Terraform no-why-line cli', '--strategies', 'keyword'),
+      cap.io,
+      overrides,
+    );
+    expect(code).toBe(0);
+    expect(cap.stdout()).not.toMatch(/why:/);
+  });
+
   it('recall without --explain-scores omits strategyScores from --json', async () => {
     await runCli(
       args('retain', 'Tom prefers Pulumi no explain scores cli test'),
