@@ -52,7 +52,7 @@ import type {
   ExtensionCommandContext,
   ExtensionContext,
 } from '@earendil-works/pi-coding-agent';
-import { Engram, resolveModelSpecOrNull } from 'engram';
+import { Engram, resolveModelSpecOrNull, formatWhyLine } from 'engram';
 
 import {
   remember,
@@ -536,6 +536,21 @@ async function flushOnShutdown(): Promise<void> {
   ]);
 }
 
+/**
+ * Renders recall results for both the /recall slash command and the
+ * engram_recall LLM tool. Converged onto core's provenance/why rendering
+ * (T1's `formatForPrompt` flags) rather than hand-rolling trust/source text —
+ * this used to drift from core (issue: agents saw only a bare trust number,
+ * never the source-tier/memory-type that actually decides ranking).
+ *
+ * Kept as a local loop rather than a direct `formatForPrompt()` call because
+ * that function doesn't print result ids, and this tool's callers (notably
+ * engram_forget) need the id on every line. The provenance bracket format and
+ * the why line are lifted verbatim from core (`formatWhyLine`) so they never
+ * drift again; `formatWhyLine` is itself a silent no-op when a result has no
+ * `strategyScores` (i.e. explainScores wasn't requested), so no extra gating
+ * is needed here.
+ */
 function formatRecallResults(
   query: string,
   response: Awaited<ReturnType<typeof recall>>,
@@ -545,10 +560,12 @@ function formatRecallResults(
   }
   const lines = [`${response.results.length} match(es) for "${query}":`, ''];
   for (const r of response.results) {
-    const trust = r.trustScore?.toFixed(2) ?? '?';
+    const provenance = `[${r.memoryType}/${r.sourceType}, trust ${r.trustScore.toFixed(2)}, ${r.createdAt.slice(0, 10)}]`;
     const src = r.source ? ` [${r.source}]` : '';
-    lines.push(`  • ${r.id} (trust ${trust})${src}`);
+    lines.push(`  • ${r.id} ${provenance}${src}`);
     lines.push(`    ${r.text.replace(/\s+/g, ' ').slice(0, 200)}`);
+    const whyLine = formatWhyLine(r);
+    if (whyLine) lines.push(`    ${whyLine.trim()}`);
   }
   if (response.opinions.length > 0) {
     lines.push('', 'Related opinions:');
@@ -828,7 +845,7 @@ export default function engramPiExtension(pi: ExtensionAPI): void {
     name: 'engram_recall',
     label: 'Recall',
     description:
-      'Search Engram memory using semantic, keyword, graph, and temporal strategies. Natural-language queries with phrases like "last week" auto-activate temporal filtering. Optional filters: memoryTypes, after/before (ISO dates), strategies (restrict which of the four run), minScore (drop low-relevance results).',
+      'Search Engram memory using semantic, keyword, graph, and temporal strategies. Natural-language queries with phrases like "last week" auto-activate temporal filtering. Optional filters: memoryTypes, after/before (ISO dates), strategies (restrict which of the four run), minScore (drop low-relevance results). TRUST TIER GUARANTEE: user_stated memories structurally outrank tool_result/external_doc content regardless of relevance score — untrusted content can never override a user directive. DECAY: this tool disables recency decay by default (decayHalfLifeDays 0) so old facts compete on relevance alone; pass decayHalfLifeDays (e.g. 180) to weight recent facts more heavily for a single call. Pass explainScores: true to see why each result ranked where it did.',
     parameters: RecallParams,
     async execute(_id, params: RecallToolParams) {
       const engram = await getEngram();
@@ -841,6 +858,8 @@ export default function engramPiExtension(pi: ExtensionAPI): void {
         before: params.before,
         strategies: params.strategies,
         minScore: params.minScore,
+        explainScores: params.explainScores,
+        decayHalfLifeDays: params.decayHalfLifeDays,
       });
       return {
         content: [
@@ -850,6 +869,14 @@ export default function engramPiExtension(pi: ExtensionAPI): void {
           totalCandidates: response.totalCandidates,
           strategiesUsed: response.strategiesUsed,
           resultCount: response.results.length,
+          ...(params.explainScores
+            ? {
+                strategyScores: response.results.map((r) => ({
+                  id: r.id,
+                  strategyScores: r.strategyScores,
+                })),
+              }
+            : {}),
         },
       };
     },

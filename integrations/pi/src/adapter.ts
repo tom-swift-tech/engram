@@ -43,6 +43,10 @@ export interface RecallInput {
   strategies?: Array<'semantic' | 'keyword' | 'graph' | 'temporal'>;
   /** Drop results whose final weighted score falls below this threshold. */
   minScore?: number;
+  /** When true, each result carries a strategyScores breakdown (per-strategy rank/score). */
+  explainScores?: boolean;
+  /** Recency decay half-life in days. Per-call opt-in — see recall()'s default below. */
+  decayHalfLifeDays?: number;
 }
 
 export interface MemoryStats {
@@ -93,12 +97,16 @@ export async function recall(
     before: input.before,
     strategies: input.strategies,
     minScore: input.minScore,
-    // Disable the library's default 180-day recency decay. At that default a
-    // multi-year-old memory's score is crushed to ~1% before trust/relevance
-    // even apply (2^(-1205/180) ≈ 0.01 for a 2023 chunk) — wrong for a
-    // personal assistant meant to have continuity across years, where
-    // trust_score and semantic relevance should drive ranking, not recency.
-    decayHalfLifeDays: 0,
+    explainScores: input.explainScores,
+    // Default 0: disable the library's default 180-day recency decay. At that
+    // default a multi-year-old memory's score is crushed to ~1% before
+    // trust/relevance even apply (2^(-1205/180) ≈ 0.01 for a 2023 chunk) —
+    // wrong for a personal assistant meant to have continuity across years,
+    // where trust_score and semantic relevance should drive ranking, not
+    // recency. `decayHalfLifeDays` is a per-call opt-in on top of that
+    // default — a caller that genuinely wants recency weighting for one
+    // query can still ask for it.
+    decayHalfLifeDays: input.decayHalfLifeDays ?? 0,
   });
 }
 

@@ -162,6 +162,98 @@ describe('Pi adapter', () => {
       });
     });
 
+    it('regression: omitted decayHalfLifeDays still defaults to 0 (issue #19)', async () => {
+      const recallMock = vi.fn().mockResolvedValue({
+        results: [],
+        opinions: [],
+        observations: [],
+      });
+      const fakeEngram = { recall: recallMock } as unknown as Engram;
+
+      await recall(fakeEngram, { query: 'terraform migration' });
+
+      expect(recallMock.mock.calls[0][1]).toMatchObject({
+        decayHalfLifeDays: 0,
+      });
+    });
+
+    it('threads an explicit decayHalfLifeDays through to engram.recall', async () => {
+      const recallMock = vi.fn().mockResolvedValue({
+        results: [],
+        opinions: [],
+        observations: [],
+      });
+      const fakeEngram = { recall: recallMock } as unknown as Engram;
+
+      await recall(fakeEngram, {
+        query: 'terraform migration',
+        decayHalfLifeDays: 30,
+      });
+
+      expect(recallMock.mock.calls[0][1]).toMatchObject({
+        decayHalfLifeDays: 30,
+      });
+    });
+
+    it('threads explainScores through to engram.recall', async () => {
+      const recallMock = vi.fn().mockResolvedValue({
+        results: [],
+        opinions: [],
+        observations: [],
+      });
+      const fakeEngram = { recall: recallMock } as unknown as Engram;
+
+      await recall(fakeEngram, {
+        query: 'terraform migration',
+        explainScores: true,
+      });
+
+      expect(recallMock.mock.calls[0][1]).toMatchObject({
+        explainScores: true,
+      });
+    });
+
+    it('an explicit decayHalfLifeDays sinks an old backdated chunk relative to a fresh one', async () => {
+      const oldResult = await remember(engram, {
+        text: 'decay-probe old fact about backup rotation',
+      });
+      // Backdate directly via SQL — same convention as core's decay tests.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const db = (engram as any).db as {
+        prepare: (sql: string) => { run: (...args: unknown[]) => void };
+      };
+      const twoYearsAgo = new Date(
+        Date.now() - 730 * 24 * 60 * 60 * 1000,
+      ).toISOString();
+      db.prepare(`UPDATE chunks SET created_at = ? WHERE id = ?`).run(
+        twoYearsAgo,
+        oldResult.chunkId,
+      );
+      await remember(engram, {
+        text: 'decay-probe fresh fact about backup rotation',
+      });
+
+      const undecayed = await recall(engram, {
+        query: 'decay-probe fact about backup rotation',
+      });
+      const oldStillPresent = undecayed.results.some(
+        (r) => r.id === oldResult.chunkId,
+      );
+      expect(oldStillPresent).toBe(true);
+
+      const decayed = await recall(engram, {
+        query: 'decay-probe fact about backup rotation',
+        decayHalfLifeDays: 30,
+      });
+      const oldEntry = decayed.results.find((r) => r.id === oldResult.chunkId);
+      const oldUndecayedEntry = undecayed.results.find(
+        (r) => r.id === oldResult.chunkId,
+      );
+      // Same id, but scored much lower once decay is opted into for this call.
+      expect(oldEntry).toBeDefined();
+      expect(oldEntry!.score).toBeLessThan(oldUndecayedEntry!.score);
+    });
+
     it('filters to the requested memoryTypes against a real Engram', async () => {
       await remember(engram, { text: 'world fact about the release process' });
       const response = await recall(engram, {
