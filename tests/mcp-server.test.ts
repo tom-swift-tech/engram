@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import Database from 'better-sqlite3';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -354,6 +355,131 @@ describe('MCP Server', () => {
     }>;
     const filteredParsed = JSON.parse(filteredContent[0].text);
     expect(filteredParsed.results).toHaveLength(0);
+  });
+
+  it('engram_recall with decayHalfLifeDays: 0 outscores the library default for a backdated chunk', async () => {
+    const retained = await client.callTool({
+      name: 'engram_retain',
+      arguments: { text: 'DecayHalfLifeDays MCP round-trip ancient widget' },
+    });
+    const retainedContent = retained.content as Array<{
+      type: string;
+      text: string;
+    }>;
+    const chunkId = JSON.parse(retainedContent[0].text).chunkId;
+
+    const raw = new Database(dbPath);
+    const oldDate = new Date(
+      Date.now() - 365 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    raw
+      .prepare(`UPDATE chunks SET created_at = ? WHERE id = ?`)
+      .run(oldDate, chunkId);
+    raw.close();
+
+    const withDefaultDecay = await client.callTool({
+      name: 'engram_recall',
+      arguments: {
+        query: 'DecayHalfLifeDays MCP round-trip ancient widget',
+        strategies: ['keyword'],
+      },
+    });
+    const defaultContent = withDefaultDecay.content as Array<{
+      type: string;
+      text: string;
+    }>;
+    const defaultScore = JSON.parse(defaultContent[0].text).results[0].score;
+
+    const noDecay = await client.callTool({
+      name: 'engram_recall',
+      arguments: {
+        query: 'DecayHalfLifeDays MCP round-trip ancient widget',
+        strategies: ['keyword'],
+        decayHalfLifeDays: 0,
+      },
+    });
+    const noDecayContent = noDecay.content as Array<{
+      type: string;
+      text: string;
+    }>;
+    const noDecayScore = JSON.parse(noDecayContent[0].text).results[0].score;
+
+    expect(noDecayScore).toBeGreaterThan(defaultScore);
+  });
+
+  it('engram_recall rejects a non-numeric decayHalfLifeDays (falls back to the default)', async () => {
+    await client.callTool({
+      name: 'engram_retain',
+      arguments: { text: 'Invalid decayHalfLifeDays MCP round-trip chunk' },
+    });
+
+    const result = await client.callTool({
+      name: 'engram_recall',
+      arguments: {
+        query: 'Invalid decayHalfLifeDays MCP round-trip',
+        strategies: ['keyword'],
+        decayHalfLifeDays: 'not-a-number',
+      },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const content = result.content as Array<{ type: string; text: string }>;
+    const parsed = JSON.parse(content[0].text);
+    expect(parsed.results.length).toBeGreaterThan(0);
+  });
+
+  it('engram_recall clamps a negative decayHalfLifeDays to 0', async () => {
+    const retained = await client.callTool({
+      name: 'engram_retain',
+      arguments: {
+        text: 'Negative decayHalfLifeDays MCP round-trip ancient chunk',
+      },
+    });
+    const retainedContent = retained.content as Array<{
+      type: string;
+      text: string;
+    }>;
+    const chunkId = JSON.parse(retainedContent[0].text).chunkId;
+
+    const raw = new Database(dbPath);
+    const oldDate = new Date(
+      Date.now() - 365 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    raw
+      .prepare(`UPDATE chunks SET created_at = ? WHERE id = ?`)
+      .run(oldDate, chunkId);
+    raw.close();
+
+    // A negative value clamps to 0 (no decay) — same score as an explicit 0.
+    const negative = await client.callTool({
+      name: 'engram_recall',
+      arguments: {
+        query: 'Negative decayHalfLifeDays MCP round-trip ancient chunk',
+        strategies: ['keyword'],
+        decayHalfLifeDays: -30,
+      },
+    });
+    const negativeContent = negative.content as Array<{
+      type: string;
+      text: string;
+    }>;
+    const negativeScore = JSON.parse(negativeContent[0].text).results[0].score;
+
+    const explicitZero = await client.callTool({
+      name: 'engram_recall',
+      arguments: {
+        query: 'Negative decayHalfLifeDays MCP round-trip ancient chunk',
+        strategies: ['keyword'],
+        decayHalfLifeDays: 0,
+      },
+    });
+    const zeroContent = explicitZero.content as Array<{
+      type: string;
+      text: string;
+    }>;
+    const zeroScore = JSON.parse(zeroContent[0].text).results[0].score;
+
+    expect(negativeScore).toBe(zeroScore);
   });
 
   it('engram_retain returns isError when text is missing', async () => {

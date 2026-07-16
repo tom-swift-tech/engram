@@ -45,6 +45,12 @@ export function clampTrust(v: unknown): number | undefined {
   return Math.max(0, Math.min(1, v));
 }
 
+/** Clamp a numeric value to a minimum of 0 (no upper bound). Returns undefined if not a number. */
+export function clampNonNegative(v: unknown): number | undefined {
+  if (typeof v !== 'number' || isNaN(v)) return undefined;
+  return Math.max(0, v);
+}
+
 /**
  * Filter an array to only values present in a valid set. Returns undefined if
  * the result is empty or the input is not an array.

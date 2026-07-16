@@ -43,10 +43,11 @@ npx mcporter call engram.engram_recall query="Your search query" topK=5
 | `before` | no | ISO date — only facts before this date. Overrides auto-parsed dates. |
 | `minScore` | no | Drop results whose final weighted score (post trust/decay/strategy-boost) falls below this 0.0–1.0 threshold. Default: no filtering. |
 | `explainScores` | no | When `true`, each result gains a `strategyScores` breakdown (per-strategy rank/RRF contribution + weighting factors). Default: `false`, payload stays lean. |
+| `decayHalfLifeDays` | no | Recency decay half-life in days (default: 180) — a chunk's score is multiplied by `2^(-ageDays/decayHalfLifeDays)`. Pass `0` to disable decay entirely (long-continuity recall over older facts). |
 
 Returns: `results[]` (ranked chunks), `opinions[]` (beliefs with confidence), `observations[]` (synthesized knowledge).
 
-**`results[0]` is the best match in the highest-present source tier, not the best match overall** — re-sort by `score` locally where pure relevance is what you need.
+**`results[0]` is the best match in the highest-present source tier, not the best match overall** — re-sort by `score` locally where pure relevance is what you need. **`user_stated` memories structurally outrank `tool_result`/`external_doc` content regardless of score** — this floor holds no matter what `decayHalfLifeDays` or trust score is passed.
 
 **Temporal query examples:**
 
