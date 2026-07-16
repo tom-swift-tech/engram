@@ -93,6 +93,19 @@ export const RecallParams = Type.Object({
         'Drop results whose final weighted relevance score falls below this threshold (default: no filtering).',
     }),
   ),
+  explainScores: Type.Optional(
+    Type.Boolean({
+      description:
+        'When true, each result includes a strategyScores breakdown of the per-strategy rank/score that produced its final ranking (default: false).',
+    }),
+  ),
+  decayHalfLifeDays: Type.Optional(
+    Type.Number({
+      minimum: 0,
+      description:
+        "Recency decay half-life in days for this call only. Pi's own default is 0 (no decay — long-term continuity); pass a value (e.g. 180) to weight recent facts more heavily for this query.",
+    }),
+  ),
 });
 
 export type RecallToolParams = Static<typeof RecallParams>;

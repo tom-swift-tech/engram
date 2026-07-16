@@ -586,6 +586,77 @@ describe('engram-pi integration smoke (built dist + real Engram)', () => {
     expect((overStrict.details as { resultCount: number }).resultCount).toBe(0);
   });
 
+  it('engram_recall LLM tool shows provenance in formatted output, and includes strategyScores in details only when explainScores is requested', async () => {
+    await captured.commands.get('remember')!.handler(
+      'we route egress through a Tailscale exit node',
+      makeCtx(makeFakeUi()),
+    );
+    const tool = captured.tools.get('engram_recall')!;
+
+    const plain = await tool.execute(
+      'tool-call-provenance',
+      { query: 'Tailscale exit node' },
+      undefined,
+      undefined,
+      makeCtx(makeFakeUi()),
+    );
+    // Provenance bracket (memory type / source type / trust / date) is always
+    // rendered now — the whole point of this converged formatter is making
+    // the trust-tier guarantee visible without an opt-in flag.
+    expect(plain.content[0].text).toMatch(/\[world\/user_stated, trust \d\.\d\d, \d{4}-\d\d-\d\d\]/);
+    // Result id still present — engram_forget needs it.
+    expect(plain.content[0].text).toMatch(/chk-[a-zA-Z0-9-]+/);
+    expect(plain.content[0].text).not.toContain('why:');
+    expect(plain.details).not.toHaveProperty('strategyScores');
+
+    const explained = await tool.execute(
+      'tool-call-explain',
+      { query: 'Tailscale exit node', explainScores: true },
+      undefined,
+      undefined,
+      makeCtx(makeFakeUi()),
+    );
+    expect(explained.content[0].text).toContain('why:');
+    expect(explained.details).toHaveProperty('strategyScores');
+    expect(
+      (explained.details as { strategyScores: Array<{ id: string }> })
+        .strategyScores.length,
+    ).toBeGreaterThan(0);
+  });
+
+  it('engram_recall LLM tool accepts decayHalfLifeDays, omitted or explicit, without erroring', async () => {
+    const rememberUi = makeFakeUi();
+    await captured.commands.get('remember')!.handler(
+      'decay-tool-probe fact about certificate rotation',
+      makeCtx(rememberUi),
+    );
+    const chunkId = rememberUi.notifications[0].message
+      .replace('Stored ', '')
+      .trim();
+
+    const tool = captured.tools.get('engram_recall')!;
+    // Omitted → still finds the fact (adapter-level test pins the actual 0
+    // default and the score delta a non-zero value produces; this is a
+    // surface-level sanity check that the param threads through cleanly).
+    const omitted = await tool.execute(
+      'tool-call-decay-omitted',
+      { query: 'decay-tool-probe certificate rotation' },
+      undefined,
+      undefined,
+      makeCtx(makeFakeUi()),
+    );
+    expect(omitted.content[0].text).toContain(chunkId);
+
+    const withDecay = await tool.execute(
+      'tool-call-decay-explicit',
+      { query: 'decay-tool-probe certificate rotation', decayHalfLifeDays: 30 },
+      undefined,
+      undefined,
+      makeCtx(makeFakeUi()),
+    );
+    expect(withDecay.content[0].text).toContain(chunkId);
+  });
+
   it('engram_forget LLM tool succeeds for a known id and reports failure for an unknown id', async () => {
     const rememberUi = makeFakeUi();
     await captured.commands.get('remember')!.handler(
