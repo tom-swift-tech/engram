@@ -253,6 +253,9 @@ export interface RecallResult {
   trustScore: number;
   sourceType: string;
   eventTime: string | null;
+  /** When the chunk was written (SQLite CURRENT_TIMESTAMP, UTC). Powers the
+   * staleness bracket in formatForPrompt's showProvenance. */
+  createdAt: string;
   score: number; // final fused score
   strategies: string[]; // which strategies found this
   /** Present only when RecallOptions.explainScores is true. */
@@ -1199,6 +1202,7 @@ export async function recall(
       trustScore: entry.chunk.trust_score,
       sourceType: entry.chunk.source_type,
       eventTime: entry.chunk.event_time,
+      createdAt: entry.chunk.created_at,
       score: entry.score,
       strategies: entry.strategies,
     };
@@ -1332,8 +1336,55 @@ export interface FormatForPromptOptions {
   showTrust?: boolean;
   /** Include source attribution (default: true) */
   showSource?: boolean;
+  /**
+   * Append a compact provenance bracket to each result line — memory type,
+   * source type, trust, and created date, e.g.
+   * `[world/user_stated, trust 0.85, 2026-03-14]`. Makes the trust-tier
+   * guarantee and staleness visible to any consumer of this formatter, not
+   * just ones that inspect RecallResult fields directly. Default: false —
+   * existing output is byte-identical when omitted.
+   */
+  showProvenance?: boolean;
+  /**
+   * Append a terse `  why: ...` line under each result derived from its
+   * `strategyScores` (only present when the recall() call passed
+   * `explainScores: true`): the semantic strategy's contribution renders as
+   * its cosine score, every other strategy as its rank ordinal, plus the
+   * source tier the result sorted under, e.g.
+   * `  why: semantic 0.82 · keyword r3 · tier 0`. Silent no-op — no line, no
+   * warning — when a result has no `strategyScores`. Default: false.
+   */
+  showWhy?: boolean;
   /** Header text (default: "## Relevant Memory Context") */
   header?: string;
+}
+
+/** YYYY-MM-DD from a stored TIMESTAMP. SQLite's CURRENT_TIMESTAMP format
+ * ("YYYY-MM-DD HH:MM:SS") and JS's Date#toISOString() ("YYYY-MM-DDTHH:...")
+ * both start with the date, so a plain slice works for either. */
+function formatProvenanceDate(createdAt: string): string {
+  return createdAt.slice(0, 10);
+}
+
+/**
+ * Terse per-result "why" line from strategyScores. The semantic strategy's
+ * entry renders as `rawFusedScore` (cosine-primary once a chunk is a
+ * semantic hit — see D6); every other strategy has no relevance magnitude,
+ * only rank, so it renders as `r{rank}`. Tier uses DEFAULT_SOURCE_TIERS only
+ * — formatForPrompt has no access to a per-call `sourceTiers` override
+ * passed to recall(), so this is illustrative, not authoritative.
+ */
+function formatWhyLine(result: RecallResult): string | null {
+  const scores = result.strategyScores;
+  if (!scores) return null;
+  const parts = scores.perStrategy.map((s) =>
+    s.strategy === 'semantic'
+      ? `semantic ${scores.rawFusedScore.toFixed(2)}`
+      : `${s.strategy} r${s.rank}`,
+  );
+  const tier = DEFAULT_SOURCE_TIERS[result.sourceType] ?? UNKNOWN_SOURCE_TIER;
+  parts.push(`tier ${tier}`);
+  return `  why: ${parts.join(' · ')}`;
 }
 
 /**
@@ -1351,6 +1402,8 @@ export function formatForPrompt(
     maxChars = 2000,
     showTrust = false,
     showSource = true,
+    showProvenance = false,
+    showWhy = false,
     header = '## Relevant Memory Context',
   } = options;
 
@@ -1413,8 +1466,16 @@ export function formatForPrompt(
     for (const r of response.results) {
       const trust = showTrust ? `[trust ${r.trustScore.toFixed(2)}] ` : '';
       const src = showSource && r.source ? ` [${r.source}]` : '';
-      if (!tryAdd(`- ${trust}${r.text}${src}`)) {
+      const provenance = showProvenance
+        ? ` [${r.memoryType}/${r.sourceType}, trust ${r.trustScore.toFixed(2)}, ${formatProvenanceDate(r.createdAt)}]`
+        : '';
+      if (!tryAdd(`- ${trust}${r.text}${src}${provenance}`)) {
         omitted++;
+        continue;
+      }
+      if (showWhy) {
+        const whyLine = formatWhyLine(r);
+        if (whyLine) tryAdd(whyLine);
       }
     }
     if (omitted > 0)

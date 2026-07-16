@@ -908,6 +908,7 @@ describe('formatForPrompt()', () => {
           trustScore: 0.9,
           sourceType: 'user_stated',
           eventTime: null,
+          createdAt: '2026-03-14 12:00:00',
           score: 0.8,
           strategies: ['keyword'],
         },
@@ -947,6 +948,7 @@ describe('formatForPrompt()', () => {
       trustScore: 0.8,
       sourceType: 'inferred',
       eventTime: null,
+      createdAt: '2026-03-14 12:00:00',
       score: 0.8 - i * 0.01,
       strategies: ['keyword'],
     }));
@@ -978,6 +980,7 @@ describe('formatForPrompt()', () => {
           trustScore: 0.85,
           sourceType: 'inferred',
           eventTime: null,
+          createdAt: '2026-03-14 12:00:00',
           score: 0.5,
           strategies: [],
         },
@@ -993,6 +996,193 @@ describe('formatForPrompt()', () => {
 
     expect(withTrust).toContain('trust');
     expect(withoutTrust).not.toContain('trust');
+  });
+
+  it('omits provenance and why by default (byte-identical to pre-T1 output)', async () => {
+    const { formatForPrompt } = await import('../src/recall.js');
+    const response = {
+      results: [
+        {
+          id: 'chk-1',
+          text: 'test',
+          memoryType: 'world',
+          source: null,
+          trustScore: 0.85,
+          sourceType: 'inferred',
+          eventTime: null,
+          createdAt: '2026-03-14 12:00:00',
+          score: 0.5,
+          strategies: ['keyword'],
+          strategyScores: {
+            perStrategy: [{ strategy: 'keyword', rank: 1, rrfScore: 0.016 }],
+            rawFusedScore: 0.016,
+            weighting: {
+              trust: 1,
+              strategyBoost: 1,
+              decay: 1,
+              sourceBoost: 1,
+              contextBoost: 1,
+              memoryType: 1,
+            },
+          },
+        },
+      ],
+      opinions: [],
+      observations: [],
+      totalCandidates: 1,
+      strategiesUsed: ['keyword'],
+    };
+
+    const output = formatForPrompt(response);
+    expect(output).not.toContain('[world/inferred');
+    expect(output).not.toContain('why:');
+  });
+
+  it('showProvenance renders memory type, source type, trust, and date', async () => {
+    const { formatForPrompt } = await import('../src/recall.js');
+    const response = {
+      results: [
+        {
+          id: 'chk-1',
+          text: 'Tom uses Terraform',
+          memoryType: 'world',
+          source: null,
+          trustScore: 0.85,
+          sourceType: 'user_stated',
+          eventTime: null,
+          createdAt: '2026-03-14 12:00:00',
+          score: 0.5,
+          strategies: ['keyword'],
+        },
+      ],
+      opinions: [],
+      observations: [],
+      totalCandidates: 1,
+      strategiesUsed: ['keyword'],
+    };
+
+    const output = formatForPrompt(response, { showProvenance: true });
+    expect(output).toContain('[world/user_stated, trust 0.85, 2026-03-14]');
+
+    const withoutFlag = formatForPrompt(response, { showProvenance: false });
+    expect(withoutFlag).not.toContain('[world/user_stated');
+  });
+
+  it('showWhy renders a strategy breakdown line when strategyScores is present', async () => {
+    const { formatForPrompt } = await import('../src/recall.js');
+    const response = {
+      results: [
+        {
+          id: 'chk-1',
+          text: 'Tom uses Terraform',
+          memoryType: 'world',
+          source: null,
+          trustScore: 0.9,
+          sourceType: 'user_stated',
+          eventTime: null,
+          createdAt: '2026-03-14 12:00:00',
+          score: 0.5,
+          strategies: ['semantic', 'keyword'],
+          strategyScores: {
+            perStrategy: [
+              { strategy: 'semantic', rank: 1, rrfScore: 0.016 },
+              { strategy: 'keyword', rank: 3, rrfScore: 0.015 },
+            ],
+            rawFusedScore: 0.82,
+            weighting: {
+              trust: 1,
+              strategyBoost: 1,
+              decay: 1,
+              sourceBoost: 1,
+              contextBoost: 1,
+              memoryType: 1,
+            },
+          },
+        },
+      ],
+      opinions: [],
+      observations: [],
+      totalCandidates: 1,
+      strategiesUsed: ['semantic', 'keyword'],
+    };
+
+    const output = formatForPrompt(response, { showWhy: true });
+    expect(output).toContain('  why: semantic 0.82 · keyword r3 · tier 0');
+  });
+
+  it('showWhy is a silent no-op when the result has no strategyScores (explainScores was not requested)', async () => {
+    const { formatForPrompt } = await import('../src/recall.js');
+    const response = {
+      results: [
+        {
+          id: 'chk-1',
+          text: 'Tom uses Terraform',
+          memoryType: 'world',
+          source: null,
+          trustScore: 0.9,
+          sourceType: 'user_stated',
+          eventTime: null,
+          createdAt: '2026-03-14 12:00:00',
+          score: 0.5,
+          strategies: ['keyword'],
+        },
+      ],
+      opinions: [],
+      observations: [],
+      totalCandidates: 1,
+      strategiesUsed: ['keyword'],
+    };
+
+    const output = formatForPrompt(response, { showWhy: true });
+    expect(output).not.toContain('why:');
+    expect(output).toContain('Tom uses Terraform');
+  });
+
+  it('drops a provenance/why line that would exceed maxChars, same as any other line', async () => {
+    const { formatForPrompt } = await import('../src/recall.js');
+    const response = {
+      results: [
+        {
+          id: 'chk-1',
+          text: 'A memory result with enough text to fill most of a small budget',
+          memoryType: 'world',
+          source: null,
+          trustScore: 0.9,
+          sourceType: 'user_stated',
+          eventTime: null,
+          createdAt: '2026-03-14 12:00:00',
+          score: 0.5,
+          strategies: ['semantic'],
+          strategyScores: {
+            perStrategy: [{ strategy: 'semantic', rank: 1, rrfScore: 0.016 }],
+            rawFusedScore: 0.82,
+            weighting: {
+              trust: 1,
+              strategyBoost: 1,
+              decay: 1,
+              sourceBoost: 1,
+              contextBoost: 1,
+              memoryType: 1,
+            },
+          },
+        },
+      ],
+      opinions: [],
+      observations: [],
+      totalCandidates: 1,
+      strategiesUsed: ['semantic'],
+    };
+
+    // Budget fits the header + result line (with provenance) but not the
+    // extra why line.
+    const output = formatForPrompt(response, {
+      showWhy: true,
+      showProvenance: true,
+      maxChars: 155,
+    });
+    expect(output.length).toBeLessThanOrEqual(155);
+    expect(output).toContain('A memory result with enough text');
+    expect(output).not.toContain('why:');
   });
 
   it('uses custom header', async () => {
