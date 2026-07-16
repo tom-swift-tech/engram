@@ -1,109 +1,84 @@
-# Handoff — Engram (updated 2026-07-16, wrap 6 — Step 6 CLOSED)
+# Handoff — Engram (updated 2026-07-16, Hermes observability sprint COMPLETE)
 
 ## Base commit / branch state
 
-- **Working tree is on `main`, clean after this wrap's docs commit.** A fresh
-  `go` lands here. Last verified state before this commit: `main @ 7b86114`
-  (wrap-5 docs commit). This wrap adds ONE docs-only commit on top.
-- **No open PRs, no feature branches in flight.** The whole D1–D6 remediation
-  sprint (#30), D5 catch-up (#31), and node-origin groundwork (#32) are all
-  merged. **The remediation sprint is now fully DONE — Step 6 is closed (see
-  below).**
-- Stale local branches still listed (pre-existing, unrelated, harmless):
-  `chore/ci-pi-suite`, `docs/aql-writes-vector-design`, `docs/refresh-current-state`,
-  `feat/pi-auto-retain`, `feat/pi-reflect-scheduling`. Delete anytime; not ours.
+- **`main`, all sprint work merged locally.** Final verified state: the merge
+  of `feat/hermes-t5-pi-parity` (after docs commit this wrap). Sequence on
+  main this session: `565595c` (sprint docs) → `d9e6470` (T1, ff) → `48fe547`
+  (T2 merge) → `93a601b` (lead integration) → `792ff51` (T3/T4 merge) →
+  `cab460f` (T5 merge) → this wrap's docs commit.
+- **NOT PUSHED** — local main is ahead of origin by the whole sprint. Push (or
+  PR per repo habit) is the next mechanical step if wanted; nothing else is
+  in flight.
+- Lane worktrees/branches torn down post-merge (verify with `git worktree
+  list` / `git branch` — if any `engram-wt-*` or `feat/hermes-*` remain,
+  teardown was interrupted; safe to remove, all merged).
+- Stale pre-existing branches unrelated to us still listed (chore/ci-pi-suite
+  etc.) — harmless, delete anytime.
 
-## Where we are — sprint DONE, Step 6 decided
+## What this session did — the whole Hermes sprint, spec → merged
 
-Step 6 ("consolidate before expanding") was the last open item — a decision, not
-code. It is now made and recorded. **There is no open work item.** Next session
-starts fresh on whatever you bring.
+**Origin:** external field report (`tasks/feedback-hermes-report.md`) — a live
+Pi-integration consumer's agent ("Hermes") evaluated Engram; 3 of its 7 asks
+were shipped-but-invisible capability, 1 was the eval-harness keystone.
+**Spec:** `tasks/sprint-hermes-observability.md` v2 (core-first — v1 wrongly
+scoped to the Pi adapter; user correction recorded in `tasks/lessons.md`
+2026-07-16: scope by layer, not by reporting harness).
 
-### This session's work: Step 6 audit + engram-aql freeze decision (docs only)
+Four builder lanes in isolated worktrees, each reviewed PASS before merge:
 
-Read-only audit → a Director decision → source-of-truth updated. No code touched,
-nothing to build/test.
+| Lane | What landed |
+|------|-------------|
+| T1 (`d9e6470`) | `formatForPrompt` `showProvenance`/`showWhy` flags (default false, byte-identical otherwise); `createdAt` added to `RecallResult`; private `formatWhyLine` |
+| T2 (`5320dde`) | `decayHalfLifeDays` on MCP `engram_recall` + CLI `--decay-half-life-days` (omitted → 180 unchanged, undefined-not-0 verified); tool description now states trust-tier guarantee + decay semantics; CLAUDE/AGENTS + skills docs |
+| Lead (`93a601b`) | Exported `formatWhyLine`; CLI human recall line shows sourceType+created date, why-line under `--explain-scores`. **Finding: MCP needed NO format threading — it returns full RecallResponse JSON (already lossless)** |
+| T3/T4 (`88beee8`) | `evals/` harness: embedding-only, `npm run eval`, P@5/R@5/MRR, four families, baselines committed; deterministic (byte-identical results.json across trees) |
+| T5 (`e8f489d`) | Pi `engram_recall` gains `explainScores`+`decayHalfLifeDays` (default stays 0 — issue #19 pinned); formatter converged onto core rendering via shared `formatWhyLine`; `strategyScores` in `details` when requested |
 
-| Artifact | What it is |
-|----------|-----------|
-| `tasks/step6-audit.md` | Read-only findings (I wrote it). Evidence for all three Step-6 sub-questions. |
-| `tasks/decision-freeze-engram-aql.md` | The Director's decision (freeze engram-aql at Phase 2). |
-| `CLAUDE.md` + `AGENTS.md` | engram-aql section reframed from "Remaining (deferred)" → **`Status — FROZEN at Phase 2`** with thaw trigger. Mirrored (diff = only the "you are here" marker). |
+## Eval baselines — the Phase-4 evidence (in `evals/README.md`)
 
-**The three Step-6 outcomes:**
+- **Contradiction: 1/4 pairs FAIL** — a stale active fact outranks its
+  replacement on phrasing similarity (concrete, measured evidence for
+  Hermes ask #1 / staleness detection).
+- **Contamination: tier floor perfect** — 0 tool_result noise in top-5
+  across 6 queries despite engineered vocabulary overlap.
+- **Staleness sweep** quantifies the decay tradeoff (90d chunk: rank 3 at
+  half-life 180 vs rank 8 at 30).
+- Low P@5 (~0.2) is a structural artifact (1–2 relevant per query, k=5),
+  NOT weak retrieval — R@5 0.9–1.0, MRR ~1.0. README explains this.
 
-1. **Git premise — already solved, no action.** `*.engram`/`*.db`/`*.sqlite` are
-   gitignored, **0** DB files tracked, `.git` is ~13 MB. The "329 MB + 897 MB
-   snapshots" figures were a *live consumer store* (operator data), never this
-   repo. The 3.8 GB working tree is entirely `engram-aql/target/` Rust debug
-   artifacts — gitignored (nested `engram-aql/.gitignore`), 0 tracked,
-   `cargo clean` reclaims anytime.
-2. **ContextStore — KEEP.** Low cost (1 file, 1 `scope` column, no deps) and
-   load-bearing for the grounding layer (`taskContext` → `queryContext`). Note:
-   **zero in-repo consumers** beyond its own tests + MCP/CLI passthrough (Pi and
-   OpenClaw call it 0 times) — kept on cost/grounding grounds, not usage.
-3. **engram-aql — FROZEN at Phase 2.** No Phase 3. Zero in-repo consumers, high
-   carrying cost (whole Rust crate re-deriving TS read semantics, cargo-gated
-   CI), justification was one inbound OSS question (weakest demand signal). Every
-   agent consumer is already served by MCP; AQL only earns keep for a Rust
-   process wanting in-process sub-MCP reads, which nobody is. **Freeze not cut**
-   (reversibility) **not keep-and-invest** (stop the bet compounding).
-   - **Thaw trigger (falsifiable):** a Rust consumer produces a concrete
-     artifact — a PR/issue against the crate from the external user, OR a named
-     internal fleet consumer (Substrate, Cradel/Mira-core, Herd) wanting
-     in-process Rust reads. **One more inbound question does NOT count.**
-   - **Build-tax escape hatch:** if keep-green starts costing real maintenance on
-     toolchain bumps, the decision converts toward **cut**.
-   - Frozen leftover (was "deferred"): canonical TS `LINK` surface; transactional
-     `PIPELINE` mixing reads+writes. Not resumed unless thawed.
+## NEXT STEPS (nothing in flight; pull if wanted)
 
-## NEXT STEPS
+1. **Push/PR the sprint** — local main is unpushed.
+2. **Phase 4 decisions** (deferred by design, now evidence-backed): staleness
+   detection (the contradiction finding justifies a design pass), review/expiry
+   dates, durable-vs-conversation separation. Spec §Phase 4.
+3. Ask the reporter for the full Hermes report text (we only saw the tail) —
+   open follow-up in `tasks/feedback-hermes-report.md`.
+4. Housekeeping: delete stale pre-existing branches.
 
-**None open.** The remediation sprint is complete. Possible future threads, only
-if you choose to pull one:
+## Verification status (this wrap — all run on merged main)
 
-- **Watch engram-aql's build tax** against the freeze — if a Rust toolchain bump
-  breaks CI on a zero-consumer crate, that's the signal to revisit toward cut.
-- Delete the 5 stale local branches (housekeeping, not ours).
-- Anything net-new you bring.
-
-**Explicitly OUT OF SCOPE (user correction, carried forward):** any purge /
-maintenance / data-cleanup script for a live consumer store. Live agent stores
-are operator-owned data. The library's job is the *code defect*; cleaning
-already-written data is the operator's, and the library ships **no** purge
-tooling. See `tasks/lessons.md` 2026-07-14.
-
-## Verification status (this wrap)
-
-- **Docs-only change** — no code touched, so no typecheck/build/test run was
-  needed or done. Not a regression risk.
-- Markdown is **not** held to Prettier (`format:check` scope is `src/**` +
-  `tests/**` only) — the `.md` edits match hand style, no format gate applies.
-- `diff CLAUDE.md AGENTS.md` verified = only the "you are here" marker (mirror
-  invariant holds).
-- Last full green baseline (unchanged since, on `main`): root vitest **562**,
-  Pi vitest **115**, openclaw **67**, surface-parity pinned at **14**.
+- Root vitest **574** green (562 baseline + 5 T1 + 5 T2 + 2 lead) · Pi **121**
+  green (115 + 6) · openclaw **67** green · surface-parity pinned **14**.
+- typecheck / lint / format:check clean · `diff CLAUDE.md AGENTS.md` = marker
+  lines only · `npm run eval` runs clean from main, results.json reproduced
+  byte-identically.
 
 ## Gotchas carried forward (still live)
 
-- **Pre-push MUST include `npm run format:check`** — SEPARATE CI gate from `lint`
-  (eslint ≠ prettier). Run `npm run format` before committing CODE. Scope is
-  `src/**/*.ts` + `tests/**/*.ts` only — **markdown is exempt**, don't reformat
-  `.md`.
-- **CLAUDE.md ↔ AGENTS.md**: edit both together; `diff CLAUDE.md AGENTS.md`
-  should show only the "you are here" marker.
-- **Guarded `ALTER TABLE ADD COLUMN` pattern** (proven for `text_hash`,
-  `next_retry_after`, ContextStore scope cols, `node_origin`): add the column in
-  `engram.ts` under a `pragma('table_info')` guard, create its index
-  UNCONDITIONALLY *after* the guards — never put `CREATE INDEX` on a new column
-  in `schema.sql` (runs wholesale on a pre-existing file where the column doesn't
-  exist yet and fails hard). Columns-for-fresh-installs go in `schema.sql`.
-- **Never compare scores across two `recall()` calls in tests without
-  `decayHalfLifeDays: 0`** — decay makes scores wall-clock-dependent.
-- **Bash tool is Git Bash** — no PowerShell `@'...'@` here-strings; use `-F
-  <file>` for multi-line commit messages (or a heredoc to a temp file).
-- **dist is ESM w/ top-level await** — Node smoke script must be `.mjs`, dynamic
-  `import(pathToFileURL(distPath).href)`, not `require()`.
-- **Rebuild `integrations/pi/dist`** before trusting a Pi built-dist smoke fail.
-- cargo blocked by Windows Application Control in SOME paths (AQL tests only) —
-  now doubly moot while engram-aql is frozen.
+- **Pi suite fails with stale dist** — rebuild ROOT dist (`npm run build`)
+  then `integrations/pi` build before trusting Pi failures. Bit us again this
+  session (6 phantom failures, all vanished after rebuild).
+- **Pre-push MUST include `npm run format:check`** (separate CI gate from
+  lint; scope `src/**`+`tests/**` only, markdown exempt). Note: Pi package
+  has pre-existing prettier drift in 4 files — NOT covered by root
+  format:check, do not "fix" it incidentally (556-line reflow).
+- **CLAUDE.md ↔ AGENTS.md**: edit both together; diff = marker lines only.
+- **Never compare scores across two `recall()` calls without
+  `decayHalfLifeDays: 0`** — and evals/ pins this everywhere except its
+  staleness sweep.
+- **Guarded `ALTER TABLE` pattern**, **Bash tool is Git Bash**, **dist is ESM
+  w/ top-level await (.mjs smoke scripts)** — unchanged from previous handoff.
+- CLI retain defaults to `sourceType: inferred` (0.5) — tests asserting
+  `user_stated` must pass `--source-type user_stated` explicitly.
