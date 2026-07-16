@@ -54,6 +54,7 @@ import {
   buildEngramOptions,
   resolveDbPath,
   clampTrust,
+  clampNonNegative,
   filterEnums,
   asNumber,
   asList,
@@ -139,6 +140,9 @@ function buildRecallOptions(args: ParsedArgs): RecallOptions {
     ),
     minScore: clampTrust(asNumber(args.values.get('--min-score'))),
     explainScores: args.bools.has('--explain-scores') ? true : undefined,
+    decayHalfLifeDays: clampNonNegative(
+      asNumber(args.values.get('--decay-half-life-days')),
+    ),
   };
 }
 
@@ -356,6 +360,8 @@ recall options:
   --explain-scores                 Include a strategyScores breakdown per result
                                    (results[0] is best-in-highest-tier, not
                                    best-overall; re-sort by score for that)
+  --decay-half-life-days <n>       Recency decay half-life in days (default:
+                                   180). 0 disables decay (long-continuity recall)
 
 session options:
   --max-active <n>  --threshold <0..1>          (action=resume, the default)

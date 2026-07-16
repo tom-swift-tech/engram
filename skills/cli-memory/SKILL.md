@@ -72,11 +72,15 @@ Use keywords and proper nouns, not full questions ("Tom role background", not
 `--min-score <0..1>` (drop results below this weighted score, post
 trust/decay/strategy-boost — default: no filtering), `--explain-scores`
 (add a `strategyScores` breakdown per result — per-strategy rank/RRF
-contribution + weighting factors — default: off, keeps the payload lean).
+contribution + weighting factors — default: off, keeps the payload lean),
+`--decay-half-life-days <n>` (recency decay half-life in days, default 180 —
+pass `0` to disable decay entirely for long-continuity recall over older facts).
 
 **`results[0]` is the best match in the highest-present source tier, not the
 best match overall** — re-sort by `score` locally where pure relevance is
-what you need.
+what you need. **`user_stated` memories structurally outrank `tool_result`/
+`external_doc` content regardless of score** — this floor cannot be overridden
+by trust score or `--decay-half-life-days`.
 
 `--json` shape:
 ```json

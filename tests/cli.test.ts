@@ -225,6 +225,81 @@ describe('engram CLI', () => {
     expect(parsed.results).toHaveLength(0);
   });
 
+  it('recall --decay-half-life-days 0 outscores the default for a backdated chunk', async () => {
+    const retainCap = captureIo();
+    await runCli(
+      args('retain', 'DecayHalfLifeDays CLI ancient widget content', '--json'),
+      retainCap.io,
+      overrides,
+    );
+    const chunkId = JSON.parse(retainCap.stdout()).chunkId;
+
+    const raw = new Database(dbPath);
+    const oldDate = new Date(
+      Date.now() - 365 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    raw
+      .prepare(`UPDATE chunks SET created_at = ? WHERE id = ?`)
+      .run(oldDate, chunkId);
+    raw.close();
+
+    const defaultCap = captureIo();
+    await runCli(
+      args(
+        'recall',
+        'DecayHalfLifeDays CLI ancient widget',
+        '--strategies',
+        'keyword',
+        '--json',
+      ),
+      defaultCap.io,
+      overrides,
+    );
+    const defaultScore = JSON.parse(defaultCap.stdout()).results[0].score;
+
+    const noDecayCap = captureIo();
+    const code = await runCli(
+      args(
+        'recall',
+        'DecayHalfLifeDays CLI ancient widget',
+        '--strategies',
+        'keyword',
+        '--decay-half-life-days',
+        '0',
+        '--json',
+      ),
+      noDecayCap.io,
+      overrides,
+    );
+    expect(code).toBe(0);
+    const noDecayScore = JSON.parse(noDecayCap.stdout()).results[0].score;
+
+    expect(noDecayScore).toBeGreaterThan(defaultScore);
+  });
+
+  it('recall omitting --decay-half-life-days leaves the library default unchanged', async () => {
+    await runCli(
+      args('retain', 'Unchanged decay default CLI test chunk'),
+      captureIo().io,
+      overrides,
+    );
+    const cap = captureIo();
+    const code = await runCli(
+      args(
+        'recall',
+        'Unchanged decay default CLI test',
+        '--strategies',
+        'keyword',
+        '--json',
+      ),
+      cap.io,
+      overrides,
+    );
+    expect(code).toBe(0);
+    const parsed = JSON.parse(cap.stdout());
+    expect(parsed.results.length).toBeGreaterThan(0);
+  });
+
   // ─── reflect ─────────────────────────────────────────────────────────────────
 
   it('reflect runs and returns a result object', async () => {

@@ -91,7 +91,7 @@ export const ENGRAM_TOOLS = [
   {
     name: 'engram_recall' as const,
     description:
-      'Retrieve relevant memories via four-strategy search (semantic, keyword, graph, temporal) fused with Reciprocal Rank Fusion. Temporal expressions in queries are auto-parsed — "last week", "yesterday", "March 15th", "past 30 days", "Q1 2026" all work without explicit after/before. QUERY BEST PRACTICES: Use keywords and proper nouns, not full questions. "Tom Swift role background" retrieves better than "Who is Tom?" because BM25 keyword search weights every word equally — question words like "who/what/how" match irrelevant content. For people: use their name + key attributes. For topics: use specific terms, not conversational phrasing. For dates: natural language works ("last March", "in 2023"). Returns results[], opinions[], observations[]. results[0] is the best match in the highest-present source tier, not the best overall; re-sort by score locally where pure relevance is needed.',
+      'Retrieve relevant memories via four-strategy search (semantic, keyword, graph, temporal) fused with Reciprocal Rank Fusion. Temporal expressions in queries are auto-parsed — "last week", "yesterday", "March 15th", "past 30 days", "Q1 2026" all work without explicit after/before. QUERY BEST PRACTICES: Use keywords and proper nouns, not full questions. "Tom Swift role background" retrieves better than "Who is Tom?" because BM25 keyword search weights every word equally — question words like "who/what/how" match irrelevant content. For people: use their name + key attributes. For topics: use specific terms, not conversational phrasing. For dates: natural language works ("last March", "in 2023"). Returns results[], opinions[], observations[]. results[0] is the best match in the highest-present source tier, not the best overall; re-sort by score locally where pure relevance is needed. TRUST TIER GUARANTEE: user_stated memories structurally outrank tool_result/external_doc content regardless of relevance score — untrusted content can never override a user directive. DECAY: results decay toward zero relevance with a 180-day half-life by default (recent facts win); pass decayHalfLifeDays: 0 to disable decay entirely for long-continuity recall over older facts.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -154,6 +154,12 @@ export const ENGRAM_TOOLS = [
           type: 'boolean',
           description:
             'When true, each result includes a strategyScores breakdown of the per-strategy rank/RRF contribution and weighting factors that produced its score (default: false, keeps the payload lean).',
+        },
+        decayHalfLifeDays: {
+          type: 'number',
+          minimum: 0,
+          description:
+            "Recency decay half-life in days (default: 180) — a chunk's score is multiplied by 2^(-ageDays/decayHalfLifeDays). Pass 0 to disable decay entirely (e.g. long-continuity recall where older facts should compete on relevance alone).",
         },
       },
       required: ['query'],
@@ -513,6 +519,12 @@ function clampTrust(v: unknown): number | undefined {
   return Math.max(0, Math.min(1, v));
 }
 
+/** Clamp a numeric value to a minimum of 0 (no upper bound). Returns undefined if not a number. */
+function clampNonNegative(v: unknown): number | undefined {
+  if (typeof v !== 'number' || isNaN(v)) return undefined;
+  return Math.max(0, v);
+}
+
 /** Filter an array to only values present in a valid set. Returns undefined if result is empty or input is not an array. */
 function filterEnums<T extends string>(
   arr: unknown,
@@ -623,6 +635,7 @@ export function createEngramToolHandler(engram: Engram) {
               typeof input.explainScores === 'boolean'
                 ? input.explainScores
                 : undefined,
+            decayHalfLifeDays: clampNonNegative(input.decayHalfLifeDays),
           };
           const result = await engram.recall(queryCheck.value, opts);
           return {
