@@ -254,15 +254,42 @@ type EngineFactory = (path: string) => Promise<Engram>;
 /**
  * Default (production) engine factory. Resolves the background-consolidation
  * model through the single resolver (role: integration) from env — no silent
- * default. When no model is configured, `reflectModel` is left unset and the
- * engram opens with a fail-loud UnconfiguredGeneration: retain/recall and
+ * default. When no model is configured, no generator is passed and the engram
+ * opens with a fail-loud UnconfiguredGeneration: retain/recall and
  * startup-recall still work, but background extract/reflect surfaces a loud
  * once-per-session warning (see scheduleConsolidation) instead of 404ing on a
  * default model the host may not serve.
+ *
+ * Two generation paths, mirroring engram-mcp's flag pair:
+ *
+ * - `ENGRAM_GENERATION_ENDPOINT` (+ the resolved model) → an OpenAI-compatible
+ *   server (llama.cpp, vLLM, Herd). This needs its own opt-in rather than being
+ *   inferred from the host: OllamaGeneration speaks `/api/generate`, which a
+ *   llama.cpp server does not serve, so a host alone cannot express which wire
+ *   protocol is on the other end.
+ * - Otherwise Ollama, at the resolved host.
+ *
+ * `spec.host` is threaded through on the Ollama path. It was previously
+ * dropped, which silently pinned every background consolidation to
+ * localhost:11434 no matter what ENGRAM_OLLAMA_URL / ENGRAM_INTEGRATION_HOST
+ * said — the deployment could not point consolidation anywhere at all.
  */
 function openWithResolvedModel(path: string): Promise<Engram> {
   const spec = resolveModelSpecOrNull({ role: 'integration', env: process.env });
-  return Engram.open(path, spec ? { reflectModel: spec.model } : {});
+  if (!spec) return Engram.open(path, {});
+
+  const endpoint = process.env.ENGRAM_GENERATION_ENDPOINT?.trim();
+  if (endpoint) {
+    return Engram.open(path, {
+      generationEndpoint: {
+        baseUrl: endpoint,
+        model: spec.model,
+        apiKey: process.env.ENGRAM_GENERATION_API_KEY?.trim() || 'noauth',
+      },
+    });
+  }
+
+  return Engram.open(path, { reflectModel: spec.model, ollamaUrl: spec.host });
 }
 
 let engineFactory: EngineFactory = openWithResolvedModel;
