@@ -58,6 +58,7 @@ harness first; staleness/expiry deferred pending eval data).
 
 ## Open follow-ups with the reporter
 
-- Request the full report text (screenshot shows only the tail; the specific
-  curation/observability evidence above the fold may contain concrete failure
-  cases worth turning into eval scenarios).
+- **Dropped (2026-07-18)**: no channel to reach the reporter ("Ben") beyond the
+  original screenshot share; not worth chasing further. The 7-item mapping
+  above and the shipped sprint work stand on their own regardless of the full
+  report text.
