@@ -653,6 +653,7 @@ async function extractEntities(
     throw new Error(
       `Entity extraction returned unparseable JSON (${(err as Error).message}). ` +
         `First 200 chars: ${cleaned.slice(0, 200)}`,
+      { cause: err },
     );
   }
 }
