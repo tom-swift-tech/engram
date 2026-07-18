@@ -600,9 +600,22 @@ async function extractEntities(
   // Function replacement so '$' sequences in the text are inserted literally
   const prompt = ENTITY_EXTRACTION_PROMPT.replace('{TEXT}', () => safeText);
 
+  // maxTokens must cover a reasoning model's thinking pass PLUS the JSON body.
+  // A thinking model (qwen3.x, bonsai) emits `reasoning_content` BEFORE any
+  // content, and this prompt reliably burns >4k tokens there. Two distinct
+  // failures come from underbudgeting, and they look nothing alike:
+  //   - too small to reach the JSON at all -> EMPTY response
+  //   - enough to start the JSON but not finish it -> TRUNCATED, and parse
+  //     fails with "Unterminated string" partway through the entity list
+  // Measured 2026-07-16 against Bastion/qwen36-35b-a3b on a ~1.3k-char chunk:
+  // 2048 -> empty, 4096 -> empty, 8192 -> valid. But a 4k-char chunk still
+  // truncated at 8192 (thinking + a long entity list overruns it), so the
+  // budget must scale past the worst-case chunk, not the typical one.
+  // Non-reasoning models are unaffected: they stop at their stop token and
+  // never approach this ceiling.
   const raw = await generator.generate(prompt, {
     temperature: 0.1,
-    maxTokens: 2048,
+    maxTokens: 16384,
     jsonMode: true,
   });
 
@@ -611,14 +624,37 @@ async function extractEntities(
     .replace(/```\s*/g, '')
     .trim();
 
+  // Fail loud on a non-answer. Returning `{entities:[],relations:[]}` here
+  // instead makes processExtractions record the chunk as SUCCESSFULLY
+  // processed having extracted nothing — indistinguishable, in the queue and
+  // in the return value, from a chunk that genuinely had no entities. That
+  // silence hid a total extraction outage: every chunk reported
+  // `{processed:N, failed:0}` while the entity graph was built entirely by the
+  // zero-LLM Tier-1 path (relations, which only this path emits, sat at 0).
+  // Throwing routes the chunk through the caller's retry/backoff instead, and
+  // surfaces it as `failed` after max attempts — recoverable via
+  // requeueFailedExtractions once the cause is fixed. Same "fail loud, never
+  // silent" contract reflect applies to its own parse failures (issue #17).
+  if (!cleaned) {
+    throw new Error(
+      'Entity extraction returned an empty response. A reasoning model emits its ' +
+        'thinking pass before any content, so this usually means maxTokens was ' +
+        'exhausted before the JSON began — raise it, or disable the thinking pass.',
+    );
+  }
+
   try {
     const parsed = JSON.parse(cleaned);
     return {
       entities: parsed.entities || [],
       relations: parsed.relations || [],
     };
-  } catch {
-    return { entities: [], relations: [] };
+  } catch (err) {
+    throw new Error(
+      `Entity extraction returned unparseable JSON (${(err as Error).message}). ` +
+        `First 200 chars: ${cleaned.slice(0, 200)}`,
+      { cause: err },
+    );
   }
 }
 
@@ -687,6 +723,14 @@ export async function processExtractionQueue(
   let failed = 0;
 
   // Grab pending items (respecting exponential backoff windows)
+  //
+  // next_retry_after must be compared through datetime() on BOTH sides: the
+  // failure path below writes it as an ISO string ('...T...Z') while
+  // recoverStalledExtractions writes SQLite's space-separated CURRENT_TIMESTAMP.
+  // Compared raw, those are string comparisons — 'T' (0x54) sorts above ' '
+  // (0x20), so an ISO value is never <= CURRENT_TIMESTAMP and the item is
+  // stranded pending forever, below the attempts>=3 threshold that would mark
+  // it failed. Same trap as the ContextStore TTL comparison (see CLAUDE.md).
   const pending = db
     .prepare(
       `
@@ -696,7 +740,7 @@ export async function processExtractionQueue(
     WHERE eq.status = 'pending'
       AND eq.attempts < 3
       AND c.is_active = TRUE
-      AND (eq.next_retry_after IS NULL OR eq.next_retry_after <= CURRENT_TIMESTAMP)
+      AND (eq.next_retry_after IS NULL OR datetime(eq.next_retry_after) <= datetime('now'))
     ORDER BY eq.queued_at ASC
     LIMIT ?
   `,
