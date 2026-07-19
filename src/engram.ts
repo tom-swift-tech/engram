@@ -739,7 +739,13 @@ export class Engram {
    * Observations and opinions are outputs of reflection, not inputs.
    */
   async reflect(
-    options?: Pick<ReflectConfig, 'batchSize' | 'minFactsThreshold'>,
+    options?: Pick<
+      ReflectConfig,
+      | 'batchSize'
+      | 'minFactsThreshold'
+      | 'sourceTypes'
+      | 'existingContextCharBudget'
+    >,
   ): Promise<ReflectResult> {
     return reflect({
       dbPath: this.dbPath,
@@ -766,6 +772,8 @@ export class Engram {
       | 'maxFacts'
       | 'maxDurationMs'
       | 'maxStalls'
+      | 'sourceTypes'
+      | 'existingContextCharBudget'
     >,
   ): Promise<CatchUpResult> {
     return reflectCatchUp({

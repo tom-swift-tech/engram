@@ -48,6 +48,24 @@ export interface ReflectConfig {
   /** Min facts needed to trigger reflection (default: 5) */
   minFactsThreshold?: number;
   /**
+   * Restrict reflection to facts carrying these `source_type` values.
+   * Omit (the default) to reflect every unreflected fact regardless of source —
+   * byte-identical to pre-existing behaviour.
+   *
+   * Why this exists: fact selection is otherwise `created_at ASC` over
+   * everything, so an agent whose auto-retain captures tool/bash output builds
+   * a backlog dominated by it (measured on one live deployment: 55%
+   * `tool_result`, 43% `agent_generated`, 1.6% `user_stated`). Draining that
+   * chronologically spends the whole cycle synthesising beliefs about command
+   * output while the user-stated facts — the ones worth holding beliefs about —
+   * wait behind it. Passing `['user_stated', 'inferred']` reflects the
+   * high-value slice first.
+   *
+   * An empty array is treated as "no filter" rather than "match nothing", so a
+   * caller mapping over a config can't accidentally disable reflection.
+   */
+  sourceTypes?: string[];
+  /**
    * Max total characters of existing observations to fold into the reflect
    * prompt (default: 8000). Existing opinions share the same budget.
    * Guards against accumulated context crowding out room for new facts as
@@ -405,7 +423,16 @@ function parseReflectOutput(raw: string): LLMReflectOutput {
  * 'observation' and 'opinion' types are excluded because they are *outputs*
  * of reflection — feeding them back in would create circular synthesis.
  */
-function getUnreflectedFacts(db: Database.Database, limit: number): Chunk[] {
+function getUnreflectedFacts(
+  db: Database.Database,
+  limit: number,
+  sourceTypes?: string[],
+): Chunk[] {
+  // Empty array === unset (see ReflectConfig.sourceTypes): "match nothing" is
+  // never the useful reading of a caller-supplied empty filter.
+  const filter = sourceTypes && sourceTypes.length > 0 ? sourceTypes : null;
+  const placeholders = filter ? filter.map(() => '?').join(', ') : '';
+
   return db
     .prepare(
       `
@@ -415,11 +442,12 @@ function getUnreflectedFacts(db: Database.Database, limit: number): Chunk[] {
       AND is_active = TRUE
       AND scope = 'durable'
       AND memory_type IN ('world', 'experience')
+      ${filter ? `AND source_type IN (${placeholders})` : ''}
     ORDER BY created_at ASC
     LIMIT ?
   `,
     )
-    .all(limit) as Chunk[];
+    .all(...(filter ?? []), limit) as Chunk[];
 }
 
 /** Default character budget for existing-context blocks (observations/opinions) in the reflect prompt. */
@@ -648,6 +676,7 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
     batchSize: configuredBatchSize = 50,
     minFactsThreshold = 5,
     existingContextCharBudget = DEFAULT_EXISTING_CONTEXT_CHAR_BUDGET,
+    sourceTypes,
   } = config;
 
   // No default model. Use an injected generator, or build an Ollama generator
@@ -743,7 +772,7 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
     ).run();
 
     // 1. Gather unreflected facts
-    const unreflected = getUnreflectedFacts(db, batchSize);
+    const unreflected = getUnreflectedFacts(db, batchSize, sourceTypes);
 
     if (unreflected.length < minFactsThreshold) {
       result.status = 'completed';
@@ -1171,10 +1200,26 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
  * draws from. Mirrors `getUnreflectedFacts`'s WHERE via the `v_unreflected` view
  * so the two can never drift.
  */
-function countUnreflected(db: Database.Database): number {
-  const row = db.prepare(`SELECT COUNT(*) AS n FROM v_unreflected`).get() as {
-    n: number;
-  };
+/**
+ * Size of the remaining backlog. When `sourceTypes` is set this counts only the
+ * slice reflection is actually eligible to consume — otherwise a filtered
+ * catch-up pass whose slice is fully drained would keep seeing the untouched
+ * bulk of the backlog, report `stalled` instead of `drained`, and burn its stall
+ * budget re-checking facts the filter excludes.
+ */
+function countUnreflected(
+  db: Database.Database,
+  sourceTypes?: string[],
+): number {
+  const filter = sourceTypes && sourceTypes.length > 0 ? sourceTypes : null;
+  // v_unreflected doesn't project source_type, so filtering joins back to chunks
+  // rather than widening the view (which other callers share).
+  const sql = filter
+    ? `SELECT COUNT(*) AS n FROM v_unreflected u
+         JOIN chunks c ON c.id = u.id
+        WHERE c.source_type IN (${filter.map(() => '?').join(', ')})`
+    : `SELECT COUNT(*) AS n FROM v_unreflected`;
+  const row = db.prepare(sql).get(...(filter ?? [])) as { n: number };
   return row.n;
 }
 
@@ -1243,7 +1288,7 @@ export async function reflectCatchUp(
         result.status = 'capped';
         break;
       }
-      if (countUnreflected(countDb) < minFactsThreshold) {
+      if (countUnreflected(countDb, config.sourceTypes) < minFactsThreshold) {
         result.status = 'drained';
         break;
       }
@@ -1282,11 +1327,13 @@ export async function reflectCatchUp(
       // Loop ran to the batch cap without an earlier stop condition.
       if (i === maxBatches - 1) {
         result.status =
-          countUnreflected(countDb) < minFactsThreshold ? 'drained' : 'capped';
+          countUnreflected(countDb, config.sourceTypes) < minFactsThreshold
+            ? 'drained'
+            : 'capped';
       }
     }
 
-    result.remainingBacklog = countUnreflected(countDb);
+    result.remainingBacklog = countUnreflected(countDb, config.sourceTypes);
   } finally {
     countDb.close();
   }
