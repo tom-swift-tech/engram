@@ -102,9 +102,12 @@ export class OllamaGeneration implements GenerationProvider {
       });
     } catch (err) {
       if (err instanceof Error && err.name === 'TimeoutError') {
-        throw new Error(`Ollama generation timed out after ${this.timeoutMs / 1000}s (${this.url})`, {
-          cause: err,
-        });
+        throw new Error(
+          `Ollama generation timed out after ${this.timeoutMs / 1000}s (${this.url})`,
+          {
+            cause: err,
+          },
+        );
       }
       throw err;
     }
