@@ -44,8 +44,9 @@ export class OllamaGeneration implements GenerationProvider {
   readonly name: string;
   private url: string;
   private model: string;
+  private timeoutMs: number;
 
-  constructor(options: { url?: string; model: string }) {
+  constructor(options: { url?: string; model: string; timeoutMs?: number }) {
     // Model is REQUIRED. The library applies no default model name: an unset
     // model must be un-runnable, not quietly-runnable on the wrong thing.
     // Choose the model via model-resolver.ts before constructing this.
@@ -59,6 +60,18 @@ export class OllamaGeneration implements GenerationProvider {
     this.url = options.url ?? DEFAULT_OLLAMA_URL; // exported above
     this.model = options.model;
     this.name = `ollama/${this.model}`;
+    // Cold-start model loads on a real GPU backend can legitimately take
+    // 100s+ (measured ~112s on one deployment's setup); this bounds the
+    // absolute worst case rather than trying to distinguish cold-start from
+    // a genuinely stuck request. Without this, a plain fetch() with no
+    // signal has no way to time out at all — found by tracing why a
+    // 30-second Promise.race timeout in a caller's shutdown-flush path
+    // didn't actually bound wall-clock time: the race lets the *caller*
+    // move on, but never cancels this fetch, so the process itself stayed
+    // alive (and a spawned child's exit event never fired) until Ollama
+    // eventually responded — anywhere from seconds to several minutes
+    // under load, not the 30s the caller assumed.
+    this.timeoutMs = options?.timeoutMs ?? 120_000;
   }
 
   async generate(prompt: string, options?: GenerationOptions): Promise<string> {
@@ -79,11 +92,25 @@ export class OllamaGeneration implements GenerationProvider {
       body.format = 'json';
     }
 
-    const res = await fetch(`${this.url}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    let res: Response;
+    try {
+      res = await fetch(`${this.url}/api/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(this.timeoutMs),
+      });
+    } catch (err) {
+      if (err instanceof Error && err.name === 'TimeoutError') {
+        throw new Error(
+          `Ollama generation timed out after ${this.timeoutMs / 1000}s (${this.url})`,
+          {
+            cause: err,
+          },
+        );
+      }
+      throw err;
+    }
 
     if (!res.ok) {
       const text = await res.text();
