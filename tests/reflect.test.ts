@@ -937,6 +937,133 @@ describe('reflect()', () => {
   });
 
   // ---------------------------------------------------------------------------
+  // source_type filtering — reflect the high-value slice ahead of tool noise
+  // ---------------------------------------------------------------------------
+
+  describe('sourceTypes filter', () => {
+    /** Seed a backlog shaped like a real auto-retain deployment: mostly tool noise. */
+    async function setupMixedDb(path: string): Promise<void> {
+      const db = new Database(path);
+      loadSchema(db);
+      for (let i = 0; i < 8; i++) {
+        await retain(db, `bash output line ${i}`, embedder, {
+          memoryType: 'experience',
+          sourceType: 'tool_result',
+          trustScore: 0.3,
+        });
+      }
+      // Retained LAST, so `created_at ASC` puts them behind the noise — the
+      // whole point of the filter is that they still get reflected first.
+      for (let i = 0; i < 3; i++) {
+        await retain(db, `Alice prefers Rust — stated ${i}`, embedder, {
+          memoryType: 'world',
+          sourceType: 'user_stated',
+          trustScore: 0.9,
+        });
+      }
+      db.close();
+    }
+
+    it('reflects only facts matching the filter, ignoring older non-matching ones', async () => {
+      dbPath = tmpDbPath();
+      await setupMixedDb(dbPath);
+      vi.stubGlobal('fetch', mockOllamaFetch(REFLECT_RESPONSE));
+
+      const result = await reflect({
+        dbPath,
+        reflectModel: 'llama-test',
+        batchSize: 50,
+        minFactsThreshold: 1,
+        sourceTypes: ['user_stated'],
+      });
+
+      // 3 user_stated facts consumed; the 8 older tool_result rows untouched.
+      expect(result.factsProcessed).toBe(3);
+
+      const db = new Database(dbPath);
+      const stillPending = db
+        .prepare(
+          `SELECT source_type AS st, COUNT(*) AS n FROM chunks
+            WHERE reflected_at IS NULL GROUP BY st`,
+        )
+        .all() as Array<{ st: string; n: number }>;
+      db.close();
+
+      expect(stillPending).toEqual([{ st: 'tool_result', n: 8 }]);
+    });
+
+    it('accepts multiple source types', async () => {
+      dbPath = tmpDbPath();
+      await setupMixedDb(dbPath);
+      vi.stubGlobal('fetch', mockOllamaFetch(REFLECT_RESPONSE));
+
+      const result = await reflect({
+        dbPath,
+        reflectModel: 'llama-test',
+        batchSize: 50,
+        minFactsThreshold: 1,
+        sourceTypes: ['user_stated', 'tool_result'],
+      });
+
+      expect(result.factsProcessed).toBe(11);
+    });
+
+    it('treats an omitted filter as "every source type" (unchanged behaviour)', async () => {
+      dbPath = tmpDbPath();
+      await setupMixedDb(dbPath);
+      vi.stubGlobal('fetch', mockOllamaFetch(REFLECT_RESPONSE));
+
+      const result = await reflect({
+        dbPath,
+        reflectModel: 'llama-test',
+        batchSize: 50,
+        minFactsThreshold: 1,
+      });
+
+      expect(result.factsProcessed).toBe(11);
+    });
+
+    it('treats an empty filter array as "no filter", never "match nothing"', async () => {
+      dbPath = tmpDbPath();
+      await setupMixedDb(dbPath);
+      vi.stubGlobal('fetch', mockOllamaFetch(REFLECT_RESPONSE));
+
+      const result = await reflect({
+        dbPath,
+        reflectModel: 'llama-test',
+        batchSize: 50,
+        minFactsThreshold: 1,
+        sourceTypes: [],
+      });
+
+      expect(result.factsProcessed).toBe(11);
+    });
+
+    it('reports a fully-consumed filtered slice as drained, not stalled', async () => {
+      // Regression guard: remainingBacklog/stall detection must count only the
+      // slice the filter can consume. Counting the whole backlog would leave the
+      // 8 tool_result rows visible, so catch-up would keep looping on an empty
+      // slice and stop with 'stalled' despite having drained everything it could.
+      dbPath = tmpDbPath();
+      await setupMixedDb(dbPath);
+      vi.stubGlobal('fetch', mockOllamaFetch(REFLECT_RESPONSE));
+
+      const result = await reflectCatchUp({
+        dbPath,
+        reflectModel: 'llama-test',
+        batchSize: 50,
+        minFactsThreshold: 1,
+        maxBatches: 5,
+        sourceTypes: ['user_stated'],
+      });
+
+      expect(result.factsProcessed).toBe(3);
+      expect(result.remainingBacklog).toBe(0);
+      expect(result.status).toBe('drained');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // issue #17 — adaptive batch sizing, char-budget truncation, status distinction
   // ---------------------------------------------------------------------------
 
