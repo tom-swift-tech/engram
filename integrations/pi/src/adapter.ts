@@ -578,12 +578,22 @@ export interface AutoRetainConfig {
    * 'user_stated') or are 100% automation (set to 'tool_result').
    */
   nonInteractiveSourceType: SourceType;
+  /**
+   * Max length for an assistant message to be treated as intra-task narration
+   * and captured at the `tool_result` tier instead of `agent_generated`
+   * (default 400). See {@link isTransientNarration} for the measurements behind
+   * this number. Set to 0 to disable the downgrade and store every assistant
+   * message as `agent_generated`, as before.
+   * Override via ENGRAM_PI_AUTO_RETAIN_NARRATION_MAX_CHARS.
+   */
+  narrationMaxChars: number;
 }
 
 export const DEFAULT_AUTO_RETAIN_CONFIG: AutoRetainConfig = {
   minChars: 8,
   maxChars: 4000,
   nonInteractiveSourceType: 'inferred',
+  narrationMaxChars: 400,
 };
 
 type SourceType =
@@ -645,6 +655,83 @@ const JOB_PROMPT_FALLBACK = /\b(scheduled job|cron job|cron task)\b/i;
 
 export function isScheduledJobPrompt(text: string): boolean {
   return JOB_PROMPT_PATTERN.test(text) || JOB_PROMPT_FALLBACK.test(text);
+}
+
+/**
+ * Cues for an assistant message that is intra-task narration — the model
+ * talking to itself mid-turn ("Let me check:", "Ah-ha! Different error now.")
+ * rather than stating anything durable.
+ *
+ * **Anchored to the start on purpose.** Narration LEADS with its cue; a
+ * substantive summary merely contains one. Matching anywhere in the text
+ * mislabelled real content on the corpus this was tuned against — a daily
+ * summary quoting the user ('- Tom: "Let\'s get Stripe going too" - Attempted
+ * signup, hit anti-bot measures') was caught by the quoted "Let's".
+ *
+ * A trailing colon was also tried as a cue and REJECTED: it fires on any
+ * message that introduces a list, which summaries do constantly ("Quiet
+ * infrastructure day. Most work was monitoring. Key items:"). It raised corpus
+ * coverage from 9.4% to 21.4% while reintroducing those false positives.
+ */
+const NARRATION_LEAD =
+  /^(let me\b|now let me\b|let's\b|i'll\b|ok(ay)?[,.! ]|ah[-,.! ]|ah-ha|hmm|strange[,.! ]|wait[—,.! -]|got it|perfect[,.! ]|great[,.! ]|interesting[,.! ]|right[,.! ]|good[,.! ]|now (i|we|let)\b)/i;
+
+/**
+ * Poll no-op marker emitted by watch/monitor loops ("No new activity. Cursor
+ * stays. NO_REPLY").
+ *
+ * Only counts on a VERY short message, per {@link NO_REPLY_MAX_CHARS}. The
+ * marker is a routing directive — "don't post this to chat" — not a statement
+ * about content, and a substantive finding can carry it. Treating it as a cue
+ * at any length wrongly downgraded real findings on the tuning corpus, e.g. a
+ * 281-char message reporting "The Gmail OAuth refresh token has expired
+ * (invalid_grant)... needs to be re-authorized" that merely ended with a
+ * NO_REPLY line. Gating at 120 chars kept every one of those (0/25 wrongly
+ * caught) while still catching the content-free poll no-ops.
+ */
+const NARRATION_NO_REPLY = /\bNO_REPLY\b/;
+const NO_REPLY_MAX_CHARS = 120;
+
+/**
+ * Detects transient assistant narration, so it can be captured at the lowest
+ * trust tier instead of as durable `agent_generated` experience.
+ *
+ * Why: auto-retain stores every assistant message, including the one-line
+ * asides between tool calls. Censused on a live store, of 3,802 unreflected
+ * `agent_generated` chunks **82.6% were this** (median 181 chars; 54% contain
+ * "let me"; 43% end in a colon leading into a tool call) and only ~12% were
+ * real synthesis. Reflection turns whatever it reads into BELIEFS, so that
+ * material becomes confident-sounding observations about nothing, which then
+ * compete with genuine memories at recall.
+ *
+ * **Length gate plus a start-anchored cue is what makes this safe.** The cue
+ * alone over-matches — real synthesis says "let me" too. Tuned against that
+ * corpus, this pair labels ~9.4% of assistant messages with ZERO false
+ * positives against long-form synthesis (>=1500 chars) and zero against a
+ * hand-labelled probe set of short summaries that must survive. The default
+ * length is deliberately tight: sampling the 400-600 band turned up genuine
+ * operational facts ("The OAuth refresh token for my Gmail has expired...
+ * monitoring is down until refreshed") mixed in with narration, so 400 is
+ * where precision is still clean. Raising it trades that away.
+ *
+ * Same brittleness caveat as {@link isScheduledJobPrompt}: this is a content
+ * heuristic standing in for provenance the harness doesn't give us. **It
+ * deliberately favours precision over recall** — a missed narration line stays
+ * `agent_generated`, which is merely the status quo, whereas a wrongly
+ * downgraded summary loses real signal. Expect it to catch well under the
+ * ~83% of assistant volume that narration actually represents.
+ */
+export function isTransientNarration(
+  text: string,
+  maxChars: number = DEFAULT_AUTO_RETAIN_CONFIG.narrationMaxChars,
+): boolean {
+  if (maxChars <= 0) return false; // 0 disables the heuristic entirely
+  const trimmed = text.trim();
+  if (trimmed.length > maxChars) return false;
+  if (NARRATION_LEAD.test(trimmed)) return true;
+  return (
+    trimmed.length <= NO_REPLY_MAX_CHARS && NARRATION_NO_REPLY.test(trimmed)
+  );
 }
 
 /**
@@ -724,10 +811,20 @@ export function planAutoRetain(
 
   const isJobPrompt = message.role === 'user' && isScheduledJobPrompt(raw);
   const isNonInteractiveUser = message.role === 'user' && mode !== 'tui';
+  // Narration is checked against `raw`, not the truncated `text`: truncation
+  // would push a long message under the length gate and misclassify it.
+  const isNarration =
+    message.role === 'assistant' &&
+    isTransientNarration(raw, config.narrationMaxChars);
 
   let sourceType: SourceType;
   let trustScore: number;
   if (isJobPrompt) {
+    sourceType = ROLE_MAP.toolResult.sourceType;
+    trustScore = ROLE_MAP.toolResult.trustScore;
+  } else if (isNarration) {
+    // Downgrade, never drop — same tier as captured tool output. It stays
+    // recallable, but a source-type-filtered reflect won't form beliefs from it.
     sourceType = ROLE_MAP.toolResult.sourceType;
     trustScore = ROLE_MAP.toolResult.trustScore;
   } else if (isNonInteractiveUser) {

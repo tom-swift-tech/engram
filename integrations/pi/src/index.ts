@@ -194,9 +194,7 @@ function envNonInteractiveSourceType(
   fallback: AutoRetainConfig['nonInteractiveSourceType'],
 ): AutoRetainConfig['nonInteractiveSourceType'] {
   const raw = process.env[name];
-  return (NON_INTERACTIVE_SOURCE_TYPES as readonly string[]).includes(
-    raw ?? '',
-  )
+  return (NON_INTERACTIVE_SOURCE_TYPES as readonly string[]).includes(raw ?? '')
     ? (raw as AutoRetainConfig['nonInteractiveSourceType'])
     : fallback;
 }
@@ -214,6 +212,10 @@ let autoRetainConfig: AutoRetainConfig = {
   nonInteractiveSourceType: envNonInteractiveSourceType(
     'ENGRAM_PI_AUTO_RETAIN_NONINTERACTIVE_SOURCE_TYPE',
     DEFAULT_AUTO_RETAIN_CONFIG.nonInteractiveSourceType,
+  ),
+  narrationMaxChars: envInt(
+    'ENGRAM_PI_AUTO_RETAIN_NARRATION_MAX_CHARS',
+    DEFAULT_AUTO_RETAIN_CONFIG.narrationMaxChars,
   ),
 };
 // Most recent detached auto-retain promise, for deterministic test awaits.
@@ -243,7 +245,10 @@ let startupRecallConfig: StartupRecallConfig = {
     'ENGRAM_PI_STARTUP_RECALL_MAX_CHARS',
     DEFAULT_STARTUP_RECALL_CONFIG.maxChars,
   ),
-  topK: envInt('ENGRAM_PI_STARTUP_RECALL_TOPK', DEFAULT_STARTUP_RECALL_CONFIG.topK),
+  topK: envInt(
+    'ENGRAM_PI_STARTUP_RECALL_TOPK',
+    DEFAULT_STARTUP_RECALL_CONFIG.topK,
+  ),
 };
 
 // Engine factory — overridable from tests to swap in a deterministic embedder
@@ -275,7 +280,10 @@ type EngineFactory = (path: string) => Promise<Engram>;
  * said — the deployment could not point consolidation anywhere at all.
  */
 function openWithResolvedModel(path: string): Promise<Engram> {
-  const spec = resolveModelSpecOrNull({ role: 'integration', env: process.env });
+  const spec = resolveModelSpecOrNull({
+    role: 'integration',
+    env: process.env,
+  });
   if (!spec) return Engram.open(path, {});
 
   const endpoint = process.env.ENGRAM_GENERATION_ENDPOINT?.trim();
@@ -308,7 +316,9 @@ async function getEngram(): Promise<Engram> {
   // jobs, chat bridges) but should always open the same one database rather
   // than silently starting a fresh, empty one per cwd.
   const override = process.env.ENGRAM_PI_DB_PATH;
-  const dbPath = override ? resolve(override) : resolve(process.cwd(), DEFAULT_DB_RELATIVE);
+  const dbPath = override
+    ? resolve(override)
+    : resolve(process.cwd(), DEFAULT_DB_RELATIVE);
   cachedDbPath = dbPath;
   await mkdir(dirname(dbPath), { recursive: true });
 
@@ -347,7 +357,9 @@ export function _resetEngineFactoryForTesting(): void {
   autoRetainConfig = {
     minChars: DEFAULT_AUTO_RETAIN_CONFIG.minChars,
     maxChars: DEFAULT_AUTO_RETAIN_CONFIG.maxChars,
-    nonInteractiveSourceType: DEFAULT_AUTO_RETAIN_CONFIG.nonInteractiveSourceType,
+    nonInteractiveSourceType:
+      DEFAULT_AUTO_RETAIN_CONFIG.nonInteractiveSourceType,
+    narrationMaxChars: DEFAULT_AUTO_RETAIN_CONFIG.narrationMaxChars,
   };
   pendingAutoRetain = null;
   startupRecallEnabled = true;
@@ -912,7 +924,8 @@ export default function engramPiExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: 'engram_memory_stats',
     label: 'Memory Stats',
-    description: 'Report counts of chunks, entities, opinions, observations, and extraction queue depth.',
+    description:
+      'Report counts of chunks, entities, opinions, observations, and extraction queue depth.',
     parameters: MemoryStatsParams,
     async execute() {
       const engram = await getEngram();
@@ -988,9 +1001,7 @@ export default function engramPiExtension(pi: ExtensionAPI): void {
         const result = await updateSession(engram, {
           sessionId: params.sessionId,
           progress: params.progress,
-          extensions: params.extensions as
-            | Record<string, unknown>
-            | undefined,
+          extensions: params.extensions as Record<string, unknown> | undefined,
         });
         currentSessionId = result.sessionId;
         return {
