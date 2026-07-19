@@ -268,7 +268,9 @@ describe('Pi adapter', () => {
 
     it('drops results below minScore against a real Engram', async () => {
       await remember(engram, { text: 'threshold test fact about widgets' });
-      const baseline = await recall(engram, { query: 'threshold test widgets' });
+      const baseline = await recall(engram, {
+        query: 'threshold test widgets',
+      });
       expect(baseline.results.length).toBeGreaterThan(0);
       const topScore = baseline.results[0].score;
 
@@ -282,7 +284,9 @@ describe('Pi adapter', () => {
 
   describe('startupRecall', () => {
     it('returns null when nothing relevant is stored', async () => {
-      const context = await startupRecall(engram, { prompt: 'help me deploy the API gateway' });
+      const context = await startupRecall(engram, {
+        prompt: 'help me deploy the API gateway',
+      });
       expect(context).toBeNull();
     });
 
@@ -293,7 +297,9 @@ describe('Pi adapter', () => {
     });
 
     it('formats a relevant match with the starting-context header, budget-capped', async () => {
-      await remember(engram, { text: 'API gateway runs on port 8443, fronted by Terraform-managed nginx' });
+      await remember(engram, {
+        text: 'API gateway runs on port 8443, fronted by Terraform-managed nginx',
+      });
       const context = await startupRecall(engram, {
         prompt: 'what port does the API gateway run on?',
         maxChars: 2000,
@@ -434,7 +440,9 @@ describe('Pi adapter', () => {
 
       // After forget, recall should not return it
       const after = await recall(engram, { query: 'staging environment' });
-      expect(after.results.find((r) => r.id === stored.chunkId)).toBeUndefined();
+      expect(
+        after.results.find((r) => r.id === stored.chunkId),
+      ).toBeUndefined();
     });
 
     it('returns null when nothing matches', async () => {
@@ -618,7 +626,11 @@ class FakeGenerator implements GenerationProvider {
 }
 
 describe('consolidation scheduling — pure cadence', () => {
-  const cfg = { extractEveryTurns: 3, reflectEveryTurns: 12, extractBatchSize: 10 };
+  const cfg = {
+    extractEveryTurns: 3,
+    reflectEveryTurns: 12,
+    extractBatchSize: 10,
+  };
 
   it('consolidationDue is true only on an interval boundary', () => {
     expect(consolidationDue(1, cfg)).toBe(false);
@@ -630,33 +642,59 @@ describe('consolidation scheduling — pure cadence', () => {
   });
 
   it('planConsolidation gates extract on both interval and a non-empty queue', () => {
-    expect(planConsolidation(3, 5, cfg)).toEqual({ extract: true, reflect: false });
+    expect(planConsolidation(3, 5, cfg)).toEqual({
+      extract: true,
+      reflect: false,
+    });
     // interval hit but empty queue → no extract (don't wake Ollama for nothing)
-    expect(planConsolidation(3, 0, cfg)).toEqual({ extract: false, reflect: false });
+    expect(planConsolidation(3, 0, cfg)).toEqual({
+      extract: false,
+      reflect: false,
+    });
     // off-interval → nothing
-    expect(planConsolidation(4, 5, cfg)).toEqual({ extract: false, reflect: false });
+    expect(planConsolidation(4, 5, cfg)).toEqual({
+      extract: false,
+      reflect: false,
+    });
   });
 
   it('planConsolidation reflects on the reflect interval (queue-independent)', () => {
     // turn 12 hits both intervals; with pending>0 both fire
-    expect(planConsolidation(12, 2, cfg)).toEqual({ extract: true, reflect: true });
+    expect(planConsolidation(12, 2, cfg)).toEqual({
+      extract: true,
+      reflect: true,
+    });
     // turn 24 hits reflect (24%12) but not extract (24%3==0 too) — both again
-    expect(planConsolidation(12, 0, cfg)).toEqual({ extract: false, reflect: true });
+    expect(planConsolidation(12, 0, cfg)).toEqual({
+      extract: false,
+      reflect: true,
+    });
   });
 
   it('a zero interval disables that cadence', () => {
-    const off = { extractEveryTurns: 0, reflectEveryTurns: 0, extractBatchSize: 10 };
+    const off = {
+      extractEveryTurns: 0,
+      reflectEveryTurns: 0,
+      extractBatchSize: 10,
+    };
     expect(consolidationDue(99, off)).toBe(false);
-    expect(planConsolidation(99, 100, off)).toEqual({ extract: false, reflect: false });
+    expect(planConsolidation(99, 100, off)).toEqual({
+      extract: false,
+      reflect: false,
+    });
   });
 });
 
 describe('isConnectionError', () => {
   it('classifies connection-class failures as Ollama-down', () => {
     expect(isConnectionError(new Error('fetch failed'))).toBe(true);
-    expect(isConnectionError(new Error('connect ECONNREFUSED 127.0.0.1:11434'))).toBe(true);
+    expect(
+      isConnectionError(new Error('connect ECONNREFUSED 127.0.0.1:11434')),
+    ).toBe(true);
     const wrapped = new Error('fetch failed');
-    (wrapped as { cause?: unknown }).cause = Object.assign(new Error('x'), { code: 'ECONNREFUSED' });
+    (wrapped as { cause?: unknown }).cause = Object.assign(new Error('x'), {
+      code: 'ECONNREFUSED',
+    });
     expect(isConnectionError(wrapped)).toBe(true);
   });
 
@@ -687,8 +725,16 @@ describe('runConsolidation — effectful', () => {
   it('no-op plan touches neither Ollama nor returns results', async () => {
     const gen = new FakeGenerator(async () => '{}');
     const e = await make(gen);
-    const res = await runConsolidation(e, { extract: false, reflect: false }, DEFAULT_SCHEDULING_CONFIG);
-    expect(res).toEqual({ extracted: null, reflected: null, ollamaReachable: true });
+    const res = await runConsolidation(
+      e,
+      { extract: false, reflect: false },
+      DEFAULT_SCHEDULING_CONFIG,
+    );
+    expect(res).toEqual({
+      extracted: null,
+      reflected: null,
+      ollamaReachable: true,
+    });
     expect(gen.calls).toBe(0);
   });
 
@@ -698,7 +744,9 @@ describe('runConsolidation — effectful', () => {
     });
     const e = await make(gen);
     // Retain queues an extraction job so processExtractions actually calls Ollama.
-    await remember(e, { text: 'Tom ships Engram on a homelab Proxmox cluster' });
+    await remember(e, {
+      text: 'Tom ships Engram on a homelab Proxmox cluster',
+    });
     expect(e.getQueueStats().pending).toBeGreaterThan(0);
 
     const res = await runConsolidation(
@@ -716,7 +764,9 @@ describe('runConsolidation — effectful', () => {
       throw new Error('should not be called below threshold');
     });
     const e = await make(gen);
-    await remember(e, { text: 'one lonely fact, well under the reflect threshold' });
+    await remember(e, {
+      text: 'one lonely fact, well under the reflect threshold',
+    });
 
     const res = await runConsolidation(
       e,
@@ -772,34 +822,201 @@ describe('extractMessageText', () => {
 });
 
 describe('planAutoRetain — pure', () => {
-  const cfg = { minChars: 8, maxChars: 50, nonInteractiveSourceType: 'inferred' as const };
+  const cfg = {
+    minChars: 8,
+    maxChars: 50,
+    nonInteractiveSourceType: 'inferred' as const,
+    narrationMaxChars: 400,
+  };
 
   it('maps user/assistant/tool roles to the right provenance', () => {
-    const user = planAutoRetain({ role: 'user', content: 'deploy the staging cluster tonight' }, cfg);
-    expect(user).toMatchObject({ memoryType: 'experience', sourceType: 'user_stated', trustScore: 0.7 });
+    const user = planAutoRetain(
+      { role: 'user', content: 'deploy the staging cluster tonight' },
+      cfg,
+    );
+    expect(user).toMatchObject({
+      memoryType: 'experience',
+      sourceType: 'user_stated',
+      trustScore: 0.7,
+    });
 
-    const asst = planAutoRetain({ role: 'assistant', content: 'I will deploy the staging cluster now' }, cfg);
-    expect(asst).toMatchObject({ sourceType: 'agent_generated', trustScore: 0.5 });
+    const asst = planAutoRetain(
+      { role: 'assistant', content: 'I will deploy the staging cluster now' },
+      cfg,
+    );
+    expect(asst).toMatchObject({
+      sourceType: 'agent_generated',
+      trustScore: 0.5,
+    });
 
-    const tool = planAutoRetain({ role: 'toolResult', content: 'exit code 0, build succeeded fine' }, cfg);
+    const tool = planAutoRetain(
+      { role: 'toolResult', content: 'exit code 0, build succeeded fine' },
+      cfg,
+    );
     expect(tool).toMatchObject({ sourceType: 'tool_result', trustScore: 0.4 });
 
-    const bash = planAutoRetain({ role: 'bashExecution', content: 'npm test => 59 passing tests' }, cfg);
+    const bash = planAutoRetain(
+      { role: 'bashExecution', content: 'npm test => 59 passing tests' },
+      cfg,
+    );
     expect(bash).toMatchObject({ sourceType: 'tool_result', trustScore: 0.4 });
   });
 
+  describe('transient assistant narration (D4)', () => {
+    // Long enough to clear the length gate, so only the cue is under test.
+    const pad = (s: string) => s + ' '.repeat(0) + 'x'.repeat(0);
+
+    it('downgrades short assistant narration to the tool_result tier', () => {
+      for (const text of [
+        'Let me check the scheduler config first:',
+        "Ah-ha! Different error now. I'll trace it.",
+        'Now let me update the wiki INDEX and projects.md',
+        'Strange. Let me check what is actually in the file:',
+        'No new activity. Cursor stays. NO_REPLY',
+      ]) {
+        expect(
+          planAutoRetain({ role: 'assistant', content: text }, cfg),
+        ).toMatchObject({ sourceType: 'tool_result', trustScore: 0.4 });
+      }
+    });
+
+    it('downgrades, never drops — narration stays recallable', () => {
+      const plan = planAutoRetain(
+        { role: 'assistant', content: 'Let me check that:' },
+        cfg,
+      );
+      expect(plan).not.toBeNull();
+      expect(plan?.text).toBe('Let me check that:');
+    });
+
+    it('leaves long-form assistant synthesis as agent_generated', () => {
+      // Real synthesis says "let me" too — the length gate is what separates
+      // them. 500 chars is past the default 400 gate.
+      const synthesis = pad(
+        'Let me summarize the three lessons from this arc. ' + 'a'.repeat(450),
+      );
+      expect(synthesis.length).toBeGreaterThan(400);
+      expect(
+        planAutoRetain(
+          { role: 'assistant', content: synthesis },
+          {
+            ...cfg,
+            maxChars: 4000,
+          },
+        ),
+      ).toMatchObject({ sourceType: 'agent_generated', trustScore: 0.5 });
+    });
+
+    it('classifies on the raw text, not the truncated text', () => {
+      // A long message truncated below the gate must NOT become narration.
+      const long = 'Let me explain the architecture. ' + 'b'.repeat(600);
+      expect(
+        planAutoRetain(
+          { role: 'assistant', content: long },
+          { ...cfg, maxChars: 50 },
+        ),
+      ).toMatchObject({ sourceType: 'agent_generated' });
+    });
+
+    it('only applies to assistant messages', () => {
+      // Same narration-shaped text from a user is still a user statement.
+      expect(
+        planAutoRetain(
+          { role: 'user', content: 'Let me know when it deploys:' },
+          cfg,
+        ),
+      ).toMatchObject({ sourceType: 'user_stated', trustScore: 0.7 });
+    });
+
+    it('narrationMaxChars: 0 disables the downgrade', () => {
+      expect(
+        planAutoRetain(
+          { role: 'assistant', content: 'Let me check that:' },
+          {
+            ...cfg,
+            narrationMaxChars: 0,
+          },
+        ),
+      ).toMatchObject({ sourceType: 'agent_generated', trustScore: 0.5 });
+    });
+
+    it('leaves substantive short assistant statements alone', () => {
+      // No narration cue — a short factual statement keeps its provenance.
+      expect(
+        planAutoRetain(
+          {
+            role: 'assistant',
+            content: 'The OAuth refresh token has expired.',
+          },
+          cfg,
+        ),
+      ).toMatchObject({ sourceType: 'agent_generated', trustScore: 0.5 });
+    });
+
+    it('does not mislabel summaries that merely CONTAIN a cue', () => {
+      // Regression: these are real false positives found by running an earlier
+      // anywhere-matching version of the heuristic over a live corpus. The cue
+      // must lead the message, not appear anywhere in it.
+      const falsePositives = [
+        // Quotes the user saying "Let's ..." inside a work summary.
+        '- Tom: "Let\'s get Stripe going too" - Attempted Stripe signup via browser automation - Hit anti-bot measures',
+        // Trailing colon introducing a list — rejected as a cue for this reason.
+        'Quiet infrastructure day. Most work was monitoring and maintenance via heartbeats. Key items:',
+        'The OAuth refresh token for my Gmail has expired (invalid_grant). Monitoring is down until refreshed.',
+        'Watchdog is working as designed. It detected the disappearance of c5c-test-instance across 3 polls.',
+        // Carries a NO_REPLY routing marker but reports a real finding. An
+        // earlier version treated NO_REPLY as a cue at any length and
+        // downgraded messages exactly like this one.
+        'The Gmail OAuth refresh token has expired (invalid_grant). The consent needs to be re-authorized by Tom — the token was likely revoked due to inactivity. Not urgent, just routine auth rot.\nNO_REPLY',
+      ];
+      for (const content of falsePositives) {
+        expect(
+          planAutoRetain(
+            { role: 'assistant', content },
+            { ...cfg, maxChars: 4000 },
+          ),
+        ).toMatchObject({ sourceType: 'agent_generated', trustScore: 0.5 });
+      }
+    });
+  });
+
   it('skips internal / unknown roles', () => {
-    expect(planAutoRetain({ role: 'compactionSummary', content: 'summary text here long enough' }, cfg)).toBeNull();
-    expect(planAutoRetain({ role: 'branchSummary', content: 'another summary that is long enough' }, cfg)).toBeNull();
-    expect(planAutoRetain({ role: 'custom', content: 'custom payload long enough to pass' }, cfg)).toBeNull();
+    expect(
+      planAutoRetain(
+        { role: 'compactionSummary', content: 'summary text here long enough' },
+        cfg,
+      ),
+    ).toBeNull();
+    expect(
+      planAutoRetain(
+        {
+          role: 'branchSummary',
+          content: 'another summary that is long enough',
+        },
+        cfg,
+      ),
+    ).toBeNull();
+    expect(
+      planAutoRetain(
+        { role: 'custom', content: 'custom payload long enough to pass' },
+        cfg,
+      ),
+    ).toBeNull();
   });
 
   it('skips empty, too-short, and user slash-command messages', () => {
     expect(planAutoRetain({ role: 'user', content: '   ' }, cfg)).toBeNull();
     expect(planAutoRetain({ role: 'user', content: 'ok' }, cfg)).toBeNull(); // below minChars
-    expect(planAutoRetain({ role: 'user', content: '/recall staging deploy' }, cfg)).toBeNull();
+    expect(
+      planAutoRetain({ role: 'user', content: '/recall staging deploy' }, cfg),
+    ).toBeNull();
     // a slash from a tool result is NOT a command — still captured
-    expect(planAutoRetain({ role: 'toolResult', content: '/usr/bin/node not found here' }, cfg)).not.toBeNull();
+    expect(
+      planAutoRetain(
+        { role: 'toolResult', content: '/usr/bin/node not found here' },
+        cfg,
+      ),
+    ).not.toBeNull();
   });
 
   it('truncates over-long text with a marker', () => {
@@ -811,7 +1028,10 @@ describe('planAutoRetain — pure', () => {
   });
 
   it('tags the source and role context', () => {
-    const plan = planAutoRetain({ role: 'user', content: 'a sufficiently long user message' }, cfg);
+    const plan = planAutoRetain(
+      { role: 'user', content: 'a sufficiently long user message' },
+      cfg,
+    );
     expect(plan!.source).toBe('pi:conversation');
     expect(plan!.context).toBe('role:user');
   });
@@ -821,12 +1041,18 @@ describe('planAutoRetain — pure', () => {
 
     it('defaults to tui (interactive) when mode is omitted — unchanged behavior', () => {
       const plan = planAutoRetain(msg, cfg);
-      expect(plan).toMatchObject({ sourceType: 'user_stated', trustScore: 0.7 });
+      expect(plan).toMatchObject({
+        sourceType: 'user_stated',
+        trustScore: 0.7,
+      });
     });
 
     it('trusts a tui session as user_stated', () => {
       const plan = planAutoRetain(msg, cfg, 'tui');
-      expect(plan).toMatchObject({ sourceType: 'user_stated', trustScore: 0.7 });
+      expect(plan).toMatchObject({
+        sourceType: 'user_stated',
+        trustScore: 0.7,
+      });
     });
 
     it.each(['rpc', 'json', 'print'] as const)(
@@ -843,24 +1069,36 @@ describe('planAutoRetain — pure', () => {
         cfg,
         'print',
       );
-      expect(asst).toMatchObject({ sourceType: 'agent_generated', trustScore: 0.5 });
+      expect(asst).toMatchObject({
+        sourceType: 'agent_generated',
+        trustScore: 0.5,
+      });
 
       const tool = planAutoRetain(
         { role: 'toolResult', content: 'exit code 0, build succeeded fine' },
         cfg,
         'rpc',
       );
-      expect(tool).toMatchObject({ sourceType: 'tool_result', trustScore: 0.4 });
+      expect(tool).toMatchObject({
+        sourceType: 'tool_result',
+        trustScore: 0.4,
+      });
     });
 
     it('honors a configured nonInteractiveSourceType override', () => {
-      const revertToUserStated = { ...cfg, nonInteractiveSourceType: 'user_stated' as const };
+      const revertToUserStated = {
+        ...cfg,
+        nonInteractiveSourceType: 'user_stated' as const,
+      };
       expect(planAutoRetain(msg, revertToUserStated, 'print')).toMatchObject({
         sourceType: 'user_stated',
         trustScore: 0.7,
       });
 
-      const lowerStill = { ...cfg, nonInteractiveSourceType: 'tool_result' as const };
+      const lowerStill = {
+        ...cfg,
+        nonInteractiveSourceType: 'tool_result' as const,
+      };
       expect(planAutoRetain(msg, lowerStill, 'rpc')).toMatchObject({
         sourceType: 'tool_result',
         trustScore: 0.4,
@@ -893,13 +1131,20 @@ describe('autoRetain — effectful', () => {
   });
 
   it('returns null and stores nothing for a skipped message', async () => {
-    const res = await autoRetain(e, { role: 'user', content: '/memory' }, DEFAULT_AUTO_RETAIN_CONFIG);
+    const res = await autoRetain(
+      e,
+      { role: 'user', content: '/memory' },
+      DEFAULT_AUTO_RETAIN_CONFIG,
+    );
     expect(res).toBeNull();
     expect(memoryStats(e).chunks).toBe(0);
   });
 
   it('deduplicates a repeated message via normalized text_hash', async () => {
-    const msg = { role: 'assistant', content: 'the deployment finished without errors at all' };
+    const msg = {
+      role: 'assistant',
+      content: 'the deployment finished without errors at all',
+    };
     const first = await autoRetain(e, msg, DEFAULT_AUTO_RETAIN_CONFIG);
     const second = await autoRetain(e, msg, DEFAULT_AUTO_RETAIN_CONFIG);
     expect(first?.deduplicated ?? false).toBe(false);
