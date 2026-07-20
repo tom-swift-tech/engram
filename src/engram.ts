@@ -100,6 +100,7 @@ import {
   type CatchUpConfig,
   type CatchUpResult,
   type OpinionGates,
+  type CounterEvidenceConfig,
   type BeliefJournalAction,
   type BeliefJournalEntry,
   type BeliefJournalQuery,
@@ -155,6 +156,7 @@ export type {
   CatchUpConfig,
   CatchUpResult,
   OpinionGates,
+  CounterEvidenceConfig,
   BeliefJournalAction,
   BeliefJournalEntry,
   BeliefJournalQuery,
@@ -756,11 +758,13 @@ export class Engram {
       | 'sourceTypes'
       | 'existingContextCharBudget'
       | 'opinionGates'
+      | 'counterEvidence'
     >,
   ): Promise<ReflectResult> {
     return reflect({
       dbPath: this.dbPath,
       generator: this.generator,
+      embedder: this.embedder,
       ...options,
     });
   }
@@ -786,11 +790,13 @@ export class Engram {
       | 'sourceTypes'
       | 'existingContextCharBudget'
       | 'opinionGates'
+      | 'counterEvidence'
     >,
   ): Promise<CatchUpResult> {
     return reflectCatchUp({
       dbPath: this.dbPath,
       generator: this.generator,
+      embedder: this.embedder,
       ...options,
     });
   }
