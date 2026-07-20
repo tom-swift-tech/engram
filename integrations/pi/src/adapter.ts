@@ -186,6 +186,44 @@ export async function startupRecall(
   return formatted.trim() ? formatted : null;
 }
 
+/**
+ * Hard cap on the reported pending-suggestion count. Past this the exact
+ * number stops carrying information ("47 pending" and "50+ pending" prompt
+ * the same action), and the cap keeps the projection query bounded no matter
+ * how far a neglected backlog has grown.
+ */
+export const PENDING_SUGGESTIONS_HINT_CAP = 50;
+
+/**
+ * One-line hint that procedural suggestions are waiting (issue #39).
+ *
+ * Deliberately a COUNTER, not content. Suggestions are meta-level advice
+ * about how the agent operates; injecting their bodies into every session
+ * would be exactly the low-precision nag that the feature's own design
+ * argues against, and it would compete with the user's actual task for
+ * context. The counter is cheap, capped, and leaves the decision to look
+ * with the agent or the human — the issue's "pull-primary, push-minimal"
+ * contract.
+ *
+ * Returns null when nothing is pending, so the caller appends no line at
+ * all rather than a reassuring "0 suggestions" that costs tokens every
+ * session to say nothing.
+ *
+ * Projection-only: a single indexed read, no LLM call, no embedding.
+ */
+export function pendingSuggestionsHint(engram: Engram): string | null {
+  const pending = engram.suggestions({
+    status: 'proposed',
+    limit: PENDING_SUGGESTIONS_HINT_CAP,
+  });
+  if (pending.length === 0) return null;
+
+  const atCap = pending.length >= PENDING_SUGGESTIONS_HINT_CAP;
+  const count = `${pending.length}${atCap ? '+' : ''}`;
+  const noun = pending.length === 1 ? 'suggestion' : 'suggestions';
+  return `${count} pending improvement ${noun} (run \`engram suggestions\` to view).`;
+}
+
 export function memoryStats(engram: Engram): MemoryStats {
   // Engram doesn't expose a stats API; we query the DB directly via the
   // queue-stats helper plus a few count statements. Reaching into the DB

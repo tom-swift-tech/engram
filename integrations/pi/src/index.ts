@@ -27,6 +27,10 @@
 //     formatted result to the system prompt as starting context. One-shot —
 //     not repeated on later turns in the same session.
 //     ENGRAM_PI_STARTUP_RECALL=0 disables it.
+//     Also appends a one-line pending-suggestions counter (issue #39) when
+//     any suggestion is in 'proposed' state — a count only, never the
+//     suggestion bodies. Same one-shot gating, independent failure path.
+//     ENGRAM_PI_SUGGESTION_HINT=0 disables it.
 //
 // Slash commands:
 //   /remember <text>       store a fact
@@ -77,6 +81,7 @@ import {
   type RunMode,
   startupRecall,
   isFreshSessionStart,
+  pendingSuggestionsHint,
 } from './adapter.js';
 import {
   RememberParams,
@@ -251,6 +256,12 @@ let startupRecallConfig: StartupRecallConfig = {
   ),
 };
 
+// Pending-suggestions hint (issue #39). Independent of startup recall: a
+// consumer may well want the counter without the recall injection, or the
+// reverse. Both are one-shot on a fresh session for the same reason —
+// per-turn repetition of an unchanging line is pure token cost.
+let suggestionHintEnabled = envBoolDefaultTrue('ENGRAM_PI_SUGGESTION_HINT');
+
 // Engine factory — overridable from tests to swap in a deterministic embedder
 // without paying the LocalEmbedder model download. Production never touches
 // this; the only setter is the test-only export below, prefixed `_`.
@@ -367,6 +378,7 @@ export function _resetEngineFactoryForTesting(): void {
     maxChars: DEFAULT_STARTUP_RECALL_CONFIG.maxChars,
     topK: DEFAULT_STARTUP_RECALL_CONFIG.topK,
   };
+  suggestionHintEnabled = true;
   engineFactory = openWithResolvedModel;
 }
 
@@ -689,10 +701,29 @@ export default function engramPiExtension(pi: ExtensionAPI): void {
       }
     }
 
+    // Separate try/catch from startup recall on purpose: these are independent
+    // features, and a failure in one must not suppress the other.
+    let suggestionHint: string | null = null;
+    if (isFreshSessionStart && suggestionHintEnabled) {
+      try {
+        const engram = await getEngram();
+        suggestionHint = pendingSuggestionsHint(engram);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error(
+          'engram-pi: pending-suggestions hint failed:',
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+
     try {
-      const addition = startingContext
-        ? `\n${startingContext}\n${SESSION_ADDENDUM}`
-        : `\n${SESSION_ADDENDUM}`;
+      const addition = [
+        '',
+        ...(startingContext ? [startingContext] : []),
+        SESSION_ADDENDUM,
+        ...(suggestionHint ? [suggestionHint] : []),
+      ].join('\n');
       return {
         systemPrompt: `${event.systemPrompt}${addition}`,
       };

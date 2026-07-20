@@ -35,6 +35,8 @@ import {
   DEFAULT_AUTO_RETAIN_CONFIG,
   startupRecall,
   isFreshSessionStart,
+  pendingSuggestionsHint,
+  PENDING_SUGGESTIONS_HINT_CAP,
 } from '../src/adapter.js';
 
 // Deterministic embedder (no Ollama, no model download).
@@ -337,6 +339,71 @@ describe('Pi adapter', () => {
         topK: 8,
         decayHalfLifeDays: 0,
       });
+    });
+  });
+
+  describe('pendingSuggestionsHint', () => {
+    const stub = (count: number): Engram => {
+      const rows = Array.from({ length: count }, (_, i) => ({
+        id: `sug-${i}`,
+        summary: `suggestion ${i}`,
+      }));
+      return {
+        suggestions: vi.fn().mockReturnValue(rows),
+      } as unknown as Engram;
+    };
+
+    it('returns null against a real store with no suggestions', () => {
+      expect(pendingSuggestionsHint(engram)).toBeNull();
+    });
+
+    it('queries only proposed suggestions, capped', () => {
+      const engramStub = stub(0);
+      pendingSuggestionsHint(engramStub);
+      expect(engramStub.suggestions).toHaveBeenCalledWith({
+        status: 'proposed',
+        limit: PENDING_SUGGESTIONS_HINT_CAP,
+      });
+    });
+
+    it('returns null rather than a "0 suggestions" line when none pend', () => {
+      expect(pendingSuggestionsHint(stub(0))).toBeNull();
+    });
+
+    it('uses the singular noun for exactly one', () => {
+      expect(pendingSuggestionsHint(stub(1))).toBe(
+        '1 pending improvement suggestion (run `engram suggestions` to view).',
+      );
+    });
+
+    it('uses the plural noun beyond one', () => {
+      expect(pendingSuggestionsHint(stub(3))).toBe(
+        '3 pending improvement suggestions (run `engram suggestions` to view).',
+      );
+    });
+
+    it('marks the count as saturated at the cap', () => {
+      const hint = pendingSuggestionsHint(stub(PENDING_SUGGESTIONS_HINT_CAP));
+      expect(hint).toBe(
+        `${PENDING_SUGGESTIONS_HINT_CAP}+ pending improvement suggestions (run \`engram suggestions\` to view).`,
+      );
+    });
+
+    it('is a counter only — it never leaks suggestion content', () => {
+      const engramStub = {
+        suggestions: vi.fn().mockReturnValue([
+          {
+            id: 'sug-1',
+            summary: 'Codify the nightly deploy into a skill',
+            rationale: 'Seen nine times across three weeks',
+          },
+        ]),
+      } as unknown as Engram;
+
+      const hint = pendingSuggestionsHint(engramStub);
+      expect(hint).not.toContain('Codify');
+      expect(hint).not.toContain('nightly deploy');
+      expect(hint).not.toContain('Seen nine times');
     });
   });
 
