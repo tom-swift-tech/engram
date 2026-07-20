@@ -50,6 +50,12 @@ export interface OpinionView {
   /** Provenance: chunk IDs contradicting the belief. */
   contradictingChunks: string[];
   relatedEntities: string[];
+  /**
+   * opinions.would_change_this — the falsifier the model stated at formation
+   * (issue #38 item 3): what concrete evidence would change this belief.
+   * Null for opinions formed before the field existed or when unstated.
+   */
+  wouldChangeThis: string | null;
   /** opinions.formed_at */
   formedAt: string;
   /** opinions.last_reinforced */
@@ -135,6 +141,7 @@ type OpinionRow = {
   contradicting_chunks: string | null;
   evidence_count: number | null;
   related_entities: string | null;
+  would_change_this: string | null;
   formed_at: string;
   last_reinforced: string | null;
   last_challenged: string | null;
@@ -176,7 +183,8 @@ function selectOpinions(
     .prepare(
       `SELECT id, belief, confidence, domain, supporting_chunks,
               contradicting_chunks, evidence_count, related_entities,
-              formed_at, last_reinforced, last_challenged, updated_at
+              would_change_this, formed_at, last_reinforced, last_challenged,
+              updated_at
          FROM opinions
         WHERE is_active = TRUE
           AND confidence >= ?${termClause}
@@ -199,6 +207,7 @@ function selectOpinions(
       supportingChunks,
       contradictingChunks,
       relatedEntities: parseIdArray(r.related_entities),
+      wouldChangeThis: r.would_change_this,
       formedAt: r.formed_at,
       lastReinforced: r.last_reinforced,
       lastChallenged: r.last_challenged,
