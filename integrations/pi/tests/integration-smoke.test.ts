@@ -331,6 +331,82 @@ describe('engram-pi integration smoke (built dist + real Engram)', () => {
     expect(second?.systemPrompt).not.toContain('## Relevant memory from prior work');
   });
 
+  // Suggestion rows are produced by the core suggest pass, which needs an LLM.
+  // Rather than seed the table, re-point the engine factory at a real Engram
+  // whose `suggestions()` reports pending rows — the hook wiring is what these
+  // tests are about; the counting itself is covered in adapter.test.ts.
+  const withPendingSuggestions = (count: number): void => {
+    setEngineFactoryForTesting(async (path: string) => {
+      const engram = await EngramCtor.open(path, { embedder: new TestEmbedder() });
+      const rows = Array.from({ length: count }, (_, i) => ({
+        id: `sug-${i}`,
+        summary: `pending suggestion ${i}`,
+      }));
+      return new Proxy(engram, {
+        get(target, prop, receiver) {
+          if (prop === 'suggestions') return () => rows;
+          const value = Reflect.get(target, prop, receiver);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    });
+  };
+
+  it('fresh session: before_agent_start appends the pending-suggestions counter', async () => {
+    withPendingSuggestions(2);
+
+    const start = captured.handlers.get('session_start')!;
+    await start({ type: 'session_start', reason: 'new' }, makeCtx(makeFakeUi()));
+
+    const beforeAgentStart = captured.handlers.get('before_agent_start')!;
+    const result = (await beforeAgentStart(
+      { type: 'before_agent_start', prompt: 'what next?', systemPrompt: 'BASE PROMPT' },
+      makeCtx(makeFakeUi()),
+    )) as { systemPrompt?: string } | undefined;
+
+    expect(result?.systemPrompt).toContain('BASE PROMPT');
+    expect(result?.systemPrompt).toContain('2 pending improvement suggestions');
+    // Additive: the session addendum still lands.
+    expect(result?.systemPrompt).toContain('engram_session_resume');
+    // A counter, not content — suggestion bodies never enter the prompt.
+    expect(result?.systemPrompt).not.toContain('pending suggestion 0');
+  });
+
+  it('the suggestions counter is one-shot, like startup recall', async () => {
+    withPendingSuggestions(2);
+
+    const start = captured.handlers.get('session_start')!;
+    await start({ type: 'session_start', reason: 'new' }, makeCtx(makeFakeUi()));
+
+    const beforeAgentStart = captured.handlers.get('before_agent_start')!;
+    const first = (await beforeAgentStart(
+      { type: 'before_agent_start', prompt: 'turn one', systemPrompt: 'TURN 1' },
+      makeCtx(makeFakeUi()),
+    )) as { systemPrompt?: string } | undefined;
+    expect(first?.systemPrompt).toContain('2 pending improvement suggestions');
+
+    const second = (await beforeAgentStart(
+      { type: 'before_agent_start', prompt: 'turn two', systemPrompt: 'TURN 2' },
+      makeCtx(makeFakeUi()),
+    )) as { systemPrompt?: string } | undefined;
+    expect(second?.systemPrompt).toContain('TURN 2');
+    expect(second?.systemPrompt).not.toContain('pending improvement');
+  });
+
+  it('appends no counter line when nothing is pending', async () => {
+    const start = captured.handlers.get('session_start')!;
+    await start({ type: 'session_start', reason: 'new' }, makeCtx(makeFakeUi()));
+
+    const beforeAgentStart = captured.handlers.get('before_agent_start')!;
+    const result = (await beforeAgentStart(
+      { type: 'before_agent_start', prompt: 'what next?', systemPrompt: 'BASE PROMPT' },
+      makeCtx(makeFakeUi()),
+    )) as { systemPrompt?: string } | undefined;
+
+    expect(result?.systemPrompt).toContain('engram_session_resume');
+    expect(result?.systemPrompt).not.toContain('pending improvement');
+  });
+
   it('resumed session (reason: "resume"): before_agent_start does not inject starting context', async () => {
     await captured.commands.get('remember')!.handler(
       'The staging cluster runs on Talos Linux',
