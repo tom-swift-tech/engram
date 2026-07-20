@@ -47,13 +47,39 @@ Branch: `feat/reflect-opinion-gates-belief-journal` off main @ aab0322.
 - [x] Verify: build → tsc → lint → format:check → full test suite
 - [x] Commit, push, PR (surface-parity stays 14 — zero new MCP tools)
 
-## PR 2 — counter-evidence pass (item 2) — after PR 1 merges
+## PR 1 status: MERGED as #40 (main @ 7f4b571).
 
-Active challenge: before forming/reinforcing, recall against a negated
-candidate; populate `contradicting_chunks`/`last_challenged`; optional
-support/contradiction ratio gate; journal `challenged`/`weakened` with the
-counter-evidence. LLM+recall cost per candidate — needs its own design pass
-(negation derivation, budget caps). Rides PR 1's journal.
+## PR 2 — counter-evidence pass (item 2) — DONE (branch feat/reflect-counter-evidence)
+
+Design settled during implementation (differs from the sketch above in two
+ways worth remembering): retrieval queries the candidate belief itself (not a
+derived negation — negation derivation would be a second LLM call per
+candidate; instead ONE batched judge call per cycle classifies contradictions
+across all candidates), and `weakened` is still not written — recording
+contradictions and adjudicating them are separate concerns; adjudication is
+PR 3's falsifier/decay job.
+
+- [x] `ReflectConfig.counterEvidence` (`onReinforce`/`topK`/`maxContradictionRatio`)
+      + `ReflectConfig.embedder`; `Engram` threads its embedder through both
+      reflect wrappers
+- [x] Retrieval via `recall()`: world/experience only, decayHalfLifeDays 0,
+      cited evidence excluded, topK+cited headroom
+- [x] ONE batched judge LLM call per cycle; ids intersected against shown
+      pool; untrusted_data delimiting; fail-open on judge error
+- [x] Formation ratio gate `c/(s+c)` > maxContradictionRatio → journaled
+      `rejected`/`counter_evidence`; ratio 1 = record-only
+- [x] Surviving formations born with contradicting_chunks + last_challenged;
+      onReinforce merges contradictions without touching the delta
+- [x] `ReflectResult.counterEvidenceChecked` (+ CatchUp aggregation);
+      next-cycle prompt shows "contradicted by N chunk(s)"
+- [x] Tests `tests/counter-evidence.test.ts` (10): off-by-default, record
+      sub-threshold, block over-threshold, record-only mode, onReinforce,
+      hallucinated ids, fail-open, cited-exclusion (prompt capture),
+      next-cycle prompt line, missing-embedder skip
+- [x] Docs: CLAUDE.md + AGENTS.md together (new decision bullet, reflect.ts
+      line, tests list, stale test-count fix 574→602)
+- [x] Verify: tsc, prettier, eslint, root 602/602, Pi 129/129 on rebuilt dist
+- [ ] Commit, push, PR, CI, merge (surface-parity stays 14)
 
 ## PR 3 — falsifier field (item 3) — after PR 2
 
