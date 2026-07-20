@@ -1,76 +1,63 @@
-# Task: Hermes sprint — recall observability & surface parity (v2, core-first)
+# Issue #38 — full implementation (3 sequenced PRs)
 
-Previous task (six-defect remediation sprint) is DONE and merged (#30–#32);
+Previous task (Hermes observability sprint) is DONE and merged (#33–#37);
 record in git history of this file + `tasks/handoff.md`.
 
-**Origin:** external field report — `tasks/feedback-hermes-report.md`.
-**Spec:** `tasks/sprint-hermes-observability.md` v2 (source of detail).
-**Framing rule (user correction, lessons 2026-07-16):** harness-agnostic —
-capability + rendering in core, exposed via MCP/CLI; adapters patched last.
+Decision (2026-07-20): user approved full implementation of #38 by us, as
+sequenced PRs. Review posted on the issue with two corrections: challenge
+machinery is passive-not-dead (fires only on same-batch contradiction,
+`reflect.ts` challenge branch), and idle decay already exists (−0.02/cycle
+after 30 days idle, floor 0.1) — item 3 must integrate with it, not duplicate.
 
-## Phase 1 — Core observability
+## PR 1 — formation gates + belief journal (issue items 1+4) — DONE (PR opened)
 
-### Lane A: canonical formatter (`src/recall.ts`)
-- [x] T1: `formatForPrompt` gains `showProvenance` (memoryType/sourceType/
-      trust/created-date per result) + `showWhy` (compact strategyScores
-      line). Both default false — existing output byte-identical. Tests.
-      (d9e6470, reviewed PASS, merged. +5 tests. Also added `createdAt` to
-      RecallResult, populated from already-selected created_at.)
+Branch: `feat/reflect-opinion-gates-belief-journal` off main @ aab0322.
 
-### Lane B: harness-agnostic transports (`src/cli*`, `src/mcp-tools.ts`)
-- [x] T2: `decayHalfLifeDays` param on MCP `engram_recall` +
-      `--decay-half-life-days` CLI flag (clamp ≥0); omitted → 180 unchanged.
-      Description strings advertise tier guarantee + decay semantics.
-      Surface-parity stays 14. CLAUDE.md + AGENTS.md + skills docs.
-      (5320dde, reviewed PASS incl. the undefined-not-0 omitted path, merged.
-      +5 tests.)
-- [x] Lead integration (93a601b): exported `formatWhyLine` (shared, no drift);
-      CLI human recall line now shows sourceType + created date, why line
-      renders under --explain-scores without --json. +2 tests → root 574.
-      **Finding:** MCP needed NO format threading — it returns full
-      RecallResponse JSON, which already carries createdAt/sourceType/
-      strategyScores; a formatted rendering would have LOST fidelity.
+- [x] `schema.sql`: new `belief_journal` table (+ domain column beyond the
+      issue's sketch) + indexes. New table ⇒ plain `CREATE TABLE IF NOT
+      EXISTS` works for fresh AND pre-existing files; no guarded ALTER needed.
+- [x] `reflect.ts`:
+  - [x] `OpinionGates` interface + `ReflectConfig.opinionGates`
+  - [x] `rationale` (optional) added to the opinion_updates LLM contract +
+        prompt instruction; clamped ~1000 chars
+  - [x] Gate evaluation for `direction: 'new'` only (verified evidence ids →
+        count / distinct days via `date(COALESCE(event_time, created_at))` /
+        distinct sources, NULL source = one bucket)
+  - [x] Rejected-candidate evidence merge: latest matching `rejected` journal
+        row (same domain, beliefSimilarity ≥ 0.85) contributes its evidence to
+        the union before gates re-evaluate — a slow-accumulating belief isn't
+        starved by per-batch evaluation
+  - [x] Journal writes in the apply transaction: formed / reinforced (incl.
+        new-dedup-to-reinforce) / challenged / rejected
+        (`insufficient_evidence` + `no_matching_opinion`); `weakened` reserved
+        in the CHECK for PRs 2/3, not written yet
+  - [x] `ReflectResult.opinionsRejected`; a cycle whose only output is
+        gate-rejections is NOT a silent failure (no shrink hint) and its facts
+        ARE marked reflected
+  - [x] `getBeliefJournal()` read fn + types (library-only)
+- [x] `engram.ts`: `opinionGates` in both reflect/reflectCatchUp Picks,
+      `beliefJournal()` method, type re-exports
+- [x] `reflectCatchUp`: aggregate `opinionsRejected`
+- [x] Tests `tests/belief-journal.test.ts`: no-gates journaling parity,
+      gate rejection (count/days/sources), rejected→merge→formed across
+      cycles, all-rejected cycle marks facts reflected + no shrink hint,
+      unmatched reinforce journaled, read API filters, old-file migration
+- [x] Docs: CLAUDE.md + AGENTS.md together (table count 10→11, decision
+      bullet, tests list)
+- [x] Verify: build → tsc → lint → format:check → full test suite
+- [x] Commit, push, PR (surface-parity stays 14 — zero new MCP tools)
 
-## Phase 2 — Eval harness
+## PR 2 — counter-evidence pass (item 2) — after PR 1 merges
 
-### Lane C: `evals/**` (greenfield)
-- [x] T3: embedding-only eval scaffold — deterministic fixtures,
-      P@k / R@k / MRR runner, `npm run eval`, report-only.
-- [x] T4: four scenario families — relevance, contradiction, contamination,
-      staleness — baselines committed to `evals/README.md`.
-      (88beee8, reviewed PASS on all 8 checks, merged @ 792ff51. Re-run on
-      merged main reproduced results.json byte-identically.)
-      **Findings for Phase 4:** (a) contradiction: 1/4 pairs FAIL — stale
-      active fact outranks its replacement on phrasing similarity (concrete
-      ask-1 evidence); (b) contamination: tier floor perfect, 0 noise in
-      top-5 across 6 queries; (c) staleness sweep quantifies the decay
-      tradeoff (90d-old chunk: rank 3 @ 180d half-life vs rank 8 @ 30d).
+Active challenge: before forming/reinforcing, recall against a negated
+candidate; populate `contradicting_chunks`/`last_challenged`; optional
+support/contradiction ratio gate; journal `challenged`/`weakened` with the
+counter-evidence. LLM+recall cost per candidate — needs its own design pass
+(negation derivation, budget caps). Rides PR 1's journal.
 
-## Phase 3 — Adapter parity (LAST, after A+B merge)
+## PR 3 — falsifier field (item 3) — after PR 2
 
-### Lane D: Pi binding (`integrations/pi/**`)
-- [x] T5: pass through `explainScores` + `decayHalfLifeDays` (default stays 0,
-      pin issue #19); formatter converged onto core rendering (provenance
-      bracket + exported `formatWhyLine`; local loop kept because
-      formatForPrompt doesn't print chunk ids and engram_forget needs them);
-      `strategyScores` in tool `details` only when requested. Pi 115 → 121.
-      (e8f489d, reviewed PASS, merged @ cab460f.)
-- [x] Note follow-up: OpenClaw plugin gets T2 for free via MCP; no repo change.
-
-## Phase 4 — DEFERRED (revisit with eval baselines only)
-- Staleness detection (ask 1) · review/expiry dates (ask 5) ·
-  durable-vs-conversation auto-separation remainder (ask 4).
-
-## Sprint acceptance — ALL MET 2026-07-16
-- [x] Defaults byte-identical everywhere (no provenance/why unless asked;
-      decay 180 core / 0 Pi — both regression-pinned by tests).
-- [x] Pi duplicate formatter converged onto core rendering (shared
-      formatWhyLine; drift structurally impossible).
-- [x] Full green on merged main: root vitest **574**, Pi **121**, openclaw
-      **67**, surface-parity 14; typecheck/lint/format:check clean; mirror
-      diff = marker only. (Pi suite needs root dist rebuilt first — known
-      stale-dist gotcha, reconfirmed this sprint.)
-
-## Out of scope (hard)
-No new MCP tools · no engram-aql changes (frozen) · no live-store purge
-tooling · no LLM-side evals in v1 · no OpenClaw-repo changes.
+`would_change_this TEXT` on opinions (guarded ALTER); reflection states the
+falsifier at formation; later cycles check new evidence against stated
+falsifiers → principled decay, integrated WITH the existing 30-day idle decay
+(not a second parallel mechanism).
