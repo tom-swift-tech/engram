@@ -477,6 +477,16 @@ export class Engram {
       'CREATE INDEX IF NOT EXISTS idx_observations_node_origin ON observations(node_origin) WHERE node_origin IS NOT NULL',
     );
 
+    // Migration: add the falsifier column to existing .engram files (issue
+    // #38 item 3). Pre-existing opinions stay NULL ("never stated") — a
+    // falsifier is the model's own statement at formation, not backfillable.
+    const opinionFalsifierCols = db.pragma('table_info(opinions)') as Array<{
+      name: string;
+    }>;
+    if (!opinionFalsifierCols.some((c) => c.name === 'would_change_this')) {
+      db.exec('ALTER TABLE opinions ADD COLUMN would_change_this TEXT');
+    }
+
     // Establish this bank's stable node-origin identity. Generated exactly once,
     // on first open of a bank that lacks it (ON CONFLICT DO NOTHING never
     // regenerates — the value must survive restarts). Lives in bank_config,

@@ -252,6 +252,13 @@ CREATE TABLE IF NOT EXISTS opinions (
     -- it untouched. NULL = pre-distribution / unknown origin.
     node_origin TEXT,
 
+    -- Falsifier (issue #38 item 3): the model's own one-sentence statement of
+    -- what concrete evidence would change this belief, recorded at formation
+    -- (backfilled on a later reinforcement if formation predates the field).
+    -- Surfaced in the reflect prompt and the counter-evidence judge so later
+    -- cycles can test new evidence against it. NULL = never stated.
+    would_change_this TEXT,
+
     -- Lifecycle
     formed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_reinforced TIMESTAMP,

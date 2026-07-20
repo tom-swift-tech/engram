@@ -79,11 +79,27 @@ PR 3's falsifier/decay job.
 - [x] Docs: CLAUDE.md + AGENTS.md together (new decision bullet, reflect.ts
       line, tests list, stale test-count fix 574→602)
 - [x] Verify: tsc, prettier, eslint, root 602/602, Pi 129/129 on rebuilt dist
-- [ ] Commit, push, PR, CI, merge (surface-parity stays 14)
+- [x] Commit, push, PR #41, CI green, merged (main @ 29488ff)
 
-## PR 3 — falsifier field (item 3) — after PR 2
+## PR 3 — falsifier field (item 3) — DONE (branch feat/reflect-falsifier-field)
 
-`would_change_this TEXT` on opinions (guarded ALTER); reflection states the
-falsifier at formation; later cycles check new evidence against stated
-falsifiers → principled decay, integrated WITH the existing 30-day idle decay
-(not a second parallel mechanism).
+- [x] `opinions.would_change_this` (schema.sql for fresh files + guarded
+      ALTER in engram.ts for existing; NULL = never stated)
+- [x] Reflect prompt requests the falsifier for direction:'new'; stored at
+      formation (clamped 1000 chars); backfilled by the first reinforcement
+      that states one, never overwritten (first-stated-wins)
+- [x] Surfaced to later cycles: opBlock renders "(would change if: ...)" with
+      a challenge-verdict instruction; counter-evidence judge prompt shows
+      "Stated falsifier:" for reinforce candidates with matching-evidence-IS-
+      contradiction instruction
+- [x] Weakened decay: step-0 decay extended with a second eligibility arm —
+      unanswered contradictions (contradicting_chunks non-empty AND
+      last_reinforced < last_challenged) decay without the 30-day idle wait,
+      same rate/floor/throttle; journaled 'weakened' (reserved since PR 1)
+      keyed to the run's logId; idle arm unchanged and unjournaled
+- [x] `ReflectResult.opinionsWeakened` + CatchUp aggregation
+- [x] introspect OpinionView gains wouldChangeThis (additive projection)
+- [x] Tests `tests/falsifier.test.ts` (10)
+- [x] Docs: CLAUDE.md + AGENTS.md (decision bullet, tests list, 602→612)
+- [x] Verify: tsc, prettier, eslint, root 612/612, Pi 129/129 on rebuilt dist
+- [ ] Commit, push, PR, CI, merge (surface-parity stays 14) — then close #38
