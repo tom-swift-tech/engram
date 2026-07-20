@@ -102,4 +102,10 @@ PR 3's falsifier/decay job.
 - [x] Tests `tests/falsifier.test.ts` (10)
 - [x] Docs: CLAUDE.md + AGENTS.md (decision bullet, tests list, 602→612)
 - [x] Verify: tsc, prettier, eslint, root 612/612, Pi 129/129 on rebuilt dist
-- [ ] Commit, push, PR, CI, merge (surface-parity stays 14) — then close #38
+- [x] Commit, push, PR #42, CI green, merged (main @ fb5b0dd)
+
+## DONE — issue #38 closed (auto via PR #42 + summary comment).
+
+All four items landed across #40/#41/#42. Zero new MCP tools; surface-parity
+stays 14. Next candidate slice: issue #39 (procedural reflection), now
+unblocked.
