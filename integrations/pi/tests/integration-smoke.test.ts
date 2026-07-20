@@ -37,7 +37,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 interface Captured {
   commands: Map<
     string,
-    { description: string; handler: (args: string, ctx: unknown) => Promise<void> }
+    {
+      description: string;
+      handler: (args: string, ctx: unknown) => Promise<void>;
+    }
   >;
   tools: Map<
     string,
@@ -80,7 +83,11 @@ function makeFakeUi(confirmAnswer = true): FakeUi {
   };
 }
 
-function makeCtx(ui: FakeUi, hasUI = true, priorEntries: unknown[] = []): unknown {
+function makeCtx(
+  ui: FakeUi,
+  hasUI = true,
+  priorEntries: unknown[] = [],
+): unknown {
   return { hasUI, ui, sessionManager: { getEntries: () => priorEntries } };
 }
 
@@ -89,14 +96,20 @@ function makePi(captured: Captured): unknown {
     registerCommand: (name: string, def: unknown) => {
       captured.commands.set(
         name,
-        def as { description: string; handler: (args: string, ctx: unknown) => Promise<void> },
+        def as {
+          description: string;
+          handler: (args: string, ctx: unknown) => Promise<void>;
+        },
       );
     },
     registerTool: (def: unknown) => {
       const t = def as {
         name: string;
         description: string;
-        parameters: { required?: string[]; properties?: Record<string, unknown> };
+        parameters: {
+          required?: string[];
+          properties?: Record<string, unknown>;
+        };
         execute: (
           toolCallId: string,
           params: unknown,
@@ -134,9 +147,88 @@ class TestEmbedder {
   }
 }
 
+// The extension reads ENGRAM_PI_DB_PATH (and other ENGRAM_PI_* knobs) from
+// process.env — including from the ambient shell environment (issue #45). A
+// deployment that exports ENGRAM_PI_DB_PATH so the extension always opens the
+// same persistent store will have it inherited into any shell that runs this
+// suite. Without isolation, getEngram() resolves that path instead of the
+// temp projectDir below, and tests that call remember/consolidation/
+// session_shutdown would write to a real store.
+const ENGRAM_PI_ENV_PREFIX = 'ENGRAM_PI_';
+
+function clearEngramPiEnv(): Record<string, string | undefined> {
+  const saved: Record<string, string | undefined> = {};
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith(ENGRAM_PI_ENV_PREFIX)) {
+      saved[key] = process.env[key];
+      delete process.env[key];
+    }
+  }
+  return saved;
+}
+
+function restoreEngramPiEnv(saved: Record<string, string | undefined>): void {
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith(ENGRAM_PI_ENV_PREFIX)) delete process.env[key];
+  }
+  for (const [key, value] of Object.entries(saved)) {
+    if (value !== undefined) process.env[key] = value;
+  }
+}
+
+// Order-independent unit coverage for the isolation mechanism itself (issue
+// #45), separate from the main describe below so it isn't subject to that
+// block's own beforeEach — this proves clear/restore is correct in general,
+// not just for whatever ENGRAM_PI_* var happens to be exercised elsewhere.
+describe('ENGRAM_PI_* env isolation helpers (issue #45)', () => {
+  const ENGRAM_PI_KEYS = [
+    'ENGRAM_PI_DB_PATH',
+    'ENGRAM_PI_AUTO_RETAIN',
+    'ENGRAM_PI_STARTUP_RECALL',
+  ];
+
+  afterEach(() => {
+    for (const key of ENGRAM_PI_KEYS) delete process.env[key];
+  });
+
+  it('clearEngramPiEnv removes every ENGRAM_PI_* var and returns their prior values', () => {
+    process.env.ENGRAM_PI_DB_PATH = '/some/ambient/store.db';
+    process.env.ENGRAM_PI_AUTO_RETAIN = '0';
+    process.env.OTHER_UNRELATED_VAR = 'untouched';
+
+    const saved = clearEngramPiEnv();
+
+    expect(saved).toEqual({
+      ENGRAM_PI_DB_PATH: '/some/ambient/store.db',
+      ENGRAM_PI_AUTO_RETAIN: '0',
+    });
+    expect(process.env.ENGRAM_PI_DB_PATH).toBeUndefined();
+    expect(process.env.ENGRAM_PI_AUTO_RETAIN).toBeUndefined();
+    // Isolation is scoped to the ENGRAM_PI_ prefix, not a blanket env wipe.
+    expect(process.env.OTHER_UNRELATED_VAR).toBe('untouched');
+
+    delete process.env.OTHER_UNRELATED_VAR;
+  });
+
+  it('restoreEngramPiEnv puts back exactly what was saved, including "was unset"', () => {
+    process.env.ENGRAM_PI_DB_PATH = '/ambient/store.db';
+    const saved = clearEngramPiEnv(); // ENGRAM_PI_STARTUP_RECALL was never set
+
+    // A test sets one mid-run, simulating what an override test does.
+    process.env.ENGRAM_PI_STARTUP_RECALL = '0';
+
+    restoreEngramPiEnv(saved);
+
+    expect(process.env.ENGRAM_PI_DB_PATH).toBe('/ambient/store.db');
+    // Restored to "unset", not left at the mid-run test's value.
+    expect(process.env.ENGRAM_PI_STARTUP_RECALL).toBeUndefined();
+  });
+});
+
 describe('engram-pi integration smoke (built dist + real Engram)', () => {
   let projectDir: string;
   let originalCwd: string;
+  let savedEnv: Record<string, string | undefined>;
   let captured: Captured;
   let factory: (pi: unknown) => void;
   let setEngineFactoryForTesting: (
@@ -172,6 +264,7 @@ describe('engram-pi integration smoke (built dist + real Engram)', () => {
   });
 
   beforeEach(() => {
+    savedEnv = clearEngramPiEnv();
     originalCwd = process.cwd();
     projectDir = mkdtempSync(join(tmpdir(), 'engram-pi-smoke-'));
     process.chdir(projectDir);
@@ -205,6 +298,7 @@ describe('engram-pi integration smoke (built dist + real Engram)', () => {
     } catch {
       // Best-effort cleanup; tmp dir cleaner will get it eventually.
     }
+    restoreEngramPiEnv(savedEnv);
   });
 
   afterAll(() => {
@@ -273,22 +367,42 @@ describe('engram-pi integration smoke (built dist + real Engram)', () => {
       // Close the Engram instance before removing its directory — on Windows
       // an open SQLite handle blocks deletion (the outer afterEach does the
       // same shutdown, but that runs too late to unblock this cleanup).
+      // Restoring ENGRAM_PI_DB_PATH itself is the outer beforeEach/afterEach's
+      // job (issue #45) — not repeated here, so it can't drift out of sync.
       const shutdown = captured.handlers.get('session_shutdown');
       if (shutdown) await shutdown({}, makeCtx(makeFakeUi()));
-      delete process.env.ENGRAM_PI_DB_PATH;
       rmSync(overrideDir, { recursive: true, force: true });
     }
   });
 
+  it('does not inherit ENGRAM_PI_DB_PATH left behind by the previous test (issue #45)', async () => {
+    // Regression for the exact failure mode in issue #45: a value set in one
+    // test (or, in a real shell, exported ambiently before the process ever
+    // started) must not survive into the next test's getEngram() resolution.
+    // The previous test exercises the override path; if beforeEach's
+    // clearEngramPiEnv() were missing or buggy, that value — or a real
+    // ambient one — would still be set here and this test would silently
+    // write to it instead of projectDir.
+    expect(process.env.ENGRAM_PI_DB_PATH).toBeUndefined();
+
+    await captured.commands.get('memory')!.handler('', makeCtx(makeFakeUi()));
+    expect(existsSync(join(projectDir, '.engram', 'pi.db'))).toBe(true);
+  });
+
   it('fresh session (reason: "new"): before_agent_start injects starting context from prior memory', async () => {
     // Seed memory in a "previous session" before the fresh one starts.
-    await captured.commands.get('remember')!.handler(
-      'The staging cluster runs on Talos Linux, fronted by an nginx ingress',
-      makeCtx(makeFakeUi()),
-    );
+    await captured.commands
+      .get('remember')!
+      .handler(
+        'The staging cluster runs on Talos Linux, fronted by an nginx ingress',
+        makeCtx(makeFakeUi()),
+      );
 
     const start = captured.handlers.get('session_start')!;
-    await start({ type: 'session_start', reason: 'new' }, makeCtx(makeFakeUi()));
+    await start(
+      { type: 'session_start', reason: 'new' },
+      makeCtx(makeFakeUi()),
+    );
 
     const beforeAgentStart = captured.handlers.get('before_agent_start')!;
     const result = (await beforeAgentStart(
@@ -301,34 +415,51 @@ describe('engram-pi integration smoke (built dist + real Engram)', () => {
     )) as { systemPrompt?: string } | undefined;
 
     expect(result?.systemPrompt).toContain('BASE PROMPT');
-    expect(result?.systemPrompt).toContain('## Relevant memory from prior work');
+    expect(result?.systemPrompt).toContain(
+      '## Relevant memory from prior work',
+    );
     expect(result?.systemPrompt).toContain('Talos Linux');
     // Still appends the session addendum — startup recall is additive, not a replacement.
     expect(result?.systemPrompt).toContain('engram_session_resume');
   });
 
   it('fresh session: startup recall only fires on the first before_agent_start, not later turns', async () => {
-    await captured.commands.get('remember')!.handler(
-      'The staging cluster runs on Talos Linux',
+    await captured.commands
+      .get('remember')!
+      .handler(
+        'The staging cluster runs on Talos Linux',
+        makeCtx(makeFakeUi()),
+      );
+
+    const start = captured.handlers.get('session_start')!;
+    await start(
+      { type: 'session_start', reason: 'new' },
       makeCtx(makeFakeUi()),
     );
 
-    const start = captured.handlers.get('session_start')!;
-    await start({ type: 'session_start', reason: 'new' }, makeCtx(makeFakeUi()));
-
     const beforeAgentStart = captured.handlers.get('before_agent_start')!;
     const first = (await beforeAgentStart(
-      { type: 'before_agent_start', prompt: 'staging cluster os?', systemPrompt: 'TURN 1' },
+      {
+        type: 'before_agent_start',
+        prompt: 'staging cluster os?',
+        systemPrompt: 'TURN 1',
+      },
       makeCtx(makeFakeUi()),
     )) as { systemPrompt?: string } | undefined;
     expect(first?.systemPrompt).toContain('## Relevant memory from prior work');
 
     const second = (await beforeAgentStart(
-      { type: 'before_agent_start', prompt: 'staging cluster os?', systemPrompt: 'TURN 2' },
+      {
+        type: 'before_agent_start',
+        prompt: 'staging cluster os?',
+        systemPrompt: 'TURN 2',
+      },
       makeCtx(makeFakeUi()),
     )) as { systemPrompt?: string } | undefined;
     expect(second?.systemPrompt).toContain('TURN 2');
-    expect(second?.systemPrompt).not.toContain('## Relevant memory from prior work');
+    expect(second?.systemPrompt).not.toContain(
+      '## Relevant memory from prior work',
+    );
   });
 
   // Suggestion rows are produced by the core suggest pass, which needs an LLM.
@@ -337,7 +468,9 @@ describe('engram-pi integration smoke (built dist + real Engram)', () => {
   // tests are about; the counting itself is covered in adapter.test.ts.
   const withPendingSuggestions = (count: number): void => {
     setEngineFactoryForTesting(async (path: string) => {
-      const engram = await EngramCtor.open(path, { embedder: new TestEmbedder() });
+      const engram = await EngramCtor.open(path, {
+        embedder: new TestEmbedder(),
+      });
       const rows = Array.from({ length: count }, (_, i) => ({
         id: `sug-${i}`,
         summary: `pending suggestion ${i}`,
@@ -356,11 +489,18 @@ describe('engram-pi integration smoke (built dist + real Engram)', () => {
     withPendingSuggestions(2);
 
     const start = captured.handlers.get('session_start')!;
-    await start({ type: 'session_start', reason: 'new' }, makeCtx(makeFakeUi()));
+    await start(
+      { type: 'session_start', reason: 'new' },
+      makeCtx(makeFakeUi()),
+    );
 
     const beforeAgentStart = captured.handlers.get('before_agent_start')!;
     const result = (await beforeAgentStart(
-      { type: 'before_agent_start', prompt: 'what next?', systemPrompt: 'BASE PROMPT' },
+      {
+        type: 'before_agent_start',
+        prompt: 'what next?',
+        systemPrompt: 'BASE PROMPT',
+      },
       makeCtx(makeFakeUi()),
     )) as { systemPrompt?: string } | undefined;
 
@@ -376,17 +516,28 @@ describe('engram-pi integration smoke (built dist + real Engram)', () => {
     withPendingSuggestions(2);
 
     const start = captured.handlers.get('session_start')!;
-    await start({ type: 'session_start', reason: 'new' }, makeCtx(makeFakeUi()));
+    await start(
+      { type: 'session_start', reason: 'new' },
+      makeCtx(makeFakeUi()),
+    );
 
     const beforeAgentStart = captured.handlers.get('before_agent_start')!;
     const first = (await beforeAgentStart(
-      { type: 'before_agent_start', prompt: 'turn one', systemPrompt: 'TURN 1' },
+      {
+        type: 'before_agent_start',
+        prompt: 'turn one',
+        systemPrompt: 'TURN 1',
+      },
       makeCtx(makeFakeUi()),
     )) as { systemPrompt?: string } | undefined;
     expect(first?.systemPrompt).toContain('2 pending improvement suggestions');
 
     const second = (await beforeAgentStart(
-      { type: 'before_agent_start', prompt: 'turn two', systemPrompt: 'TURN 2' },
+      {
+        type: 'before_agent_start',
+        prompt: 'turn two',
+        systemPrompt: 'TURN 2',
+      },
       makeCtx(makeFakeUi()),
     )) as { systemPrompt?: string } | undefined;
     expect(second?.systemPrompt).toContain('TURN 2');
@@ -395,11 +546,18 @@ describe('engram-pi integration smoke (built dist + real Engram)', () => {
 
   it('appends no counter line when nothing is pending', async () => {
     const start = captured.handlers.get('session_start')!;
-    await start({ type: 'session_start', reason: 'new' }, makeCtx(makeFakeUi()));
+    await start(
+      { type: 'session_start', reason: 'new' },
+      makeCtx(makeFakeUi()),
+    );
 
     const beforeAgentStart = captured.handlers.get('before_agent_start')!;
     const result = (await beforeAgentStart(
-      { type: 'before_agent_start', prompt: 'what next?', systemPrompt: 'BASE PROMPT' },
+      {
+        type: 'before_agent_start',
+        prompt: 'what next?',
+        systemPrompt: 'BASE PROMPT',
+      },
       makeCtx(makeFakeUi()),
     )) as { systemPrompt?: string } | undefined;
 
@@ -408,13 +566,18 @@ describe('engram-pi integration smoke (built dist + real Engram)', () => {
   });
 
   it('resumed session (reason: "resume"): before_agent_start does not inject starting context', async () => {
-    await captured.commands.get('remember')!.handler(
-      'The staging cluster runs on Talos Linux',
-      makeCtx(makeFakeUi()),
-    );
+    await captured.commands
+      .get('remember')!
+      .handler(
+        'The staging cluster runs on Talos Linux',
+        makeCtx(makeFakeUi()),
+      );
 
     const start = captured.handlers.get('session_start')!;
-    await start({ type: 'session_start', reason: 'resume' }, makeCtx(makeFakeUi()));
+    await start(
+      { type: 'session_start', reason: 'resume' },
+      makeCtx(makeFakeUi()),
+    );
 
     const beforeAgentStart = captured.handlers.get('before_agent_start')!;
     const result = (await beforeAgentStart(
@@ -427,7 +590,9 @@ describe('engram-pi integration smoke (built dist + real Engram)', () => {
     )) as { systemPrompt?: string } | undefined;
 
     expect(result?.systemPrompt).toContain('BASE PROMPT');
-    expect(result?.systemPrompt).not.toContain('## Relevant memory from prior work');
+    expect(result?.systemPrompt).not.toContain(
+      '## Relevant memory from prior work',
+    );
     // Addendum still present — only the recall injection is reason-gated.
     expect(result?.systemPrompt).toContain('engram_session_resume');
   });
@@ -438,15 +603,20 @@ describe('engram-pi integration smoke (built dist + real Engram)', () => {
     // appends bookkeeping entries (model_change, thinking_level_change) before
     // session_start fires, even for a genuinely blank slate — those must be
     // filtered out (only 'message' entries count) for this case to read fresh.
-    await captured.commands.get('remember')!.handler(
-      'The staging cluster runs on Talos Linux',
-      makeCtx(makeFakeUi()),
-    );
+    await captured.commands
+      .get('remember')!
+      .handler(
+        'The staging cluster runs on Talos Linux',
+        makeCtx(makeFakeUi()),
+      );
 
     const start = captured.handlers.get('session_start')!;
     await start(
       { type: 'session_start', reason: 'startup' },
-      makeCtx(makeFakeUi(), true, [{ type: 'model_change' }, { type: 'thinking_level_change' }]),
+      makeCtx(makeFakeUi(), true, [
+        { type: 'model_change' },
+        { type: 'thinking_level_change' },
+      ]),
     );
 
     const beforeAgentStart = captured.handlers.get('before_agent_start')!;
@@ -459,20 +629,27 @@ describe('engram-pi integration smoke (built dist + real Engram)', () => {
       makeCtx(makeFakeUi()),
     )) as { systemPrompt?: string } | undefined;
 
-    expect(result?.systemPrompt).toContain('## Relevant memory from prior work');
+    expect(result?.systemPrompt).toContain(
+      '## Relevant memory from prior work',
+    );
     expect(result?.systemPrompt).toContain('Talos Linux');
   });
 
   it('continued launch (reason: "startup", prior "message" entries present, e.g. --continue): before_agent_start does not inject starting context', async () => {
-    await captured.commands.get('remember')!.handler(
-      'The staging cluster runs on Talos Linux',
-      makeCtx(makeFakeUi()),
-    );
+    await captured.commands
+      .get('remember')!
+      .handler(
+        'The staging cluster runs on Talos Linux',
+        makeCtx(makeFakeUi()),
+      );
 
     const start = captured.handlers.get('session_start')!;
     await start(
       { type: 'session_start', reason: 'startup' },
-      makeCtx(makeFakeUi(), true, [{ type: 'model_change' }, { type: 'message' }]),
+      makeCtx(makeFakeUi(), true, [
+        { type: 'model_change' },
+        { type: 'message' },
+      ]),
     );
 
     const beforeAgentStart = captured.handlers.get('before_agent_start')!;
@@ -486,34 +663,35 @@ describe('engram-pi integration smoke (built dist + real Engram)', () => {
     )) as { systemPrompt?: string } | undefined;
 
     expect(result?.systemPrompt).toContain('BASE PROMPT');
-    expect(result?.systemPrompt).not.toContain('## Relevant memory from prior work');
+    expect(result?.systemPrompt).not.toContain(
+      '## Relevant memory from prior work',
+    );
   });
 
   it('round-trip: /remember then /recall finds the stored fact', async () => {
     const rememberUi = makeFakeUi();
-    await captured.commands.get('remember')!.handler(
-      'The staging cluster runs on Talos Linux',
-      makeCtx(rememberUi),
-    );
+    await captured.commands
+      .get('remember')!
+      .handler('The staging cluster runs on Talos Linux', makeCtx(rememberUi));
     const stored = rememberUi.notifications.find((n) =>
       n.message.startsWith('Stored chk-'),
     );
     expect(stored).toBeDefined();
 
     const recallUi = makeFakeUi();
-    await captured.commands.get('recall')!.handler(
-      'staging cluster',
-      makeCtx(recallUi),
-    );
-    const recallOutput = recallUi.notifications.map((n) => n.message).join('\n');
+    await captured.commands
+      .get('recall')!
+      .handler('staging cluster', makeCtx(recallUi));
+    const recallOutput = recallUi.notifications
+      .map((n) => n.message)
+      .join('\n');
     expect(recallOutput).toContain('Talos Linux');
   });
 
   it('/memory reports non-zero counts after a remember', async () => {
-    await captured.commands.get('remember')!.handler(
-      'fact one for stats test',
-      makeCtx(makeFakeUi()),
-    );
+    await captured.commands
+      .get('remember')!
+      .handler('fact one for stats test', makeCtx(makeFakeUi()));
     const ui = makeFakeUi();
     await captured.commands.get('memory')!.handler('', makeCtx(ui));
     const out = ui.notifications.map((n) => n.message).join('\n');
@@ -523,10 +701,9 @@ describe('engram-pi integration smoke (built dist + real Engram)', () => {
 
   it('/forget chk-id deletes directly without prompting', async () => {
     const rememberUi = makeFakeUi();
-    await captured.commands.get('remember')!.handler(
-      'an ephemeral note',
-      makeCtx(rememberUi),
-    );
+    await captured.commands
+      .get('remember')!
+      .handler('an ephemeral note', makeCtx(rememberUi));
     const stored = rememberUi.notifications.find((n) =>
       n.message.startsWith('Stored chk-'),
     )!.message;
@@ -544,40 +721,38 @@ describe('engram-pi integration smoke (built dist + real Engram)', () => {
   });
 
   it('/forget <query> asks for confirmation and respects yes', async () => {
-    await captured.commands.get('remember')!.handler(
-      'a deletable observation about pipelines',
-      makeCtx(makeFakeUi()),
-    );
+    await captured.commands
+      .get('remember')!
+      .handler(
+        'a deletable observation about pipelines',
+        makeCtx(makeFakeUi()),
+      );
     const ui = makeFakeUi(true); // confirm yes
-    await captured.commands.get('forget')!.handler(
-      'deletable observation pipelines',
-      makeCtx(ui),
-    );
-    expect(ui.notifications.some((n) => n.message.startsWith('Forgot chk-'))).toBe(
-      true,
-    );
+    await captured.commands
+      .get('forget')!
+      .handler('deletable observation pipelines', makeCtx(ui));
+    expect(
+      ui.notifications.some((n) => n.message.startsWith('Forgot chk-')),
+    ).toBe(true);
   });
 
   it('/forget <query> respects no (cancellation)', async () => {
-    await captured.commands.get('remember')!.handler(
-      'a precious memory I do not want erased',
-      makeCtx(makeFakeUi()),
-    );
+    await captured.commands
+      .get('remember')!
+      .handler('a precious memory I do not want erased', makeCtx(makeFakeUi()));
     const ui = makeFakeUi(false); // confirm no
-    await captured.commands.get('forget')!.handler(
-      'precious memory',
-      makeCtx(ui),
-    );
-    expect(ui.notifications.some((n) => n.message === 'Forget cancelled.')).toBe(
-      true,
-    );
+    await captured.commands
+      .get('forget')!
+      .handler('precious memory', makeCtx(ui));
+    expect(
+      ui.notifications.some((n) => n.message === 'Forget cancelled.'),
+    ).toBe(true);
 
     // Verify the chunk still exists via recall
     const recallUi = makeFakeUi();
-    await captured.commands.get('recall')!.handler(
-      'precious memory',
-      makeCtx(recallUi),
-    );
+    await captured.commands
+      .get('recall')!
+      .handler('precious memory', makeCtx(recallUi));
     const out = recallUi.notifications.map((n) => n.message).join('\n');
     expect(out).toContain('precious');
   });
@@ -600,10 +775,9 @@ describe('engram-pi integration smoke (built dist + real Engram)', () => {
   });
 
   it('engram_recall LLM tool returns strategiesUsed and resultCount in details', async () => {
-    await captured.commands.get('remember')!.handler(
-      'we use Cloudflare Tunnels for ingress',
-      makeCtx(makeFakeUi()),
-    );
+    await captured.commands
+      .get('remember')!
+      .handler('we use Cloudflare Tunnels for ingress', makeCtx(makeFakeUi()));
     const tool = captured.tools.get('engram_recall')!;
     const result = await tool.execute(
       'tool-call-2',
@@ -620,10 +794,12 @@ describe('engram-pi integration smoke (built dist + real Engram)', () => {
   });
 
   it('engram_recall LLM tool honors memoryTypes, strategies, and minScore filters', async () => {
-    await captured.commands.get('remember')!.handler(
-      'we use Fly.io for edge deployment regions',
-      makeCtx(makeFakeUi()),
-    );
+    await captured.commands
+      .get('remember')!
+      .handler(
+        'we use Fly.io for edge deployment regions',
+        makeCtx(makeFakeUi()),
+      );
     const tool = captured.tools.get('engram_recall')!;
 
     const filteredByType = await tool.execute(
@@ -646,7 +822,9 @@ describe('engram-pi integration smoke (built dist + real Engram)', () => {
       undefined,
       makeCtx(makeFakeUi()),
     );
-    expect((baseline.details as { resultCount: number }).resultCount).toBeGreaterThan(0);
+    expect(
+      (baseline.details as { resultCount: number }).resultCount,
+    ).toBeGreaterThan(0);
 
     const overStrict = await tool.execute(
       'tool-call-minscore',
@@ -663,10 +841,12 @@ describe('engram-pi integration smoke (built dist + real Engram)', () => {
   });
 
   it('engram_recall LLM tool shows provenance in formatted output, and includes strategyScores in details only when explainScores is requested', async () => {
-    await captured.commands.get('remember')!.handler(
-      'we route egress through a Tailscale exit node',
-      makeCtx(makeFakeUi()),
-    );
+    await captured.commands
+      .get('remember')!
+      .handler(
+        'we route egress through a Tailscale exit node',
+        makeCtx(makeFakeUi()),
+      );
     const tool = captured.tools.get('engram_recall')!;
 
     const plain = await tool.execute(
@@ -679,7 +859,9 @@ describe('engram-pi integration smoke (built dist + real Engram)', () => {
     // Provenance bracket (memory type / source type / trust / date) is always
     // rendered now — the whole point of this converged formatter is making
     // the trust-tier guarantee visible without an opt-in flag.
-    expect(plain.content[0].text).toMatch(/\[world\/user_stated, trust \d\.\d\d, \d{4}-\d\d-\d\d\]/);
+    expect(plain.content[0].text).toMatch(
+      /\[world\/user_stated, trust \d\.\d\d, \d{4}-\d\d-\d\d\]/,
+    );
     // Result id still present — engram_forget needs it.
     expect(plain.content[0].text).toMatch(/chk-[a-zA-Z0-9-]+/);
     expect(plain.content[0].text).not.toContain('why:');
@@ -702,10 +884,12 @@ describe('engram-pi integration smoke (built dist + real Engram)', () => {
 
   it('engram_recall LLM tool accepts decayHalfLifeDays, omitted or explicit, without erroring', async () => {
     const rememberUi = makeFakeUi();
-    await captured.commands.get('remember')!.handler(
-      'decay-tool-probe fact about certificate rotation',
-      makeCtx(rememberUi),
-    );
+    await captured.commands
+      .get('remember')!
+      .handler(
+        'decay-tool-probe fact about certificate rotation',
+        makeCtx(rememberUi),
+      );
     const chunkId = rememberUi.notifications[0].message
       .replace('Stored ', '')
       .trim();
@@ -735,10 +919,9 @@ describe('engram-pi integration smoke (built dist + real Engram)', () => {
 
   it('engram_forget LLM tool succeeds for a known id and reports failure for an unknown id', async () => {
     const rememberUi = makeFakeUi();
-    await captured.commands.get('remember')!.handler(
-      'a fact to forget via tool',
-      makeCtx(rememberUi),
-    );
+    await captured.commands
+      .get('remember')!
+      .handler('a fact to forget via tool', makeCtx(rememberUi));
     const chunkId = rememberUi.notifications[0].message
       .replace('Stored ', '')
       .trim();
@@ -769,26 +952,25 @@ describe('engram-pi integration smoke (built dist + real Engram)', () => {
   it('non-UI mode: notifications fall through to stderr without throwing', async () => {
     const stderrSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const ctxNoUi = makeCtx(makeFakeUi(), false);
-    await captured.commands.get('remember')!.handler(
-      'no-ui mode fact',
-      ctxNoUi,
-    );
+    await captured.commands
+      .get('remember')!
+      .handler('no-ui mode fact', ctxNoUi);
     expect(stderrSpy).toHaveBeenCalled();
     stderrSpy.mockRestore();
   });
 
   it('non-UI mode refuses /forget by query (would need confirmation)', async () => {
-    await captured.commands.get('remember')!.handler(
-      'protected from headless deletes',
-      makeCtx(makeFakeUi()),
-    );
+    await captured.commands
+      .get('remember')!
+      .handler('protected from headless deletes', makeCtx(makeFakeUi()));
     const stderrSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const ctxNoUi = makeCtx(makeFakeUi(), false);
-    await captured.commands.get('forget')!.handler(
-      'protected from headless',
-      ctxNoUi,
-    );
-    const stderrCalls = stderrSpy.mock.calls.map((c) => String(c[0])).join('\n');
+    await captured.commands
+      .get('forget')!
+      .handler('protected from headless', ctxNoUi);
+    const stderrCalls = stderrSpy.mock.calls
+      .map((c) => String(c[0]))
+      .join('\n');
     expect(stderrCalls).toContain('Refusing to forget by query');
     stderrSpy.mockRestore();
   });
