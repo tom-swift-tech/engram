@@ -94,10 +94,15 @@ import {
   reflect,
   reflectCatchUp,
   ReflectScheduler,
+  getBeliefJournal,
   type ReflectConfig,
   type ReflectResult,
   type CatchUpConfig,
   type CatchUpResult,
+  type OpinionGates,
+  type BeliefJournalAction,
+  type BeliefJournalEntry,
+  type BeliefJournalQuery,
 } from './reflect.js';
 
 import {
@@ -149,6 +154,10 @@ export type {
   ReflectResult,
   CatchUpConfig,
   CatchUpResult,
+  OpinionGates,
+  BeliefJournalAction,
+  BeliefJournalEntry,
+  BeliefJournalQuery,
   FormatForPromptOptions,
   WorkingMemoryState,
   WorkingMemoryOptions,
@@ -172,6 +181,7 @@ export {
   LocalEmbedder,
   reflectCatchUp,
   ReflectScheduler,
+  getBeliefJournal,
   shouldRetain,
   chunkText,
   formatForPrompt,
@@ -745,6 +755,7 @@ export class Engram {
       | 'minFactsThreshold'
       | 'sourceTypes'
       | 'existingContextCharBudget'
+      | 'opinionGates'
     >,
   ): Promise<ReflectResult> {
     return reflect({
@@ -774,6 +785,7 @@ export class Engram {
       | 'maxStalls'
       | 'sourceTypes'
       | 'existingContextCharBudget'
+      | 'opinionGates'
     >,
   ): Promise<CatchUpResult> {
     return reflectCatchUp({
@@ -781,6 +793,17 @@ export class Engram {
       generator: this.generator,
       ...options,
     });
+  }
+
+  /**
+   * Query the per-belief audit trail (issue #38): one row per opinion
+   * decision reflection made — formed/reinforced/challenged — or declined to
+   * make (`rejected`, including gate rejections with per-gate measurements).
+   * Newest first. Projection-only; no LLM call. Library-only surface — not
+   * exposed as an MCP tool.
+   */
+  beliefJournal(query?: BeliefJournalQuery): BeliefJournalEntry[] {
+    return getBeliefJournal(this.db, query);
   }
 
   /**

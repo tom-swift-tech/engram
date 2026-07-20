@@ -325,6 +325,35 @@ CREATE TABLE IF NOT EXISTS reflect_log (
 );
 
 -- =============================================================================
+-- BELIEF JOURNAL (issue #38)
+-- Per-belief, append-only audit trail complementing the run-level reflect_log:
+-- one row per opinion decision reflection made (or declined to make),
+-- including candidates it considered and REJECTED — the rows that answer
+-- "why doesn't the agent believe X", unanswerable from kept state alone.
+-- 'weakened' is reserved for the counter-evidence / falsifier passes
+-- (issue #38 items 2-3); nothing writes it yet.
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS belief_journal (
+    id TEXT PRIMARY KEY,
+    reflect_run_id TEXT REFERENCES reflect_log(id),
+    opinion_id TEXT,                    -- NULL for rejected candidates
+    action TEXT NOT NULL
+        CHECK (action IN ('formed', 'reinforced', 'challenged', 'weakened', 'rejected')),
+    candidate_belief TEXT NOT NULL,     -- verbatim, even when rejected
+    domain TEXT,                        -- candidate's domain (matches opinions.domain)
+    supporting_chunks TEXT DEFAULT '[]',    -- JSON array, as evaluated this run
+    contradicting_chunks TEXT DEFAULT '[]', -- JSON array, as evaluated this run
+    gate_results TEXT,                  -- JSON: reject reason + per-gate required/measured/pass
+    rationale TEXT,                     -- model's stated reasoning, if provided
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_belief_journal_run ON belief_journal(reflect_run_id);
+CREATE INDEX IF NOT EXISTS idx_belief_journal_opinion ON belief_journal(opinion_id) WHERE opinion_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_belief_journal_action ON belief_journal(action);
+
+-- =============================================================================
 -- EXTRACTION QUEUE
 -- Deferred entity extraction for the fast-write/slow-extract pattern
 -- =============================================================================

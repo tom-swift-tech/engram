@@ -72,6 +72,43 @@ export interface ReflectConfig {
    * the observation/opinion store grows.
    */
   existingContextCharBudget?: number;
+  /**
+   * Evidence thresholds a NEW opinion must clear before it is formed
+   * (issue #38). Applies to `direction: 'new'` candidates only —
+   * reinforcement/challenge of an existing opinion is evidence accumulation
+   * on an already-formed belief and stays ungated. Omit (the default) to
+   * gate nothing — byte-identical to pre-existing behaviour.
+   *
+   * A candidate below threshold is NOT formed; it is journaled in
+   * `belief_journal` as `rejected` (reason `insufficient_evidence`) with
+   * per-gate measurements, and its evidence is remembered: when a later
+   * cycle re-derives the same belief (same domain, fuzzy-matched), the
+   * prior rejection's evidence counts toward the gates — so a belief whose
+   * evidence accumulates one chunk per batch is not permanently starved by
+   * per-batch evaluation.
+   */
+  opinionGates?: OpinionGates;
+}
+
+/**
+ * Evidence thresholds for forming a NEW opinion (issue #38). Each gate is
+ * measured over the candidate's *verified* evidence (cited chunk ids that
+ * actually exist and are active), unioned with the evidence of any prior
+ * rejected journaling of the same belief.
+ */
+export interface OpinionGates {
+  /** Minimum number of verified supporting evidence chunks. */
+  minEvidenceCount?: number;
+  /**
+   * Evidence must span at least this many distinct calendar days, measured
+   * on `date(COALESCE(event_time, created_at))` per chunk.
+   */
+  minDistinctDays?: number;
+  /**
+   * Evidence must span at least this many distinct `source` values.
+   * Chunks with a NULL source collectively count as ONE source.
+   */
+  minDistinctSources?: number;
 }
 
 interface Chunk {
@@ -115,6 +152,13 @@ export interface ReflectResult {
   opinionsFormed: number;
   opinionsReinforced: number;
   opinionsChallenged: number;
+  /**
+   * NEW-opinion candidates rejected by {@link ReflectConfig.opinionGates}
+   * (journaled as `rejected` in `belief_journal`; always 0 when no gates are
+   * configured). Not persisted as a reflect_log column — the journal rows,
+   * keyed by this run's logId, are the per-run record.
+   */
+  opinionsRejected: number;
   status: 'completed' | 'failed' | 'partial';
   durationMs: number;
   error?: string;
@@ -156,6 +200,8 @@ export interface CatchUpResult {
   opinionsFormed: number;
   opinionsReinforced: number;
   opinionsChallenged: number;
+  /** NEW-opinion candidates rejected by opinionGates across the pass (see {@link ReflectResult.opinionsRejected}). */
+  opinionsRejected: number;
   /** Unreflected durable world/experience chunks still outstanding after the pass. */
   remainingBacklog: number;
   /**
@@ -187,6 +233,8 @@ interface LLMReflectOutput {
     domain: string;
     evidence_chunk_ids: string[];
     entity_names: string[];
+    /** One-sentence stated reasoning, journaled per belief (issue #38). Optional — older prompts/models may omit it. */
+    rationale?: string;
   }>;
   observation_refreshes: Array<{
     existing_observation_id: string;
@@ -334,6 +382,7 @@ Analyze the unreflected memories and produce:
    - "new": Form a new belief when evidence suggests a preference, pattern, or approach. Set initial confidence between 0.3-0.7 depending on evidence strength. Apply the Durability Rule above — a belief about transient state is not a durable opinion.
    - "reinforce": Increase confidence in an existing opinion when new evidence supports it. Provide a positive confidence_delta (max +0.15 per cycle).
    - "challenge": Decrease confidence when evidence contradicts an existing opinion. Provide a negative confidence_delta (max -0.15 per cycle).
+   - For every opinion update, include a one-sentence "rationale" stating why the cited evidence justifies it. This is recorded in an audit journal.
 
 ## Response Format
 
@@ -356,7 +405,8 @@ Respond with ONLY a JSON object (no markdown, no backticks, no preamble):
       "confidence_delta": 0.1,
       "domain": "same domain list as observations",
       "evidence_chunk_ids": ["chunk-id"],
-      "entity_names": ["EntityName"]
+      "entity_names": ["EntityName"],
+      "rationale": "One sentence: why this evidence justifies the update"
     }
   ],
   "observation_refreshes": [
@@ -665,6 +715,153 @@ function findMatchingObservation(
 }
 
 // =============================================================================
+// Opinion Formation Gates (issue #38)
+// =============================================================================
+
+interface GateCheck {
+  required: number;
+  measured: number;
+  pass: boolean;
+}
+
+interface GateEvaluation {
+  pass: boolean;
+  /** Per-gate measurements, keyed min_evidence_count / min_distinct_days / min_distinct_sources. */
+  gates: Record<string, GateCheck>;
+  /** Verified evidence ids (exist + active), unioned with any merged prior rejection's. */
+  evidenceIds: string[];
+}
+
+/** How many recent rejected journal rows to scan for a same-belief match. */
+const REJECTED_LOOKBACK_ROWS = 200;
+
+/**
+ * Find the most recent `rejected` journal row for the same belief (same
+ * domain, exact-or-fuzzy match — the same 0.85 similarity bar as opinion
+ * dedup), so its evidence can count toward this cycle's gates. Only
+ * gate rejections (`reason: insufficient_evidence`) participate;
+ * `no_matching_opinion` rows are dropped reinforce/challenge verdicts, not
+ * formation candidates.
+ */
+function findPriorRejection(
+  db: Database.Database,
+  belief: string,
+  domain: string,
+): { id: string; supportingChunks: string[] } | null {
+  const rows = db
+    .prepare(
+      `
+    SELECT id, candidate_belief, supporting_chunks, gate_results
+    FROM belief_journal
+    WHERE action = 'rejected' AND domain = ?
+    ORDER BY created_at DESC, rowid DESC
+    LIMIT ?
+  `,
+    )
+    .all(domain, REJECTED_LOOKBACK_ROWS) as Array<{
+    id: string;
+    candidate_belief: string;
+    supporting_chunks: string | null;
+    gate_results: string | null;
+  }>;
+
+  for (const row of rows) {
+    let reason: unknown;
+    try {
+      reason = JSON.parse(row.gate_results || '{}').reason;
+    } catch {
+      continue; // corrupt gate_results — skip rather than mis-merge
+    }
+    if (reason !== 'insufficient_evidence') continue;
+
+    const exact =
+      normalizeBelief(row.candidate_belief) === normalizeBelief(belief);
+    if (!exact && beliefSimilarity(row.candidate_belief, belief) < 0.85)
+      continue;
+
+    let supportingChunks: string[] = [];
+    try {
+      const parsed = JSON.parse(row.supporting_chunks || '[]');
+      if (Array.isArray(parsed)) supportingChunks = parsed.filter(Boolean);
+    } catch {
+      // unreadable evidence list — still a match, just contributes nothing
+    }
+    return { id: row.id, supportingChunks };
+  }
+  return null;
+}
+
+/**
+ * Evaluate formation gates over the union of the candidate's cited evidence
+ * and any prior rejection's. Only chunk ids that actually exist (and are
+ * active) count — the LLM can cite ids that don't; hallucinated evidence
+ * must not pass a gate.
+ */
+function evaluateOpinionGates(
+  db: Database.Database,
+  gates: OpinionGates,
+  candidateEvidenceIds: string[],
+  priorEvidenceIds: string[],
+): GateEvaluation {
+  const unionIds = [
+    ...new Set([...candidateEvidenceIds, ...priorEvidenceIds]),
+  ].filter(Boolean);
+
+  let rows: Array<{ id: string; source: string | null; day: string }> = [];
+  if (unionIds.length > 0) {
+    const placeholders = unionIds.map(() => '?').join(',');
+    rows = db
+      .prepare(
+        `SELECT id, source, date(COALESCE(event_time, created_at)) AS day
+         FROM chunks
+         WHERE id IN (${placeholders}) AND is_active = TRUE`,
+      )
+      .all(...unionIds) as typeof rows;
+  }
+
+  const evidenceIds = rows.map((r) => r.id);
+  const distinctDays = new Set(rows.map((r) => r.day)).size;
+  // NULL sources collectively bucket as one "(none)" source.
+  const distinctSources = new Set(rows.map((r) => r.source ?? '(none)')).size;
+
+  const checks: Record<string, GateCheck> = {};
+  if (gates.minEvidenceCount !== undefined) {
+    checks['min_evidence_count'] = {
+      required: gates.minEvidenceCount,
+      measured: evidenceIds.length,
+      pass: evidenceIds.length >= gates.minEvidenceCount,
+    };
+  }
+  if (gates.minDistinctDays !== undefined) {
+    checks['min_distinct_days'] = {
+      required: gates.minDistinctDays,
+      measured: distinctDays,
+      pass: distinctDays >= gates.minDistinctDays,
+    };
+  }
+  if (gates.minDistinctSources !== undefined) {
+    checks['min_distinct_sources'] = {
+      required: gates.minDistinctSources,
+      measured: distinctSources,
+      pass: distinctSources >= gates.minDistinctSources,
+    };
+  }
+
+  return {
+    pass: Object.values(checks).every((c) => c.pass),
+    gates: checks,
+    evidenceIds,
+  };
+}
+
+/** Clamp an LLM-stated rationale to a bounded, trimmed string (or null). */
+function clampRationale(rationale: unknown): string | null {
+  if (typeof rationale !== 'string') return null;
+  const trimmed = rationale.trim();
+  return trimmed ? trimmed.slice(0, 1000) : null;
+}
+
+// =============================================================================
 // Core Reflect Operation
 // =============================================================================
 
@@ -677,6 +874,7 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
     minFactsThreshold = 5,
     existingContextCharBudget = DEFAULT_EXISTING_CONTEXT_CHAR_BUDGET,
     sourceTypes,
+    opinionGates,
   } = config;
 
   // No default model. Use an injected generator, or build an Ollama generator
@@ -750,6 +948,7 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
     opinionsFormed: 0,
     opinionsReinforced: 0,
     opinionsChallenged: 0,
+    opinionsRejected: 0,
     status: 'completed',
     durationMs: 0,
   };
@@ -847,6 +1046,14 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
     // Tracked outside the transaction closure so the post-cycle status/
     // batch-hint logic (below) can see it once the transaction commits.
     let insightsProduced = 0;
+
+    // Reinforce/challenge verdicts that matched no existing opinion. They
+    // produce no insight, but they prove the model parsed the prompt and
+    // responded coherently — without counting them as engagement, a cycle
+    // whose only output is unmatched verdicts would be misread as a
+    // context-size failure: facts left unreflected, batch shrunk, and the
+    // same verdicts re-journaled as duplicates every retry forever.
+    let unmatchedVerdicts = 0;
 
     // 4. Apply results in a transaction
     const applyTransaction = db.transaction(() => {
@@ -959,6 +1166,39 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
         WHERE id = ?
       `);
 
+      // Per-belief audit trail (issue #38): one journal row per opinion
+      // decision this run made — or declined to make. Append-only, keyed to
+      // this run's reflect_log id.
+      const insertJournal = db.prepare(`
+        INSERT INTO belief_journal (id, reflect_run_id, opinion_id, action, candidate_belief, domain,
+                                    supporting_chunks, contradicting_chunks, gate_results, rationale, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      const journal = (
+        action: 'formed' | 'reinforced' | 'challenged' | 'rejected',
+        opinionId: string | null,
+        opUpdate: LLMReflectOutput['opinion_updates'][number],
+        extras: {
+          supporting?: string[];
+          contradicting?: string[];
+          gateResults?: Record<string, unknown> | null;
+        } = {},
+      ): void => {
+        insertJournal.run(
+          `bj-${randomUUID().substring(0, 8)}`,
+          logId,
+          opinionId,
+          action,
+          opUpdate.belief,
+          opUpdate.domain ?? null,
+          JSON.stringify(extras.supporting ?? []),
+          JSON.stringify(extras.contradicting ?? []),
+          extras.gateResults ? JSON.stringify(extras.gateResults) : null,
+          clampRationale(opUpdate.rationale),
+          now,
+        );
+      };
+
       // Shared by the 'reinforce' branch and by a 'new' verdict that turns
       // out to match an existing belief (see below) — same clamp,
       // self-reinforcement dampening, and supporting_chunks merge either way.
@@ -1004,6 +1244,9 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
           existing.id,
         );
         result.opinionsReinforced++;
+        journal('reinforced', existing.id, opUpdate, {
+          supporting: opUpdate.evidence_chunk_ids.filter(Boolean),
+        });
       };
 
       for (const opUpdate of output.opinion_updates) {
@@ -1023,6 +1266,44 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
             continue;
           }
 
+          // Formation gates (issue #38): a fresh belief must clear the
+          // configured evidence thresholds, measured over verified evidence
+          // unioned with any prior rejection of the same belief. When no
+          // gates are configured, formation is byte-identical to before.
+          let supportingIds = opUpdate.evidence_chunk_ids;
+          let gateResults: Record<string, unknown> | null = null;
+          if (opinionGates) {
+            const prior = findPriorRejection(
+              db,
+              opUpdate.belief,
+              opUpdate.domain,
+            );
+            const evaluation = evaluateOpinionGates(
+              db,
+              opinionGates,
+              opUpdate.evidence_chunk_ids,
+              prior?.supportingChunks ?? [],
+            );
+            gateResults = {
+              gates: evaluation.gates,
+              merged_prior_rejection: prior?.id ?? null,
+            };
+            if (!evaluation.pass) {
+              journal('rejected', null, opUpdate, {
+                supporting: evaluation.evidenceIds,
+                gateResults: {
+                  reason: 'insufficient_evidence',
+                  ...gateResults,
+                },
+              });
+              result.opinionsRejected++;
+              continue;
+            }
+            // Passed — the opinion carries the verified union, so evidence
+            // merged forward from a prior rejection isn't lost.
+            supportingIds = evaluation.evidenceIds;
+          }
+
           const initialConfidence = Math.min(
             0.7,
             Math.max(0.3, 0.5 + opUpdate.confidence_delta),
@@ -1032,18 +1313,23 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
             opUpdate.entity_names,
             opUpdate.belief,
           );
+          const opinionId = `op-${randomUUID().substring(0, 8)}`;
           insertOpinion.run(
-            `op-${randomUUID().substring(0, 8)}`,
+            opinionId,
             opUpdate.belief,
             initialConfidence,
-            JSON.stringify(opUpdate.evidence_chunk_ids),
+            JSON.stringify(supportingIds),
             opUpdate.domain,
             JSON.stringify(opEntityIds),
             now,
-            opUpdate.evidence_chunk_ids.length,
+            supportingIds.length,
             nodeOrigin,
           );
           result.opinionsFormed++;
+          journal('formed', opinionId, opUpdate, {
+            supporting: supportingIds.filter(Boolean),
+            gateResults,
+          });
         } else if (opUpdate.direction === 'reinforce') {
           const existing = findMatchingOpinion(
             existingOps,
@@ -1052,6 +1338,13 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
           );
           if (existing) {
             reinforceExisting(existing, opUpdate);
+          } else {
+            // Previously a silent drop — the audit gap #38 exists to close.
+            journal('rejected', null, opUpdate, {
+              supporting: opUpdate.evidence_chunk_ids.filter(Boolean),
+              gateResults: { reason: 'no_matching_opinion' },
+            });
+            unmatchedVerdicts++;
           }
         } else if (opUpdate.direction === 'challenge') {
           const existing = findMatchingOpinion(
@@ -1078,6 +1371,16 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
               existing.id,
             );
             result.opinionsChallenged++;
+            journal('challenged', existing.id, opUpdate, {
+              contradicting: opUpdate.evidence_chunk_ids.filter(Boolean),
+            });
+          } else {
+            // Previously a silent drop — the audit gap #38 exists to close.
+            journal('rejected', null, opUpdate, {
+              contradicting: opUpdate.evidence_chunk_ids.filter(Boolean),
+              gateResults: { reason: 'no_matching_opinion' },
+            });
+            unmatchedVerdicts++;
           }
         }
       }
@@ -1085,6 +1388,10 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
       // -- Mark facts as reflected only if insights were produced --
       // If parse failed (empty arrays), leave facts unreflected so the next
       // reflect cycle can retry them instead of silently consuming them.
+      // A gate-rejected candidate counts as engagement here: the model DID
+      // analyze the batch and journal rows record the outcome — leaving the
+      // facts unreflected would re-analyze (and re-reject) the same batch
+      // every cycle forever.
       insightsProduced =
         result.observationsCreated +
         result.observationsUpdated +
@@ -1092,7 +1399,7 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
         result.opinionsReinforced +
         result.opinionsChallenged;
 
-      if (insightsProduced > 0) {
+      if (insightsProduced + result.opinionsRejected + unmatchedVerdicts > 0) {
         const markReflected = db.prepare(`
           UPDATE chunks SET reflected_at = ? WHERE id = ?
         `);
@@ -1121,8 +1428,15 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
     // A cycle with few unreflected chunks (below minFactsThreshold) never
     // reaches this branch at all (handled by the early return above) — that
     // case is genuinely "not enough data yet," not a failure.
+    // A cycle whose only output is gate rejections or unmatched verdicts is
+    // NOT a silent failure: the model parsed the prompt fine and produced
+    // candidates — the gates (or the missing-opinion match) declined them.
+    // Shrinking the batch would throttle throughput for a non-size problem.
     const wasSilentFailure =
-      insightsProduced === 0 && unreflected.length >= minFactsThreshold;
+      insightsProduced === 0 &&
+      result.opinionsRejected === 0 &&
+      unmatchedVerdicts === 0 &&
+      unreflected.length >= minFactsThreshold;
 
     if (wasSilentFailure) {
       const shrunk = Math.max(
@@ -1136,10 +1450,14 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
         `[Reflect] Cycle produced 0 insights from ${unreflected.length} unreflected chunks — ` +
           `likely a parse/context-size failure (see prior log). Shrinking next batch size to ${shrunk}.`,
       );
-    } else if (insightsProduced > 0) {
-      // A cycle that actually produced insights is evidence the current
-      // batch size works — clear any prior shrink hint so future cycles
-      // go back to the configured/default size.
+    } else if (
+      insightsProduced + result.opinionsRejected + unmatchedVerdicts >
+      0
+    ) {
+      // A cycle that actually produced insights (or engaged the gates /
+      // emitted verdicts) is evidence the current batch size works — clear
+      // any prior shrink hint so future cycles go back to the
+      // configured/default size.
       db.prepare(
         `DELETE FROM bank_config WHERE key = 'reflect_batch_hint'`,
       ).run();
@@ -1261,6 +1579,7 @@ export async function reflectCatchUp(
     opinionsFormed: 0,
     opinionsReinforced: 0,
     opinionsChallenged: 0,
+    opinionsRejected: 0,
     remainingBacklog: 0,
     status: 'drained',
     durationMs: 0,
@@ -1304,6 +1623,7 @@ export async function reflectCatchUp(
       result.opinionsFormed += batch.opinionsFormed;
       result.opinionsReinforced += batch.opinionsReinforced;
       result.opinionsChallenged += batch.opinionsChallenged;
+      result.opinionsRejected += batch.opinionsRejected;
 
       if (batch.status === 'failed') {
         result.status = 'failed';
@@ -1340,6 +1660,118 @@ export async function reflectCatchUp(
 
   result.durationMs = Date.now() - startTime;
   return result;
+}
+
+// =============================================================================
+// Belief Journal read surface (issue #38) — library-only, no MCP/CLI tool
+// =============================================================================
+
+export type BeliefJournalAction =
+  | 'formed'
+  | 'reinforced'
+  | 'challenged'
+  | 'weakened'
+  | 'rejected';
+
+/**
+ * One row of the per-belief audit trail. `gateResults` carries the reject
+ * reason (`insufficient_evidence` / `no_matching_opinion`) and, when gates
+ * ran, per-gate required/measured/pass plus any merged prior rejection id.
+ * Journal content originates from LLM analysis of untrusted memory — treat
+ * `candidateBelief`/`rationale` as data, not instructions.
+ */
+export interface BeliefJournalEntry {
+  id: string;
+  reflectRunId: string | null;
+  /** NULL for rejected candidates — no opinion row was created. */
+  opinionId: string | null;
+  action: BeliefJournalAction;
+  candidateBelief: string;
+  domain: string | null;
+  supportingChunks: string[];
+  contradictingChunks: string[];
+  gateResults: Record<string, unknown> | null;
+  rationale: string | null;
+  createdAt: string;
+}
+
+export interface BeliefJournalQuery {
+  /** Rows for one opinion's full lifecycle. */
+  opinionId?: string;
+  /** Rows for one reflect run (a ReflectResult.logId). */
+  reflectRunId?: string;
+  action?: BeliefJournalAction;
+  /** Max rows returned, newest first (default 50, clamped to [1, 1000]). */
+  limit?: number;
+}
+
+function parseIdArray(raw: string | null): string[] {
+  try {
+    const parsed = JSON.parse(raw || '[]');
+    return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Query the belief journal, newest rows first. Projection-only — no LLM call. */
+export function getBeliefJournal(
+  db: Database.Database,
+  query: BeliefJournalQuery = {},
+): BeliefJournalEntry[] {
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (query.opinionId) {
+    where.push('opinion_id = ?');
+    params.push(query.opinionId);
+  }
+  if (query.reflectRunId) {
+    where.push('reflect_run_id = ?');
+    params.push(query.reflectRunId);
+  }
+  if (query.action) {
+    where.push('action = ?');
+    params.push(query.action);
+  }
+  const limit = Math.max(1, Math.min(1000, Math.floor(query.limit ?? 50)));
+
+  const rows = db
+    .prepare(
+      `
+    SELECT id, reflect_run_id, opinion_id, action, candidate_belief, domain,
+           supporting_chunks, contradicting_chunks, gate_results, rationale, created_at
+    FROM belief_journal
+    ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''}
+    ORDER BY created_at DESC, rowid DESC
+    LIMIT ?
+  `,
+    )
+    .all(...params, limit) as any[];
+
+  return rows.map((r) => {
+    let gateResults: Record<string, unknown> | null = null;
+    if (r.gate_results) {
+      try {
+        const parsed = JSON.parse(r.gate_results);
+        if (parsed && typeof parsed === 'object') gateResults = parsed;
+      } catch {
+        // corrupt gate_results — surface the row, not the crash
+      }
+    }
+    return {
+      id: r.id,
+      reflectRunId: r.reflect_run_id,
+      opinionId: r.opinion_id,
+      action: r.action,
+      candidateBelief: r.candidate_belief,
+      domain: r.domain,
+      supportingChunks: parseIdArray(r.supporting_chunks),
+      contradictingChunks: parseIdArray(r.contradicting_chunks),
+      gateResults,
+      rationale: r.rationale,
+      createdAt: r.created_at,
+    };
+  });
 }
 
 // =============================================================================
