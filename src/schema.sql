@@ -361,6 +361,71 @@ CREATE INDEX IF NOT EXISTS idx_belief_journal_opinion ON belief_journal(opinion_
 CREATE INDEX IF NOT EXISTS idx_belief_journal_action ON belief_journal(action);
 
 -- =============================================================================
+-- SUGGESTIONS (issue #39)
+-- Procedural suggestions: a third insight kind alongside observations/
+-- opinions. "This recurring pattern (repeated corrections / repeated tool
+-- friction / repeated workflows) would benefit from being codified as a
+-- skill/rule/workflow/config." Formed by the opt-in suggestion pass in
+-- suggest.ts. Deliberately a SEPARATE store from opinions/observations —
+-- suggestions never enter recall() or groundSubagent().
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS suggestions (
+    id TEXT PRIMARY KEY,                 -- 'sug-<8hex>'
+    kind TEXT CHECK (kind IN ('skill', 'rule', 'workflow', 'config')),
+    summary TEXT NOT NULL,
+    rationale TEXT NOT NULL,
+    embedding BLOB,                      -- summary embedding, same LE-f32 space as chunks; NULL when formed without embedder
+    supporting_chunks TEXT DEFAULT '[]',
+    evidence_count INTEGER DEFAULT 0,
+    domain TEXT,
+    node_origin TEXT,
+    status TEXT NOT NULL DEFAULT 'proposed'
+        CHECK (status IN ('proposed', 'accepted', 'dismissed', 'implemented')),
+    status_reason TEXT,
+    formed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_reinforced TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_suggestions_status   ON suggestions(status);
+CREATE INDEX IF NOT EXISTS idx_suggestions_kind     ON suggestions(kind);
+CREATE INDEX IF NOT EXISTS idx_suggestions_domain   ON suggestions(domain);
+CREATE INDEX IF NOT EXISTS idx_suggestions_evidence ON suggestions(evidence_count DESC);
+
+-- =============================================================================
+-- SUGGESTION JOURNAL (issue #39)
+-- Per-suggestion, append-only audit trail — mirrors belief_journal's shape
+-- but with its own action vocabulary (SQLite CHECK constraints can't be
+-- widened in place, so this is a new table rather than a reuse of
+-- belief_journal).
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS suggestion_journal (
+    id TEXT PRIMARY KEY,                 -- 'sj-<8hex>'
+    reflect_run_id TEXT REFERENCES reflect_log(id),
+    suggestion_id TEXT,                  -- NULL for rejected candidates
+    action TEXT NOT NULL
+        CHECK (action IN ('proposed', 'reinforced', 'rejected', 'reopened', 'resolved')),
+    candidate_summary TEXT NOT NULL,
+    kind TEXT,
+    domain TEXT,
+    supporting_chunks TEXT DEFAULT '[]',
+    gate_results TEXT,                   -- JSON
+    rationale TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_suggestion_journal_run        ON suggestion_journal(reflect_run_id);
+CREATE INDEX IF NOT EXISTS idx_suggestion_journal_suggestion ON suggestion_journal(suggestion_id) WHERE suggestion_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_suggestion_journal_action     ON suggestion_journal(action);
+
+-- Correction-signal lookup for the suggestion pass's scan (issue #39):
+-- references only original chunks columns, so — unlike the scope/node_origin
+-- indexes above — this is safe to create unconditionally on a pre-existing
+-- .engram file.
+CREATE INDEX IF NOT EXISTS idx_chunks_correction_events
+    ON chunks(updated_at) WHERE superseded_by IS NOT NULL OR is_active = FALSE;
+
+-- =============================================================================
 -- EXTRACTION QUEUE
 -- Deferred entity extraction for the fast-write/slow-extract pattern
 -- =============================================================================
