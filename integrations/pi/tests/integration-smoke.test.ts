@@ -134,9 +134,88 @@ class TestEmbedder {
   }
 }
 
+// The extension reads ENGRAM_PI_DB_PATH (and other ENGRAM_PI_* knobs) from
+// process.env — including from the ambient shell environment (issue #45). A
+// deployment that exports ENGRAM_PI_DB_PATH so the extension always opens the
+// same persistent store will have it inherited into any shell that runs this
+// suite. Without isolation, getEngram() resolves that path instead of the
+// temp projectDir below, and tests that call remember/consolidation/
+// session_shutdown would write to a real store.
+const ENGRAM_PI_ENV_PREFIX = 'ENGRAM_PI_';
+
+function clearEngramPiEnv(): Record<string, string | undefined> {
+  const saved: Record<string, string | undefined> = {};
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith(ENGRAM_PI_ENV_PREFIX)) {
+      saved[key] = process.env[key];
+      delete process.env[key];
+    }
+  }
+  return saved;
+}
+
+function restoreEngramPiEnv(saved: Record<string, string | undefined>): void {
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith(ENGRAM_PI_ENV_PREFIX)) delete process.env[key];
+  }
+  for (const [key, value] of Object.entries(saved)) {
+    if (value !== undefined) process.env[key] = value;
+  }
+}
+
+// Order-independent unit coverage for the isolation mechanism itself (issue
+// #45), separate from the main describe below so it isn't subject to that
+// block's own beforeEach — this proves clear/restore is correct in general,
+// not just for whatever ENGRAM_PI_* var happens to be exercised elsewhere.
+describe('ENGRAM_PI_* env isolation helpers (issue #45)', () => {
+  const ENGRAM_PI_KEYS = [
+    'ENGRAM_PI_DB_PATH',
+    'ENGRAM_PI_AUTO_RETAIN',
+    'ENGRAM_PI_STARTUP_RECALL',
+  ];
+
+  afterEach(() => {
+    for (const key of ENGRAM_PI_KEYS) delete process.env[key];
+  });
+
+  it('clearEngramPiEnv removes every ENGRAM_PI_* var and returns their prior values', () => {
+    process.env.ENGRAM_PI_DB_PATH = '/some/ambient/store.db';
+    process.env.ENGRAM_PI_AUTO_RETAIN = '0';
+    process.env.OTHER_UNRELATED_VAR = 'untouched';
+
+    const saved = clearEngramPiEnv();
+
+    expect(saved).toEqual({
+      ENGRAM_PI_DB_PATH: '/some/ambient/store.db',
+      ENGRAM_PI_AUTO_RETAIN: '0',
+    });
+    expect(process.env.ENGRAM_PI_DB_PATH).toBeUndefined();
+    expect(process.env.ENGRAM_PI_AUTO_RETAIN).toBeUndefined();
+    // Isolation is scoped to the ENGRAM_PI_ prefix, not a blanket env wipe.
+    expect(process.env.OTHER_UNRELATED_VAR).toBe('untouched');
+
+    delete process.env.OTHER_UNRELATED_VAR;
+  });
+
+  it('restoreEngramPiEnv puts back exactly what was saved, including "was unset"', () => {
+    process.env.ENGRAM_PI_DB_PATH = '/ambient/store.db';
+    const saved = clearEngramPiEnv(); // ENGRAM_PI_STARTUP_RECALL was never set
+
+    // A test sets one mid-run, simulating what an override test does.
+    process.env.ENGRAM_PI_STARTUP_RECALL = '0';
+
+    restoreEngramPiEnv(saved);
+
+    expect(process.env.ENGRAM_PI_DB_PATH).toBe('/ambient/store.db');
+    // Restored to "unset", not left at the mid-run test's value.
+    expect(process.env.ENGRAM_PI_STARTUP_RECALL).toBeUndefined();
+  });
+});
+
 describe('engram-pi integration smoke (built dist + real Engram)', () => {
   let projectDir: string;
   let originalCwd: string;
+  let savedEnv: Record<string, string | undefined>;
   let captured: Captured;
   let factory: (pi: unknown) => void;
   let setEngineFactoryForTesting: (
@@ -172,6 +251,7 @@ describe('engram-pi integration smoke (built dist + real Engram)', () => {
   });
 
   beforeEach(() => {
+    savedEnv = clearEngramPiEnv();
     originalCwd = process.cwd();
     projectDir = mkdtempSync(join(tmpdir(), 'engram-pi-smoke-'));
     process.chdir(projectDir);
@@ -205,6 +285,7 @@ describe('engram-pi integration smoke (built dist + real Engram)', () => {
     } catch {
       // Best-effort cleanup; tmp dir cleaner will get it eventually.
     }
+    restoreEngramPiEnv(savedEnv);
   });
 
   afterAll(() => {
@@ -273,11 +354,26 @@ describe('engram-pi integration smoke (built dist + real Engram)', () => {
       // Close the Engram instance before removing its directory — on Windows
       // an open SQLite handle blocks deletion (the outer afterEach does the
       // same shutdown, but that runs too late to unblock this cleanup).
+      // Restoring ENGRAM_PI_DB_PATH itself is the outer beforeEach/afterEach's
+      // job (issue #45) — not repeated here, so it can't drift out of sync.
       const shutdown = captured.handlers.get('session_shutdown');
       if (shutdown) await shutdown({}, makeCtx(makeFakeUi()));
-      delete process.env.ENGRAM_PI_DB_PATH;
       rmSync(overrideDir, { recursive: true, force: true });
     }
+  });
+
+  it('does not inherit ENGRAM_PI_DB_PATH left behind by the previous test (issue #45)', async () => {
+    // Regression for the exact failure mode in issue #45: a value set in one
+    // test (or, in a real shell, exported ambiently before the process ever
+    // started) must not survive into the next test's getEngram() resolution.
+    // The previous test exercises the override path; if beforeEach's
+    // clearEngramPiEnv() were missing or buggy, that value — or a real
+    // ambient one — would still be set here and this test would silently
+    // write to it instead of projectDir.
+    expect(process.env.ENGRAM_PI_DB_PATH).toBeUndefined();
+
+    await captured.commands.get('memory')!.handler('', makeCtx(makeFakeUi()));
+    expect(existsSync(join(projectDir, '.engram', 'pi.db'))).toBe(true);
   });
 
   it('fresh session (reason: "new"): before_agent_start injects starting context from prior memory', async () => {
