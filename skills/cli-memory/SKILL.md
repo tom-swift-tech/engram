@@ -33,6 +33,8 @@ whether and how to call it** — not a man page.
 - `reflect` / `process-extractions` are background maintenance (need an LLM).
   Run occasionally, not per turn. `queue-stats` tells you if the graph is behind;
   `requeue-failed` re-drives items stranded by an outage (see its section below).
+  `reflect --suggest` also proposes procedural suggestions — recurring
+  patterns worth codifying — readable via `suggestions` (see its section below).
 
 ## Setup
 
@@ -49,7 +51,7 @@ export ENGRAM_DB=./agent.engram
 | Code | Meaning |
 |------|---------|
 | `0`  | Success |
-| `2`  | Not found — `forget`/`supersede` target chunk does not exist |
+| `2`  | Not found — `forget`/`supersede` target chunk, `session --action` id, `context-promote` ref, or `resolve-suggestion` id does not exist |
 | `1`  | Error — bad/missing argument, no DB path, or operation failure |
 
 `--json` puts the raw method return on **stdout** and nothing else; all
@@ -229,9 +231,17 @@ it does not judge whether a statement is consistent with a belief (deferred).
 
 ```bash
 engram reflect --json
+engram reflect --suggest --json    # also run the procedural-suggestion pass
 ```
 
-`--json` shape: `{ "logId": "…", "factsProcessed": 8, "observationsCreated": 2, "observationsUpdated": 1, "opinionsFormed": 1, "opinionsReinforced": 2, "opinionsChallenged": 0, "status": "completed", "durationMs": 1430 }`.
+`--json` shape: `{ "logId": "…", "factsProcessed": 8, "observationsCreated": 2, "observationsUpdated": 1, "opinionsFormed": 1, "opinionsReinforced": 2, "opinionsChallenged": 0, "suggestionsProposed": 0, "suggestionsReinforced": 0, "suggestionsRejected": 0, "status": "completed", "durationMs": 1430 }`.
+
+`--suggest` also scans for recurring corrections/tool-friction/workflow
+patterns worth codifying as a skill/rule/workflow/config — off by default
+(the counters above are always present but stay `0` without the flag).
+Formation gates default **on** (3+ evidence items across 2+ distinct days) so
+a zero-suggestion cycle after `--suggest` is the normal outcome, not a
+failure. See `suggestions` below to read what it proposed.
 
 ### `process-extractions` — build the knowledge graph (needs an LLM)
 
@@ -310,6 +320,47 @@ Moves the artifact into durable memory (survives past its TTL, becomes
 eligible for `reflect`). `--json` shape: `{ "promoted": true }`, or
 **exit 2** with `{ "promoted": false }` (not an error) if `ctx-abc123` doesn't
 resolve to an active task-scoped artifact.
+
+### `suggestions`, `resolve-suggestion` — procedural suggestions from reflection
+
+A **third** insight kind reflection can produce, separate from
+opinions/observations: a recurring pattern (repeated corrections, repeated
+tool friction, a repeated multi-step workflow) worth codifying as a skill,
+rule, workflow, or config change. Only forms when `reflect --suggest` is
+used — see the `reflect` section above. **Suggestions never appear in
+`recall`** — `suggestions` is the only way to read them.
+
+```bash
+engram suggestions --json
+engram suggestions --status proposed --kind rule --json
+```
+
+Options: `--status <proposed|accepted|dismissed|implemented>`,
+`--kind <skill|rule|workflow|config>`, `--domain <tag>`, `--limit <n>`
+(default 20). `--json` shape:
+```json
+{
+  "suggestions": [
+    { "id": "sug-…", "kind": "rule", "summary": "…", "rationale": "…",
+      "supportingChunks": ["chk-…"], "evidenceCount": 3, "domain": "…",
+      "status": "proposed", "statusReason": null, "formedAt": "…",
+      "lastReinforced": null, "updatedAt": "…" }
+  ]
+}
+```
+
+```bash
+engram resolve-suggestion sug-abc123 accepted --json
+engram resolve-suggestion sug-abc123 dismissed --reason "too narrow" --json
+```
+
+Sets the lifecycle status: `accepted` once you've decided to act on it,
+`implemented` once you have, `dismissed` if it's not worth codifying —
+dismissal is remembered, so the same pattern won't be re-proposed unless
+materially new evidence accumulates. Passing `proposed` manually reopens a
+resolved suggestion. `--reason <text>` is optional, recorded on the
+suggestion and its audit journal. **Exit 2** if `suggestionId` doesn't exist.
+`--json` shape: `{ "suggestionId": "sug-abc123", "status": "accepted", "resolved": true }`.
 
 ## Turn loop (typical)
 

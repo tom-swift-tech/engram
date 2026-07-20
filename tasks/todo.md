@@ -55,13 +55,15 @@ after design lands).
       surface), reflect.ts step-0.5 + counters + catch-up aggregation,
       engram.ts wrappers/exports; tests/suggestions.test.ts (1–11, 13).
       Acceptance: full suite green with ZERO edits to existing test files.
-- [ ] Slice 2 (builder): mcp-tools.ts (+2 tools, reflect `suggest` input),
+- [x] Slice 2 (builder): mcp-tools.ts (+2 tools, reflect `suggest` input),
       cli-args.ts/cli.ts (+2 subcommands, --suggest flag), surface-parity
       pin 16, cli/mcp-server test additions, suggestions test 12
-      (recall/grounding isolation).
+      (recall/grounding isolation). Committed feec03f; 630/630 green.
+      Note: resolve-suggestion not-found follows the supersede convention
+      (stderr-only, exit 2, even with --json).
 - [ ] Slice 3 (builder): CLAUDE.md + AGENTS.md together, skills/engram.md,
-      skills/cli-memory/SKILL.md, README if it states the count.
-- [ ] Reviewer pass on consolidated diff
+      skills/cli-memory/SKILL.md, README if it states the count — IN FLIGHT
+- [ ] Reviewer pass on slices 1+2 diff (255d602..feec03f) — IN FLIGHT
 - [ ] Verification pipeline: build → tsc --noEmit → eslint → format:check →
       full test suite (root + Pi vs rebuilt dist)
 - [ ] PR, CI green, merge
