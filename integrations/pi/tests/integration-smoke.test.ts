@@ -168,14 +168,26 @@ function restoreEngramPiEnv(saved: Record<string, string | undefined>): void {
 // block's own beforeEach — this proves clear/restore is correct in general,
 // not just for whatever ENGRAM_PI_* var happens to be exercised elsewhere.
 describe('ENGRAM_PI_* env isolation helpers (issue #45)', () => {
-  const ENGRAM_PI_KEYS = [
-    'ENGRAM_PI_DB_PATH',
-    'ENGRAM_PI_AUTO_RETAIN',
-    'ENGRAM_PI_STARTUP_RECALL',
-  ];
+  // These tests assert on the EXACT contents of what clearEngramPiEnv()
+  // returns, so they need a known-empty slate: on a machine that really
+  // exports ENGRAM_PI_* (the deployment #45 is about), any ambient var would
+  // otherwise show up in `saved` and fail the deep-equality assertions —
+  // the very bug class this block exists to prove is fixed.
+  //
+  // Restoring via the saved map rather than deleting a hardcoded key list
+  // matters for the same reason: the list can't know which ENGRAM_PI_* vars
+  // a given machine sets, and clearEngramPiEnv() removes ALL of them, so a
+  // fixed-list teardown would leave the operator's real environment stripped
+  // for the remainder of the process.
+  let ambientEnv: Record<string, string | undefined>;
+
+  beforeEach(() => {
+    ambientEnv = clearEngramPiEnv();
+  });
 
   afterEach(() => {
-    for (const key of ENGRAM_PI_KEYS) delete process.env[key];
+    clearEngramPiEnv();
+    restoreEngramPiEnv(ambientEnv);
   });
 
   it('clearEngramPiEnv removes every ENGRAM_PI_* var and returns their prior values', () => {
