@@ -21,6 +21,7 @@ import type {
   TaskScope,
   TokenBudget,
 } from './context-store.js';
+import type { SuggestionKind, SuggestionStatus } from './suggest.js';
 
 // =============================================================================
 // Tool Schemas (JSON Schema — MCP spec compliant)
@@ -169,10 +170,16 @@ export const ENGRAM_TOOLS = [
   {
     name: 'engram_reflect' as const,
     description:
-      'Run a reflection cycle: processes unreflected memories through the LLM to synthesize observations and update opinions. Requires Ollama. Typically run on a schedule rather than per-turn.',
+      'Run a reflection cycle: processes unreflected memories through the LLM to synthesize observations and update opinions. Requires Ollama. Typically run on a schedule rather than per-turn. Pass suggest: true to also run the procedural-suggestion pass (recurring corrections/friction/workflows worth codifying as a skill/rule/workflow/config) — formation gates default on (3+ evidence items across 2+ distinct days). Results are read separately via engram_suggestions, not returned inline here.',
     inputSchema: {
       type: 'object' as const,
-      properties: {},
+      properties: {
+        suggest: {
+          type: 'boolean',
+          description:
+            'Also run the procedural-suggestion pass this cycle (default: false). Gates default to 3+ evidence items across 2+ distinct days before a suggestion forms.',
+        },
+      },
     },
   },
 
@@ -475,6 +482,63 @@ export const ENGRAM_TOOLS = [
       required: ['refId'],
     },
   },
+
+  {
+    name: 'engram_suggestions' as const,
+    description:
+      'List procedural suggestions synthesized by reflection (recurring corrections/friction/workflows worth codifying as a skill, rule, workflow, or config). Projection-only read with evidence chunk ids; suggestions never appear in recall(). Sorted by evidence strength then recency.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        status: {
+          type: 'string',
+          enum: ['proposed', 'accepted', 'dismissed', 'implemented'],
+          description: 'Filter by lifecycle status.',
+        },
+        kind: {
+          type: 'string',
+          enum: ['skill', 'rule', 'workflow', 'config'],
+          description: 'Filter by suggestion kind.',
+        },
+        domain: {
+          type: 'string',
+          description: 'Filter by domain tag.',
+        },
+        limit: {
+          type: 'number',
+          description: 'Max rows returned (default 20, clamped to [1, 1000]).',
+        },
+      },
+    },
+  },
+
+  {
+    name: 'engram_resolve_suggestion' as const,
+    description:
+      'Set a suggestion lifecycle status (accepted/dismissed/implemented; "proposed" reopens). Status transitions are always explicit — nothing auto-applies. Returns {suggestionId, status, resolved}; resolved=false when the id is unknown.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        suggestionId: {
+          type: 'string',
+          description:
+            'The suggestion id to resolve (returned by engram_suggestions).',
+        },
+        status: {
+          type: 'string',
+          enum: ['proposed', 'accepted', 'dismissed', 'implemented'],
+          description:
+            'New lifecycle status. "proposed" manually reopens a resolved suggestion.',
+        },
+        reason: {
+          type: 'string',
+          description:
+            'Optional freeform reason recorded on the suggestion and its journal entry.',
+        },
+      },
+      required: ['suggestionId', 'status'],
+    },
+  },
 ] as const;
 
 export type EngramToolName = (typeof ENGRAM_TOOLS)[number]['name'];
@@ -512,6 +576,13 @@ const VALID_SOURCE_TYPES = new Set([
   'agent_generated',
 ]);
 const VALID_STRATEGIES = new Set(['semantic', 'keyword', 'graph', 'temporal']);
+const VALID_SUGGESTION_STATUSES = new Set([
+  'proposed',
+  'accepted',
+  'dismissed',
+  'implemented',
+]);
+const VALID_SUGGESTION_KINDS = new Set(['skill', 'rule', 'workflow', 'config']);
 
 /** Clamp a numeric trust value to [0, 1]. Returns undefined if not a number. */
 function clampTrust(v: unknown): number | undefined {
@@ -644,7 +715,9 @@ export function createEngramToolHandler(engram: Engram) {
         }
 
         case 'engram_reflect': {
-          const result = await engram.reflect();
+          const result = await engram.reflect(
+            input.suggest === true ? { suggestions: {} } : undefined,
+          );
           return {
             content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
           };
@@ -906,6 +979,63 @@ export function createEngramToolHandler(engram: Engram) {
             }
             throw err;
           }
+        }
+
+        case 'engram_suggestions': {
+          const status = VALID_SUGGESTION_STATUSES.has(input.status as string)
+            ? (input.status as SuggestionStatus)
+            : undefined;
+          const kind = VALID_SUGGESTION_KINDS.has(input.kind as string)
+            ? (input.kind as SuggestionKind)
+            : undefined;
+          const result = engram.suggestions({
+            status,
+            kind,
+            domain: typeof input.domain === 'string' ? input.domain : undefined,
+            limit:
+              typeof input.limit === 'number'
+                ? Math.max(1, Math.floor(input.limit))
+                : undefined,
+          });
+          return {
+            content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+          };
+        }
+
+        case 'engram_resolve_suggestion': {
+          const idCheck = requireString(input.suggestionId, 'suggestionId');
+          if ('error' in idCheck) return idCheck.error;
+          if (!VALID_SUGGESTION_STATUSES.has(input.status as string)) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: 'engram tool error: status must be one of proposed|accepted|dismissed|implemented',
+                },
+              ],
+              isError: true,
+            };
+          }
+          const status = input.status as SuggestionStatus;
+          const reason =
+            typeof input.reason === 'string' ? input.reason : undefined;
+          const resolved = engram.resolveSuggestion(
+            idCheck.value,
+            status,
+            reason,
+          );
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  suggestionId: idCheck.value,
+                  status,
+                  resolved,
+                }),
+              },
+            ],
+          };
         }
       }
     } catch (error: unknown) {

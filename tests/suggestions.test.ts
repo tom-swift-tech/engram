@@ -14,6 +14,8 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import { retain } from '../src/retain.js';
 import { reflect, reflectCatchUp } from '../src/reflect.js';
+import { Engram } from '../src/engram.js';
+import { groundSubagent } from '../src/grounding.js';
 import {
   MockEmbedder,
   loadSchema,
@@ -803,6 +805,50 @@ describe('procedural suggestions (issue #39)', () => {
     expect(prompt).toContain('→ FORGOTTEN');
     expect(prompt).not.toContain(taskId);
     expect(prompt).not.toContain(preWatermarkId);
+  });
+
+  it('12. suggestions never surface via recall() or groundSubagent() — structural isolation', async () => {
+    dbPath = tmpDbPath();
+    const corr = await seedCorrections(dbPath, 5, '2026-07-19 10:00:00', true);
+    const distinctToken = 'ZarquonFlangeProtocol';
+    const candidate = newSuggestion(
+      [corr[0].oldId, corr[1].oldId, corr[2].oldId],
+      { summary: `Always apply the ${distinctToken} before deploying` },
+    );
+    const { fetchFn } = mockFetchSequence([suggestResponse([candidate])]);
+    vi.stubGlobal('fetch', fetchFn);
+
+    const result = await reflect({
+      dbPath,
+      reflectModel: 'llama-test',
+      embedder,
+      suggestions: { gates: { minEvidenceCount: 3 } },
+    });
+    expect(result.suggestionsProposed).toBe(1);
+    const [row] = getSuggestionRows(dbPath);
+    expect(row.summary).toContain(distinctToken);
+
+    const engram = await Engram.open(dbPath, { embedder });
+    try {
+      const recallResponse = await engram.recall(distinctToken);
+      for (const r of recallResponse.results) {
+        expect(r.text).not.toContain(distinctToken);
+      }
+      for (const o of recallResponse.observations) {
+        expect(o.summary).not.toContain(distinctToken);
+      }
+
+      const readonly = await engram.readonlyView();
+      const grounding = await groundSubagent(readonly, {
+        task: distinctToken,
+      });
+      expect(grounding.prompt).not.toContain(distinctToken);
+      expect(
+        grounding.facts.every((f) => !f.text.includes(distinctToken)),
+      ).toBe(true);
+    } finally {
+      engram.close();
+    }
   });
 
   it('13. reflectCatchUp sums suggestion counters across multiple inner reflect() batches', async () => {

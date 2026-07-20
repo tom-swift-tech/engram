@@ -40,6 +40,40 @@ class MockEmbedderWithQuery implements EmbeddingProvider {
   }
 }
 
+/**
+ * Insert a suggestion row directly (no reflect machinery needed) via a
+ * second RW handle — mirrors tests/suggestions.test.ts's seeding style.
+ */
+function insertSuggestion(
+  dbPath: string,
+  id: string,
+  overrides: {
+    kind?: string;
+    summary?: string;
+    domain?: string;
+    status?: string;
+    evidenceCount?: number;
+  } = {},
+): void {
+  const raw = new Database(dbPath);
+  raw.pragma('busy_timeout = 5000');
+  raw
+    .prepare(
+      `INSERT INTO suggestions (id, kind, summary, rationale, supporting_chunks, evidence_count, domain, status)
+       VALUES (?, ?, ?, 'rationale text', '[]', ?, ?, ?)`,
+    )
+    .run(
+      id,
+      overrides.kind ?? 'rule',
+      overrides.summary ??
+        'Always double-check deploy paths after a correction',
+      overrides.evidenceCount ?? 4,
+      overrides.domain ?? 'workflow',
+      overrides.status ?? 'proposed',
+    );
+  raw.close();
+}
+
 describe('MCP Server', () => {
   let engram: Engram;
   let client: Client;
@@ -92,9 +126,9 @@ describe('MCP Server', () => {
     cleanupDb(dbPath);
   });
 
-  it('ListTools returns all 14 tool schemas', async () => {
+  it('ListTools returns all 16 tool schemas', async () => {
     const result = await client.listTools();
-    expect(result.tools.length).toBe(14);
+    expect(result.tools.length).toBe(16);
     const names = result.tools.map((t) => t.name);
     expect(names).toContain('engram_retain');
     expect(names).toContain('engram_introspect');
@@ -110,6 +144,8 @@ describe('MCP Server', () => {
     expect(names).toContain('engram_context_commit');
     expect(names).toContain('engram_context_query');
     expect(names).toContain('engram_context_promote');
+    expect(names).toContain('engram_suggestions');
+    expect(names).toContain('engram_resolve_suggestion');
   });
 
   it('engram_retain stores a chunk and returns a chunkId', async () => {
@@ -529,6 +565,72 @@ describe('MCP Server', () => {
     expect(result.isError).toBe(true);
     const content = result.content as Array<{ type: string; text: string }>;
     expect(content[0].text).toContain('query');
+  });
+
+  it('engram_suggestions lists suggestions seeded directly, filtered by status/kind/domain/limit', async () => {
+    insertSuggestion(dbPath, 'sug-mcp-1');
+    insertSuggestion(dbPath, 'sug-mcp-2', {
+      kind: 'skill',
+      summary: 'A dismissed suggestion',
+      domain: 'other',
+      status: 'dismissed',
+      evidenceCount: 2,
+    });
+
+    const result = await client.callTool({
+      name: 'engram_suggestions',
+      arguments: {
+        status: 'proposed',
+        kind: 'rule',
+        domain: 'workflow',
+        limit: 5,
+      },
+    });
+    expect(result.isError).toBeFalsy();
+    const content = result.content as Array<{ type: string; text: string }>;
+    const rows = JSON.parse(content[0].text);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].id).toBe('sug-mcp-1');
+    expect(rows[0].status).toBe('proposed');
+    expect(rows[0].evidenceCount).toBe(4);
+  });
+
+  it('engram_resolve_suggestion resolves a known id and reports resolved:false for an unknown id', async () => {
+    insertSuggestion(dbPath, 'sug-mcp-resolve');
+
+    const known = await client.callTool({
+      name: 'engram_resolve_suggestion',
+      arguments: {
+        suggestionId: 'sug-mcp-resolve',
+        status: 'accepted',
+        reason: 'looks solid',
+      },
+    });
+    expect(known.isError).toBeFalsy();
+    const knownContent = known.content as Array<{
+      type: string;
+      text: string;
+    }>;
+    expect(JSON.parse(knownContent[0].text)).toEqual({
+      suggestionId: 'sug-mcp-resolve',
+      status: 'accepted',
+      resolved: true,
+    });
+
+    const unknown = await client.callTool({
+      name: 'engram_resolve_suggestion',
+      arguments: { suggestionId: 'sug-does-not-exist', status: 'accepted' },
+    });
+    expect(unknown.isError).toBeFalsy();
+    const unknownContent = unknown.content as Array<{
+      type: string;
+      text: string;
+    }>;
+    expect(JSON.parse(unknownContent[0].text)).toEqual({
+      suggestionId: 'sug-does-not-exist',
+      status: 'accepted',
+      resolved: false,
+    });
   });
 });
 

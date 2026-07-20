@@ -854,9 +854,9 @@ export class Engram {
   /**
    * List procedural suggestions (issue #39) — "this recurring pattern would
    * benefit from being codified as a skill/rule/workflow/config." Newest/
-   * most-evidenced first. Projection-only; no LLM call. Library-only surface
-   * — not exposed as an MCP tool (Slice 2). Suggestions never enter recall()
-   * or groundSubagent().
+   * most-evidenced first. Projection-only; no LLM call. Exposed as the
+   * engram_suggestions MCP tool / `suggestions` CLI subcommand. Suggestions
+   * never enter recall() or groundSubagent().
    */
   suggestions(query?: SuggestionQuery): SuggestionView[] {
     return getSuggestions(this.db, query);

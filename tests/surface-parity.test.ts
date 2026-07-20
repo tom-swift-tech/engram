@@ -33,8 +33,8 @@ describe('MCP ↔ CLI surface parity', () => {
   });
 
   it('tool count is pinned — when this fails, update the docs that state the count (CLAUDE.md, AGENTS.md, README, skills/engram.md, skills/cli-memory/SKILL.md) along with CLI_COMMANDS', () => {
-    expect(ENGRAM_TOOLS.length).toBe(14);
-    expect(CLI_COMMANDS.length).toBe(14);
+    expect(ENGRAM_TOOLS.length).toBe(16);
+    expect(CLI_COMMANDS.length).toBe(16);
   });
 
   it('cli.ts dispatch handles every declared command (none fall through to unknown-command)', async () => {
