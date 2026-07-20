@@ -61,12 +61,22 @@ after design lands).
       (recall/grounding isolation). Committed feec03f; 630/630 green.
       Note: resolve-suggestion not-found follows the supersede convention
       (stderr-only, exit 2, even with --json).
-- [ ] Slice 3 (builder): CLAUDE.md + AGENTS.md together, skills/engram.md,
-      skills/cli-memory/SKILL.md, README if it states the count — IN FLIGHT
-- [ ] Reviewer pass on slices 1+2 diff (255d602..feec03f) — IN FLIGHT
-- [ ] Verification pipeline: build → tsc --noEmit → eslint → format:check →
-      full test suite (root + Pi vs rebuilt dist)
-- [ ] PR, CI green, merge
+- [x] Slice 3 (builder): CLAUDE.md + AGENTS.md together (mirror verified:
+      only the two marker lines differ), skills/engram.md,
+      skills/cli-memory/SKILL.md, README (fixed a pre-existing stale
+      "thirteen commands"). Committed 11fc686.
+- [x] Reviewer pass on slices 1+2 diff: all 10 invariants confirmed, zero
+      findings.
+- [x] Verification pipeline: build/tsc/eslint/format:check clean; root
+      630/630, Pi 129/129 vs rebuilt dist.
+- [x] PR #43, CI green (Node 20 + 24), MERGED — main @ cdd7305, issue #39
+      auto-closed, branch deleted.
+
+## DONE — issue #39 v1 shipped (library + MCP/CLI).
+
+Deferred to a later adapter-layer slice (per the issue's own sequencing):
+Pi addendum hint (one-line pending-suggestions counter in
+before_agent_start) and any consumer-side "draft the skill file" flow.
 
 ## Constraints carried in
 
