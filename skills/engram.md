@@ -108,9 +108,10 @@ Requires Ollama. Processes queued chunks to extract entities and relationships.
 
 ```bash
 npx mcporter call engram.engram_reflect
+npx mcporter call engram.engram_reflect suggest=true
 ```
 
-Requires Ollama. Synthesizes observations and forms/updates opinions from accumulated facts.
+Requires Ollama. Synthesizes observations and forms/updates opinions from accumulated facts. Pass `suggest=true` to also run the procedural-suggestion pass this cycle (see `engram_suggestions` below) — omit it (the default) to skip that pass entirely, unchanged from before.
 
 ### Forget a memory — `engram_forget`
 
@@ -162,6 +163,57 @@ npx mcporter call engram.engram_embed text="stored document text" mode=document
 ```
 
 Returns `{"embedding": [...], "dimensions": <n>}` — a vector in the bank's stored embedding space. `mode=query` (the default) applies the search prefix for asymmetric models like nomic-embed-text; `mode=document` matches how `engram_retain` embeds stored text. Most agents never need this directly — it exists for consumers that do their own vector math (it is the bridge `engram-aql` uses for AQL `LIKE`/`PATTERN` vector search). It does not store anything.
+
+### List procedural suggestions — `engram_suggestions`
+
+```bash
+npx mcporter call engram.engram_suggestions
+npx mcporter call engram.engram_suggestions status=proposed kind=rule
+```
+
+Reflection can spot a **third** kind of insight beyond observations/opinions:
+recurring patterns worth codifying — repeated corrections, repeated tool
+friction, or a repeated multi-step workflow. Call this when you want to check
+whether the agent has noticed something worth turning into a skill, rule,
+workflow, or config change (e.g. periodically, or when a user asks "have you
+noticed anything I keep correcting?"). Suggestions **do not appear in
+`engram_recall`** — this is the only way to see them.
+
+| Parameter | Required | Values |
+|-----------|----------|--------|
+| `status` | no | `proposed`, `accepted`, `dismissed`, `implemented` |
+| `kind` | no | `skill`, `rule`, `workflow`, `config` |
+| `domain` | no | Filter by domain tag |
+| `limit` | no | Max rows (default 20, clamped to [1, 1000]) |
+
+Returns a list sorted by evidence strength then recency, each with `id`,
+`kind`, `summary`, `rationale`, `supportingChunks`, `evidenceCount`, `status`,
+`formedAt`, `lastReinforced`. Suggestions only form when `engram_reflect` is
+called with `suggest=true` — a plain reflect cycle skips the pass entirely.
+Formation gates default **on** (3+ evidence items across 2+ distinct days,
+stricter than opinion formation's off-by-default gates) — this is a
+precision-over-recall feature, so an empty list after a reflect cycle is the
+normal/common outcome, not a failure.
+
+### Resolve a suggestion — `engram_resolve_suggestion`
+
+```bash
+npx mcporter call engram.engram_resolve_suggestion suggestionId=sug-xxx status=accepted
+npx mcporter call engram.engram_resolve_suggestion suggestionId=sug-xxx status=dismissed reason="too narrow to codify"
+```
+
+| Parameter | Required | Values |
+|-----------|----------|--------|
+| `suggestionId` | yes | The `sug-…` id from `engram_suggestions` |
+| `status` | yes | `proposed`, `accepted`, `dismissed`, `implemented` |
+| `reason` | no | Freeform note recorded on the suggestion and its audit journal |
+
+Set `accepted` once you've decided to act on it, `implemented` once you have
+(e.g. you wrote the skill/rule it proposed), or `dismissed` if it's not worth
+codifying — dismissal is remembered, so the same pattern won't be re-proposed
+unless materially new evidence accumulates. Passing `proposed` manually
+reopens a resolved suggestion. Returns `{suggestionId, status, resolved}` —
+`resolved=false` (not an error) when the id doesn't exist.
 
 ## Task-scoped context (ContextStore)
 

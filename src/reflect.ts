@@ -28,6 +28,16 @@ import {
 } from './model-resolver.js';
 import { recall } from './recall.js';
 import type { EmbeddingProvider } from './retain.js';
+import {
+  stripPromptMarkers,
+  clampRationale,
+  normalizeBelief,
+  beliefSimilarity,
+  cleanLlmJson,
+  evaluateEvidenceGates,
+  type GateEvaluation,
+} from './insight-shared.js';
+import { runSuggestionPass, type SuggestionConfig } from './suggest.js';
 
 // =============================================================================
 // Types
@@ -112,6 +122,17 @@ export interface ReflectConfig {
    * the same reflect batch as the belief it contradicts.
    */
   counterEvidence?: CounterEvidenceConfig;
+  /**
+   * Procedural suggestion pass (issue #39). Scans correction/friction/
+   * workflow signals (chunk supersessions and forgets, tool-result friction,
+   * repeated experience workflows) and proposes codifying recurring patterns
+   * as a skill/rule/workflow/config. Runs independently of the opinion/
+   * observation batch — before the `minFactsThreshold` early return — and
+   * reuses this cycle's connection, generator, and node-origin. Omit (the
+   * default) to run no pass — byte-identical to pre-existing behaviour.
+   * Suggestions never enter `recall()` or `groundSubagent()`.
+   */
+  suggestions?: SuggestionConfig;
 }
 
 /**
@@ -226,6 +247,12 @@ export interface ReflectResult {
    * the journal and stays unjournaled.
    */
   opinionsWeakened: number;
+  /** New procedural suggestions proposed this cycle (issue #39; 0 when the pass isn't configured). */
+  suggestionsProposed: number;
+  /** Existing suggestions reinforced (or reopened from dismissed) this cycle. */
+  suggestionsReinforced: number;
+  /** Suggestion candidates rejected this cycle (gate or previously-dismissed rejections). */
+  suggestionsRejected: number;
   status: 'completed' | 'failed' | 'partial';
   durationMs: number;
   error?: string;
@@ -273,6 +300,12 @@ export interface CatchUpResult {
   counterEvidenceChecked: number;
   /** Opinions decayed for unanswered contradictions across the pass (see {@link ReflectResult.opinionsWeakened}). */
   opinionsWeakened: number;
+  /** Suggestions proposed across the pass (see {@link ReflectResult.suggestionsProposed}). */
+  suggestionsProposed: number;
+  /** Suggestions reinforced/reopened across the pass (see {@link ReflectResult.suggestionsReinforced}). */
+  suggestionsReinforced: number;
+  /** Suggestion candidates rejected across the pass (see {@link ReflectResult.suggestionsRejected}). */
+  suggestionsRejected: number;
   /** Unreflected durable world/experience chunks still outstanding after the pass. */
   remainingBacklog: number;
   /**
@@ -323,16 +356,6 @@ interface LLMReflectOutput {
 // =============================================================================
 // Prompt Templates
 // =============================================================================
-
-/**
- * Strip delimiter-token impersonations from text interpolated into the
- * reflect prompt, so untrusted content can't close a block early and
- * smuggle instructions outside it. In-band labeling is a prompt-injection
- * MITIGATION, not a guarantee.
- */
-function stripPromptMarkers(text: string): string {
-  return text.replace(/<\/?(untrusted_data|operator_config)>/gi, '');
-}
 
 /** Clamp a disposition value to a number in [0, 1]; fall back on anything else. */
 function clampDisposition(value: unknown, fallback = 0.5): number {
@@ -515,20 +538,8 @@ If you find no meaningful patterns, return empty arrays. Do not force observatio
 // =============================================================================
 
 function parseReflectOutput(raw: string): LLMReflectOutput {
-  // Strip any markdown fencing the model might add despite instructions
-  let cleaned = raw
-    .replace(/```json\s*/g, '')
-    .replace(/```\s*/g, '')
-    .trim();
-
-  // Truncate after the last top-level closing brace (strip trailing LLM commentary)
-  const lastBrace = cleaned.lastIndexOf('}');
-  if (lastBrace !== -1 && lastBrace < cleaned.length - 1) {
-    cleaned = cleaned.substring(0, lastBrace + 1);
-  }
-
-  // Fix trailing commas — common LLM mistake
-  cleaned = cleaned.replace(/,\s*([}\]])/g, '$1');
+  // Strip markdown fencing, truncate trailing commentary, fix trailing commas.
+  const cleaned = cleanLlmJson(raw);
 
   try {
     const parsed = JSON.parse(cleaned);
@@ -674,29 +685,6 @@ function getBankConfig(db: Database.Database): Record<string, string> {
   return config;
 }
 
-function normalizeBelief(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function beliefSimilarity(a: string, b: string): number {
-  const aNorm = normalizeBelief(a);
-  const bNorm = normalizeBelief(b);
-
-  if (!aNorm || !bNorm) return 0;
-  if (aNorm === bNorm) return 1;
-
-  const aTokens = new Set(aNorm.split(' ').filter(Boolean));
-  const bTokens = new Set(bNorm.split(' ').filter(Boolean));
-  const intersection = [...aTokens].filter((token) =>
-    bTokens.has(token),
-  ).length;
-  return intersection / Math.max(aTokens.size, bTokens.size, 1);
-}
-
 /**
  * Resolve LLM-reported entity names to entity IDs, with a light attribution
  * sanity check (D4): an entity is only attributed to `contextText` (the
@@ -807,20 +795,6 @@ function findMatchingObservation(
 // Opinion Formation Gates (issue #38)
 // =============================================================================
 
-interface GateCheck {
-  required: number;
-  measured: number;
-  pass: boolean;
-}
-
-interface GateEvaluation {
-  pass: boolean;
-  /** Per-gate measurements, keyed min_evidence_count / min_distinct_days / min_distinct_sources. */
-  gates: Record<string, GateCheck>;
-  /** Verified evidence ids (exist + active), unioned with any merged prior rejection's. */
-  evidenceIds: string[];
-}
-
 /** How many recent rejected journal rows to scan for a same-belief match. */
 const REJECTED_LOOKBACK_ROWS = 200;
 
@@ -882,9 +856,9 @@ function findPriorRejection(
 
 /**
  * Evaluate formation gates over the union of the candidate's cited evidence
- * and any prior rejection's. Only chunk ids that actually exist (and are
- * active) count — the LLM can cite ids that don't; hallucinated evidence
- * must not pass a gate.
+ * and any prior rejection's. Thin wrapper over the shared
+ * {@link evaluateEvidenceGates} — opinion formation requires active evidence
+ * (byte-identical to the pre-issue-#39 behavior above).
  */
 function evaluateOpinionGates(
   db: Database.Database,
@@ -892,62 +866,13 @@ function evaluateOpinionGates(
   candidateEvidenceIds: string[],
   priorEvidenceIds: string[],
 ): GateEvaluation {
-  const unionIds = [
-    ...new Set([...candidateEvidenceIds, ...priorEvidenceIds]),
-  ].filter(Boolean);
-
-  let rows: Array<{ id: string; source: string | null; day: string }> = [];
-  if (unionIds.length > 0) {
-    const placeholders = unionIds.map(() => '?').join(',');
-    rows = db
-      .prepare(
-        `SELECT id, source, date(COALESCE(event_time, created_at)) AS day
-         FROM chunks
-         WHERE id IN (${placeholders}) AND is_active = TRUE`,
-      )
-      .all(...unionIds) as typeof rows;
-  }
-
-  const evidenceIds = rows.map((r) => r.id);
-  const distinctDays = new Set(rows.map((r) => r.day)).size;
-  // NULL sources collectively bucket as one "(none)" source.
-  const distinctSources = new Set(rows.map((r) => r.source ?? '(none)')).size;
-
-  const checks: Record<string, GateCheck> = {};
-  if (gates.minEvidenceCount !== undefined) {
-    checks['min_evidence_count'] = {
-      required: gates.minEvidenceCount,
-      measured: evidenceIds.length,
-      pass: evidenceIds.length >= gates.minEvidenceCount,
-    };
-  }
-  if (gates.minDistinctDays !== undefined) {
-    checks['min_distinct_days'] = {
-      required: gates.minDistinctDays,
-      measured: distinctDays,
-      pass: distinctDays >= gates.minDistinctDays,
-    };
-  }
-  if (gates.minDistinctSources !== undefined) {
-    checks['min_distinct_sources'] = {
-      required: gates.minDistinctSources,
-      measured: distinctSources,
-      pass: distinctSources >= gates.minDistinctSources,
-    };
-  }
-
-  return {
-    pass: Object.values(checks).every((c) => c.pass),
-    gates: checks,
-    evidenceIds,
-  };
-}
-
-/** Clamp an LLM-stated rationale to a bounded, trimmed string (or null). */
-function clampRationale(rationale: unknown): string | null {
-  if (typeof rationale !== 'string') return null;
-  const trimmed = rationale.trim();
-  return trimmed ? trimmed.slice(0, 1000) : null;
+  return evaluateEvidenceGates(
+    db,
+    gates,
+    candidateEvidenceIds,
+    priorEvidenceIds,
+    { requireActive: true },
+  );
 }
 
 // =============================================================================
@@ -1076,15 +1001,7 @@ function parseCounterEvidenceOutput(
   const byIndex = new Map(candidates.map((c) => [c.index, c]));
   const verdicts = new Map<number, CounterEvidenceVerdict>();
 
-  let cleaned = raw
-    .replace(/```json\s*/g, '')
-    .replace(/```\s*/g, '')
-    .trim();
-  const lastBrace = cleaned.lastIndexOf('}');
-  if (lastBrace !== -1 && lastBrace < cleaned.length - 1) {
-    cleaned = cleaned.substring(0, lastBrace + 1);
-  }
-  cleaned = cleaned.replace(/,\s*([}\]])/g, '$1');
+  const cleaned = cleanLlmJson(raw);
 
   let parsed: any;
   try {
@@ -1237,6 +1154,9 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
     opinionsRejected: 0,
     counterEvidenceChecked: 0,
     opinionsWeakened: 0,
+    suggestionsProposed: 0,
+    suggestionsReinforced: 0,
+    suggestionsRejected: 0,
     status: 'completed',
     durationMs: 0,
   };
@@ -1323,6 +1243,32 @@ export async function reflect(config: ReflectConfig): Promise<ReflectResult> {
         );
       }
       result.opinionsWeakened = weakenedRows.length;
+    }
+
+    // 0.5. Procedural suggestion pass (issue #39, opt-in). Runs BEFORE the
+    // minFactsThreshold early return below — suggestion signals (corrections,
+    // tool friction, recurring workflows) are independent of the opinion/
+    // observation batch, so a store with plenty of correction backlog but too
+    // few fresh world/experience facts still gets suggestions considered.
+    // Own try/catch: a suggestion-pass failure must never disturb the rest of
+    // the cycle — opinions/observations below still form even if this throws.
+    if (config.suggestions) {
+      try {
+        const suggestOutcome = await runSuggestionPass(
+          db,
+          generator,
+          embedder,
+          config.suggestions,
+          { logId, nodeOrigin },
+        );
+        result.suggestionsProposed = suggestOutcome.proposed;
+        result.suggestionsReinforced = suggestOutcome.reinforced;
+        result.suggestionsRejected = suggestOutcome.rejected;
+      } catch (err) {
+        console.warn(
+          `[Reflect] Suggestion pass failed (${(err as Error).message}) — proceeding without it.`,
+        );
+      }
     }
 
     // 1. Gather unreflected facts
@@ -2142,6 +2088,9 @@ export async function reflectCatchUp(
     opinionsRejected: 0,
     counterEvidenceChecked: 0,
     opinionsWeakened: 0,
+    suggestionsProposed: 0,
+    suggestionsReinforced: 0,
+    suggestionsRejected: 0,
     remainingBacklog: 0,
     status: 'drained',
     durationMs: 0,
@@ -2188,6 +2137,9 @@ export async function reflectCatchUp(
       result.opinionsRejected += batch.opinionsRejected;
       result.counterEvidenceChecked += batch.counterEvidenceChecked;
       result.opinionsWeakened += batch.opinionsWeakened;
+      result.suggestionsProposed += batch.suggestionsProposed;
+      result.suggestionsReinforced += batch.suggestionsReinforced;
+      result.suggestionsRejected += batch.suggestionsRejected;
 
       if (batch.status === 'failed') {
         result.status = 'failed';
@@ -2404,23 +2356,31 @@ export class ReflectScheduler {
           `[Reflect] Starting catch-up pass for ${this.config.dbPath}`,
         );
         const result = await reflectCatchUp(this.config);
+        const suggestionsLog = this.config.suggestions
+          ? `; ${result.suggestionsProposed} suggestions proposed, ` +
+            `${result.suggestionsReinforced} reinforced, ${result.suggestionsRejected} rejected`
+          : '';
         console.log(
           `[Reflect] Catch-up ${result.status}: ${result.batches} batches, ` +
             `${result.factsProcessed} facts → ${result.observationsCreated} new obs, ` +
             `${result.observationsUpdated} updated obs, ${result.opinionsFormed} new opinions, ` +
             `${result.opinionsReinforced} reinforced, ${result.opinionsChallenged} challenged; ` +
-            `${result.remainingBacklog} still backlogged (${result.durationMs}ms)`,
+            `${result.remainingBacklog} still backlogged (${result.durationMs}ms)${suggestionsLog}`,
         );
         return result;
       }
 
       console.log(`[Reflect] Starting cycle for ${this.config.dbPath}`);
       const result = await reflect(this.config);
+      const suggestionsLog = this.config.suggestions
+        ? `; ${result.suggestionsProposed} suggestions proposed, ` +
+          `${result.suggestionsReinforced} reinforced, ${result.suggestionsRejected} rejected`
+        : '';
       console.log(
         `[Reflect] Cycle complete: ${result.factsProcessed} facts → ` +
           `${result.observationsCreated} new obs, ${result.observationsUpdated} updated obs, ` +
           `${result.opinionsFormed} new opinions, ${result.opinionsReinforced} reinforced, ` +
-          `${result.opinionsChallenged} challenged (${result.durationMs}ms)`,
+          `${result.opinionsChallenged} challenged (${result.durationMs}ms)${suggestionsLog}`,
       );
       return result;
     } catch (error) {

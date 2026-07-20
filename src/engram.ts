@@ -107,6 +107,21 @@ import {
 } from './reflect.js';
 
 import {
+  getSuggestions,
+  resolveSuggestion,
+  getSuggestionJournal,
+  type SuggestionConfig,
+  type SuggestionGates,
+  type SuggestionKind,
+  type SuggestionStatus,
+  type SuggestionJournalAction,
+  type SuggestionView,
+  type SuggestionQuery,
+  type SuggestionJournalEntry,
+  type SuggestionJournalQuery,
+} from './suggest.js';
+
+import {
   OllamaGeneration,
   OpenAICompatibleGeneration,
   AnthropicGeneration,
@@ -160,6 +175,15 @@ export type {
   BeliefJournalAction,
   BeliefJournalEntry,
   BeliefJournalQuery,
+  SuggestionConfig,
+  SuggestionGates,
+  SuggestionKind,
+  SuggestionStatus,
+  SuggestionJournalAction,
+  SuggestionView,
+  SuggestionQuery,
+  SuggestionJournalEntry,
+  SuggestionJournalQuery,
   FormatForPromptOptions,
   WorkingMemoryState,
   WorkingMemoryOptions,
@@ -184,6 +208,9 @@ export {
   reflectCatchUp,
   ReflectScheduler,
   getBeliefJournal,
+  getSuggestions,
+  resolveSuggestion,
+  getSuggestionJournal,
   shouldRetain,
   chunkText,
   formatForPrompt,
@@ -769,6 +796,7 @@ export class Engram {
       | 'existingContextCharBudget'
       | 'opinionGates'
       | 'counterEvidence'
+      | 'suggestions'
     >,
   ): Promise<ReflectResult> {
     return reflect({
@@ -801,6 +829,7 @@ export class Engram {
       | 'existingContextCharBudget'
       | 'opinionGates'
       | 'counterEvidence'
+      | 'suggestions'
     >,
   ): Promise<CatchUpResult> {
     return reflectCatchUp({
@@ -820,6 +849,37 @@ export class Engram {
    */
   beliefJournal(query?: BeliefJournalQuery): BeliefJournalEntry[] {
     return getBeliefJournal(this.db, query);
+  }
+
+  /**
+   * List procedural suggestions (issue #39) — "this recurring pattern would
+   * benefit from being codified as a skill/rule/workflow/config." Newest/
+   * most-evidenced first. Projection-only; no LLM call. Exposed as the
+   * engram_suggestions MCP tool / `suggestions` CLI subcommand. Suggestions
+   * never enter recall() or groundSubagent().
+   */
+  suggestions(query?: SuggestionQuery): SuggestionView[] {
+    return getSuggestions(this.db, query);
+  }
+
+  /**
+   * Resolve a suggestion's status (accept/dismiss/implement, or reopen back
+   * to 'proposed'). Returns false when the id doesn't exist.
+   */
+  resolveSuggestion(
+    suggestionId: string,
+    status: SuggestionStatus,
+    reason?: string,
+  ): boolean {
+    return resolveSuggestion(this.db, suggestionId, status, reason);
+  }
+
+  /**
+   * Query the suggestion audit trail (issue #39), newest first.
+   * Projection-only; no LLM call. Library-only surface.
+   */
+  suggestionJournal(query?: SuggestionJournalQuery): SuggestionJournalEntry[] {
+    return getSuggestionJournal(this.db, query);
   }
 
   /**

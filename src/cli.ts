@@ -47,6 +47,9 @@ import type {
   TokenBudget,
   ContextSlice,
   IntrospectResult,
+  SuggestionKind,
+  SuggestionStatus,
+  SuggestionView,
 } from './engram.js';
 import type { QueueStats } from './retain.js';
 import {
@@ -62,6 +65,8 @@ import {
   VALID_MEMORY_TYPES,
   VALID_SOURCE_TYPES,
   VALID_STRATEGIES,
+  VALID_SUGGESTION_STATUSES,
+  VALID_SUGGESTION_KINDS,
   type ParsedArgs,
 } from './cli-args.js';
 import {
@@ -280,6 +285,16 @@ function formatIntrospect(r: IntrospectResult): string {
   return out;
 }
 
+function formatSuggestions(rows: SuggestionView[]): string {
+  if (rows.length === 0) return 'no suggestions\n';
+  return rows
+    .map(
+      (s) =>
+        `[${s.id}] (${s.kind ?? 'unknown'}, ${s.status}, evidence ${s.evidenceCount}) ${s.summary}\n`,
+    )
+    .join('');
+}
+
 // ─── Misc helpers ─────────────────────────────────────────────────────────────
 
 /**
@@ -313,7 +328,8 @@ const USAGE = `Usage: engram <command> [args] [options]
 Commands:
   retain <text>                    Store a memory trace (text from stdin if omitted)
   recall <query>                   Four-way retrieval (query from stdin if omitted)
-  reflect                          Run a reflection cycle
+  reflect                          Run a reflection cycle (--suggest to also
+                                   run the procedural-suggestion pass)
   process-extractions              Drain the entity extraction queue
   forget <chunkId>                 Soft-delete a chunk
   supersede <oldChunkId> <newText> Replace a fact (newText from stdin if omitted)
@@ -334,6 +350,10 @@ Commands:
   context-query <refId> <query>    Query artifacts committed under refId
                                    (query from stdin if omitted)
   context-promote <refId>          Promote a task-scoped artifact to durable memory
+  suggestions                      List procedural suggestions from reflection
+                                   (--status, --kind, --domain, --limit)
+  resolve-suggestion <id> <status> Set a suggestion's lifecycle status
+                                   (--reason <text>); status reopens via "proposed"
 
 Database:
   --db <path>                      Path to the .engram file (or set ENGRAM_DB)
@@ -393,6 +413,19 @@ context-commit options:
 
 context-query options:
   --max-chars <n>                  Character budget for returned artifacts (default: 4000)
+
+reflect options:
+  --suggest                        Also run the procedural-suggestion pass
+                                   this cycle (gates default 3+ evidence
+                                   items across 2+ distinct days)
+
+suggestions options:
+  --status <proposed|accepted|dismissed|implemented>
+  --kind <skill|rule|workflow|config>  --domain <tag>  --limit <n>
+
+resolve-suggestion options:
+  --reason <text>                  Freeform reason recorded on the suggestion
+                                   and its journal entry
 
 Exit codes: 0 success · 2 not-found · 1 error
 `;
@@ -525,7 +558,9 @@ async function dispatch(
     case 'reflect': {
       const pf = await preflightGenerationModel(args, engramOptions, io);
       if (pf !== EXIT_OK) return pf;
-      const result = await engram.reflect();
+      const result = await engram.reflect(
+        args.bools.has('--suggest') ? { suggestions: {} } : undefined,
+      );
       if (json) emitJson(io, result);
       else io.stdout(formatReflect(result));
       return EXIT_OK;
@@ -754,6 +789,51 @@ async function dispatch(
         else io.stdout(`not found: ${refId}\n`);
         return EXIT_NOT_FOUND;
       }
+    }
+
+    case 'suggestions': {
+      const statusArg = args.values.get('--status');
+      const kindArg = args.values.get('--kind');
+      const limit = asNumber(args.values.get('--limit'));
+      const result = engram.suggestions({
+        status: VALID_SUGGESTION_STATUSES.has(statusArg ?? '')
+          ? (statusArg as SuggestionStatus)
+          : undefined,
+        kind: VALID_SUGGESTION_KINDS.has(kindArg ?? '')
+          ? (kindArg as SuggestionKind)
+          : undefined,
+        domain: args.values.get('--domain'),
+        limit: limit !== undefined ? Math.max(1, Math.floor(limit)) : undefined,
+      });
+      if (json) emitJson(io, result);
+      else io.stdout(formatSuggestions(result));
+      return EXIT_OK;
+    }
+
+    case 'resolve-suggestion': {
+      const suggestionId = args.positionals[0];
+      if (!suggestionId) return missingArg(io, 'suggestionId');
+      const statusArg = args.positionals[1];
+      if (!statusArg) return missingArg(io, 'status');
+      if (!VALID_SUGGESTION_STATUSES.has(statusArg)) {
+        io.stderr(
+          'engram: status must be one of proposed|accepted|dismissed|implemented\n',
+        );
+        return EXIT_ERROR;
+      }
+      const status = statusArg as SuggestionStatus;
+      const resolved = engram.resolveSuggestion(
+        suggestionId,
+        status,
+        args.values.get('--reason'),
+      );
+      if (!resolved) {
+        io.stderr(`engram: suggestion not found: ${suggestionId}\n`);
+        return EXIT_NOT_FOUND;
+      }
+      if (json) emitJson(io, { suggestionId, status, resolved });
+      else io.stdout(`resolved ${suggestionId} -> ${status}\n`);
+      return EXIT_OK;
     }
 
     default: {

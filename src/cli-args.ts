@@ -38,6 +38,18 @@ export const VALID_STRATEGIES = new Set([
   'graph',
   'temporal',
 ]);
+export const VALID_SUGGESTION_STATUSES = new Set([
+  'proposed',
+  'accepted',
+  'dismissed',
+  'implemented',
+]);
+export const VALID_SUGGESTION_KINDS = new Set([
+  'skill',
+  'rule',
+  'workflow',
+  'config',
+]);
 
 /** Clamp a numeric trust value to [0, 1]. Returns undefined if not a number. */
 export function clampTrust(v: unknown): number | undefined {
@@ -89,6 +101,8 @@ export const CLI_COMMANDS = [
   'context-commit',
   'context-query',
   'context-promote',
+  'suggestions',
+  'resolve-suggestion',
 ] as const;
 
 // ─── argv parsing ────────────────────────────────────────────────────────────
@@ -102,6 +116,7 @@ const BOOLEAN_FLAGS = new Set([
   '--observations',
   '--no-observations',
   '--explain-scores',
+  '--suggest',
 ]);
 
 export interface ParsedArgs {

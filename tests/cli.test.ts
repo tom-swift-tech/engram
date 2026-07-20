@@ -881,4 +881,73 @@ describe('engram CLI', () => {
     expect(code).toBe(2);
     expect(JSON.parse(cap.stdout())).toEqual({ promoted: false });
   });
+
+  // ─── suggestions / resolve-suggestion ────────────────────────────────────────
+
+  function insertSuggestion(id: string, status = 'proposed'): void {
+    const raw = new Database(dbPath);
+    raw.pragma('busy_timeout = 5000');
+    raw
+      .prepare(
+        `INSERT INTO suggestions (id, kind, summary, rationale, supporting_chunks, evidence_count, domain, status)
+         VALUES (?, 'rule', 'Always double-check deploy paths after a correction', 'rationale text', '[]', 4, 'workflow', ?)`,
+      )
+      .run(id, status);
+    raw.close();
+  }
+
+  it('suggestions --json emits a pure JSON array of seeded suggestions', async () => {
+    // Bootstrap the schema first — the db file/tables only exist once a
+    // command opens it via Engram.open().
+    await runCli(args('queue-stats', '--json'), captureIo().io, overrides);
+    insertSuggestion('sug-cli-1');
+
+    const cap = captureIo();
+    const code = await runCli(args('suggestions', '--json'), cap.io, overrides);
+    expect(code).toBe(0);
+    const out = cap.stdout();
+    expect(out, `stdout leaked non-JSON: ${JSON.stringify(out)}`).not.toContain(
+      '[engram]',
+    );
+    const rows = JSON.parse(out.trim());
+    expect(Array.isArray(rows)).toBe(true);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].id).toBe('sug-cli-1');
+    expect(rows[0].status).toBe('proposed');
+  });
+
+  it('resolve-suggestion exits 2 for an unknown id, and exits 0 persisting the new status for a known id', async () => {
+    await runCli(args('queue-stats', '--json'), captureIo().io, overrides);
+    insertSuggestion('sug-cli-resolve');
+
+    const unknownCap = captureIo();
+    const unknownCode = await runCli(
+      args('resolve-suggestion', 'sug-does-not-exist', 'accepted', '--json'),
+      unknownCap.io,
+      overrides,
+    );
+    expect(unknownCode).toBe(2);
+    expect(unknownCap.stdout()).toBe('');
+    expect(unknownCap.stderr()).toContain('not found');
+
+    const knownCap = captureIo();
+    const knownCode = await runCli(
+      args('resolve-suggestion', 'sug-cli-resolve', 'accepted', '--json'),
+      knownCap.io,
+      overrides,
+    );
+    expect(knownCode).toBe(0);
+    expect(JSON.parse(knownCap.stdout())).toEqual({
+      suggestionId: 'sug-cli-resolve',
+      status: 'accepted',
+      resolved: true,
+    });
+
+    const raw = new Database(dbPath, { readonly: true, fileMustExist: true });
+    const row = raw
+      .prepare('SELECT status FROM suggestions WHERE id = ?')
+      .get('sug-cli-resolve') as { status: string };
+    raw.close();
+    expect(row.status).toBe('accepted');
+  });
 });

@@ -549,8 +549,10 @@ npx engram-mcp ./agent.engram --anthropic-api-key sk-ant-... --anthropic-model c
 | `engram_context_commit` | Commit a task-scoped decision artifact (ContextStore) |
 | `engram_context_query` | Query the children committed under a ContextStore ref |
 | `engram_context_promote` | Promote a task-scoped artifact into durable memory |
+| `engram_suggestions` | List procedural suggestions (recurring corrections/friction/workflows worth codifying as a skill/rule/workflow/config) |
+| `engram_resolve_suggestion` | Set a suggestion's lifecycle status (`accepted`/`dismissed`/`implemented`; `proposed` reopens) |
 
-`engram_session` omitting `action` behaves exactly as before (backward compatible); `action: 'update'`/`'snapshot'` require `sessionId` and let an MCP-only agent drive the full session lifecycle without a direct API call.
+`engram_session` omitting `action` behaves exactly as before (backward compatible); `action: 'update'`/`'snapshot'` require `sessionId` and let an MCP-only agent drive the full session lifecycle without a direct API call. `engram_reflect` takes an optional `suggest: boolean` (default `false`) to also run the procedural-suggestion pass that cycle; suggestions never appear in `engram_recall`, only via `engram_suggestions`.
 
 ## CLI
 
@@ -579,7 +581,7 @@ accepted: `--ollama-url`, `--use-ollama-embeddings`, `--reflect-model`,
 **Exit codes:** `0` success · `2` not-found (`forget`/`supersede` on a missing
 chunk) · `1` error (bad/missing argument, no DB path, operation failure).
 
-The thirteen commands:
+The sixteen commands:
 
 ```bash
 # Store a fact
@@ -605,6 +607,7 @@ engram forget chk-abc123 --json
 
 # Background maintenance (need an LLM)
 engram reflect --json
+engram reflect --suggest --json   # also propose procedural suggestions
 engram process-extractions --batch-size 10 --json
 
 # Queue health (includes a failed_reasons breakdown)
@@ -626,6 +629,10 @@ engram embed "stored document text" --mode document --json
 engram context-commit '{"decision":"use Postgres"}' --json
 engram context-query <refId> "database choice" --json
 engram context-promote <refId> --json
+
+# Read/resolve procedural suggestions proposed by `reflect --suggest`
+engram suggestions --status proposed --json
+engram resolve-suggestion <suggestionId> accepted --json
 ```
 
 The primary text argument for `retain`, `recall`, `session`, `embed`, and the
@@ -712,7 +719,7 @@ See **[docs/PI-INTEGRATION.md](docs/PI-INTEGRATION.md)** for full setup, lifecyc
 
 Portable skill files for agents using Engram via mcporter:
 
-- **[skills/engram.md](skills/engram.md)** — Complete tool reference with all 14 MCP tools, usage patterns, and common mistakes
+- **[skills/engram.md](skills/engram.md)** — Complete tool reference with all 16 MCP tools, usage patterns, and common mistakes
 - **[skills/engram-session.md](skills/engram-session.md)** — Working memory session lifecycle and tuning guide
 - **[skills/cli-memory/SKILL.md](skills/cli-memory/SKILL.md)** — `engram` CLI contract for coding agents (e.g. Pi): per-command `--json` schemas, exit codes, and when to recall vs. retain vs. supersede vs. session
 
